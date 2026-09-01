@@ -48,7 +48,7 @@ mozkey-space 固有の変更点は、元の Mozkey に対する次の差分で�
 ダウンロード / インストール
 --------------------------
 
-Windows 用のビルド済みパッケージを Releases から公開しています。GitHub Release を公開すると、macOS 用の Universal Zenz PKG もCIで生成・検証したうえで、同じReleaseに自動添付します。
+Windows 用の MSI と macOS 用の Universal Zenz PKG を、ビルド済みパッケージとして Releases から公開しています。GitHub Release を公開すると、macOS 用の PKG は CI で生成・検証したうえで、同じ Release に自動添付されます。
 
 Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
 
@@ -63,7 +63,7 @@ macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）�
 
 Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
 
-Windows 用のビルド済み MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
+Windows 用の MSI と macOS 用の Universal Zenz PKG は、いずれも [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
 
 - 通常の x64 Windows では、Releases にある最新の `Mozkey_v*_x64.msi` を使用してください。
 - Windows on Arm（ARM64）では、その release に ARM64 と明記された MSI が含まれる場合は ARM64 版を使用してください。ARM64 MSI は Mozkey 本体、`mozc_zenz_scorer.exe`、`llama-server.exe` を native ARM64 payload として構成します。
@@ -681,13 +681,13 @@ See also:
 Download / Install
 ------------------
 
-Windows prebuilt packages are published from Releases. When a GitHub Release is published, CI builds and verifies a Universal Zenz macOS PKG on native Apple Silicon and Intel, then attaches it to the same Release.
+Prebuilt packages for both Windows and macOS are available from Releases. Windows releases provide MSI packages; when a GitHub Release is published, CI builds and verifies a Universal Zenz macOS PKG on native Apple Silicon and Intel, then attaches it to the same Release.
 
 In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
 
 Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
 
-Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
+Windows MSI packages and the macOS Universal Zenz PKG are both available from [Releases](https://github.com/over-keys/mozkey-space/releases).
 
 The macOS asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
 
