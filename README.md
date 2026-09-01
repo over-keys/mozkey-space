@@ -41,7 +41,7 @@ mozkey-space 固有の変更点は、元の Mozkey に対する次の差分で�
 - 通常変換の入力経路でも、Zenz 補正の結果を既存の安全な候補・文脈処理と整合する形で扱う
 
 元の Mozc から Mozkey への変更点は、下の
-[Mozkey の変更点（Mozc からの変更）](#mozkey-changes-from-mozc-ja) を参照してください。
+[主な追加機能](#mozkey-changes-from-mozc-ja) を参照してください。
 
 <br>
 
@@ -86,10 +86,10 @@ Linux については、upstream Mozc 自体は対応していますが、この
 <br>
 
 <a id="mozkey-changes-from-mozc-ja"></a>
-Mozkey の変更点（Mozc からの変更）
-----------------------------------
+主な追加機能
+---------------------------
 
-以下は、元の Mozkey が Mozc に加えた変更点です。mozkey-space はこれらを基盤として引き継いでいます。
+元の Mozkey README にある主な追加機能です。mozkey-space はこれらを引き継いでいます。
 
 - 曖昧なローマ字規則でも途中表示できるオプションを追加
 - ローマ字テーブル編集画面に、そのオプション用のチェックボックス UI を追加
@@ -735,13 +735,13 @@ Mozkey:
 - Keeps the ordinary-conversion path consistent with the existing safe-candidate and context-handling rules
 
 For the original changes from Mozc to Mozkey, see
-[Mozkey changes from Mozc](#mozkey-changes-from-mozc-en) below.
+[Main additions](#mozkey-changes-from-mozc-en) below.
 
 <a id="mozkey-changes-from-mozc-en"></a>
-Mozkey changes from Mozc
-------------------------
+Main additions
+--------------
 
-The following are the original changes that Mozkey adds to Mozc. mozkey-space
+These are the main additions from the original Mozkey README. mozkey-space
 inherits them as its base feature set.
 
 - Adds an option to display ambiguous romaji rules before the input is fully disambiguated
