@@ -181,7 +181,9 @@ $DirectMozcLookup = @'
         raise RuntimeError('Could not resolve google/mozc master commit.')
 
     # Mozc のアーカイブを取得
-    url = f'https://github.com/google/mozc/archive/{date_str}.zip'
+    # Keep the archive's mozc-master/ directory name expected by the
+    # upstream helper; use the resolved SHA only for the local cache name.
+    url = 'https://github.com/google/mozc/archive/refs/heads/master.zip'
 
     if not Path(f'mozc-{date_str}.zip').exists():
         urllib.request.urlretrieve(
