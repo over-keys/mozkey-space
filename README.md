@@ -5,7 +5,7 @@
 <h1 align="center">mozkey-space</h1>
 
 <p align="center">
-  <strong><a href="https://github.com/google/mozc">Mozc</a> をベースにした <a href="https://github.com/koyasi777/mozkey">Mozkey</a> から派生した、mozkey-space です。<br>Windows / macOS 向けに、Mozkey をベースとしてローカル Zenz 補正や文脈を見た変換補正などを追加しています。</strong>
+  <strong><a href="https://github.com/google/mozc">Mozc</a> をベースにした <a href="https://github.com/koyasi777/mozkey">Mozkey</a> から派生した、mozkey-space です。<br>Mozkey をベースに、通常のライブ変換だけでなく Space キーによる変換でも Zenz 補正を利用できるようにしています。</strong>
 </p>
 
 <p align="center">
@@ -618,7 +618,7 @@ upstream 提案向けの変更は `pr/*` branches に整理しています。
 # English
 
 <p align="center">
-  <strong>mozkey-space is derived from <a href="https://github.com/koyasi777/mozkey">Mozkey</a>, which is based on <a href="https://github.com/google/mozc">Mozc</a>.<br>For Windows and macOS, it adds local Zenz correction and context-aware conversion correction to Mozkey.</strong>
+  <strong>mozkey-space is derived from <a href="https://github.com/koyasi777/mozkey">Mozkey</a>, which is based on <a href="https://github.com/google/mozc">Mozc</a>.<br>It extends Mozkey so that Zenz correction is available not only during live conversion, but also when converting with the Space key.</strong>
 </p>
 
 This repository is the `mozkey-space` fork derived from [koyasi777/mozkey](https://github.com/koyasi777/mozkey), which is based on [google/mozc](https://github.com/google/mozc).
