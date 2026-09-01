@@ -167,7 +167,6 @@ message Config {
       [default = FUNDAMENTAL_INPUT_MODE];
 
   // If this flag is true, Mozc toggles preedit method with some predefined
-  // key events when IME is turned on.  Otherwise, Mozc ignores such kind of
   // key events so that their preferred can be preserved even when the toggle
   // key is pressed by accident.
   // As for Mozc, only Windows client supports such kind of toggle so this flag
@@ -384,6 +383,12 @@ message Config {
   // Number of ordinary rejected observations required before the auto-block
   // policy suppresses the same key/context/value correction.
   optional uint32 zenz_auto_block_reject_threshold = 1019 [default = 3];
+
+  // Number of same-direction, safely localized manual corrections required
+  // before a Local Zenz Preference may influence the Zenz prompt or perform
+  // output-side local repair.  Observations below this threshold are stored
+  // but remain behaviorally dormant.
+  optional uint32 zenz_local_preference_threshold = 1026 [default = 2];
 
   // Zenzai v3/v3.2 condition fields. Empty values are omitted from the prompt.
   // These are not chat prompts; they are mapped to zenz special-token fields:

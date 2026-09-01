@@ -34,10 +34,10 @@
 
 #include <QObject>
 #include <QTimer>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
-#include <cstdint>
 
 #include "client/client_interface.h"
 #include "gui/config_dialog/ui_config_dialog.h"
@@ -51,6 +51,28 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
 
  public:
   ConfigDialog();
+
+  // Local-preference threshold control is injected at runtime so the
+  // existing .ui file does not need to be forked.  Keep the pending value in
+  // base_config_: ConvertToProto() starts from base_config_, which gives the
+  // dynamic control normal Apply/OK/Cancel semantics without a second config
+  // write path.
+  uint32_t zenz_local_preference_threshold_for_ui() const {
+    return base_config_.zenz_local_preference_threshold();
+  }
+  void set_zenz_local_preference_threshold_for_ui(uint32_t value) {
+    base_config_.set_zenz_local_preference_threshold(value);
+  }
+
+  // The upstream proto already owns this setting, but current-main's .ui does
+  // not expose it.  Keep the dynamic control in base_config_ so it follows the
+  // same Apply/OK/Cancel/Reset semantics as the Local Preference threshold.
+  uint32_t zenz_live_correction_left_context_length_for_ui() const {
+    return base_config_.zenz_live_correction_left_context_length();
+  }
+  void set_zenz_live_correction_left_context_length_for_ui(uint32_t value) {
+    base_config_.set_zenz_live_correction_left_context_length(value);
+  }
 
   // Methods defined in the 'slots' section (Qt's extension) will be processed
   // by Qt's moc tool (moc.exe on Windows). Unfortunately, preprocessor macros

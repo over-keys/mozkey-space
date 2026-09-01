@@ -1026,6 +1026,20 @@ TEST_F(MozcImkInputControllerTest, handleConfig) {
       << [mock_client_.overriddenLayout UTF8String];
 }
 
+TEST_F(MozcImkInputControllerTest,
+       HandleConfigKeepsZenzContextWhenLiveConversionIsDisabled) {
+  config::Config config;
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  EXPECT_CALL(*mock_mozc_client_, GetConfig(NotNull()))
+      .WillOnce(DoAll(SetArgPointee<0>(config), Return(true)));
+
+  [controller_ handleConfig];
+
+  EXPECT_FALSE(controller_.useLiveConversionForTest);
+  EXPECT_TRUE(controller_.useZenzContextAcquisitionForTest);
+}
+
 TEST_F(MozcImkInputControllerTest, DoubleTapKanaReconvert) {
   // tap (short) tap -> emit undo command
   controller_.mode = commands::HIRAGANA;

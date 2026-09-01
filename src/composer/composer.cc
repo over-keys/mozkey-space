@@ -1206,11 +1206,12 @@ bool Composer::ShouldCommitHead(size_t* length_to_commit) const {
 
 namespace {
 enum Script {
-  ALPHABET,   // alphabet characters or symbols
-  NUMBER,     // 0 - 9, "０" - "９"
-  JA_HYPHEN,  // "ー"
-  JA_COMMA,   // "、"
-  JA_PERIOD,  // "。"
+  ALPHABET,       // alphabet characters or symbols
+  NUMBER,         // 0 - 9, "０" - "９"
+  JA_HYPHEN,      // "ー"
+  JA_COMMA,       // "、"
+  JA_PERIOD,      // "。"
+  JA_MIDDLE_DOT,  // "・"
   OTHER,
 };
 
@@ -1249,6 +1250,10 @@ bool Composer::TransformCharactersForNumbers(std::string* query) {
       case 0x3002:  // "。"
         has_symbols = true;
         char_scripts.push_back(JA_PERIOD);
+        break;
+      case 0x30FB:  // "・"
+        has_symbols = true;
+        char_scripts.push_back(JA_MIDDLE_DOT);
         break;
       case '+':
       case '*':
@@ -1343,15 +1348,27 @@ bool Composer::TransformCharactersForNumbers(std::string* query) {
       }
 
       case JA_PERIOD: {
-        // "。" should be "．" if the previous character and the next
-        // character are both alphanumerics.
-        // Previous char should exist and be a number.
+        // "。" should be "．" if the previous character is alphanumeric.
         const bool lhs_check =
             (i > 0 && IsAlphabetOrNumber(char_scripts[i - 1]));
         // JA_PERIOD should be transformed to PERIOD.
         if (lhs_check) {
           CharacterFormManager::GetCharacterFormManager()->ConvertPreeditString(
               "．", &append_char);
+          DCHECK(!append_char.empty());
+        }
+        break;
+      }
+
+      case JA_MIDDLE_DOT: {
+        // The slash key may be configured to emit the Japanese middle dot.
+        // In numeric context, prefer a slash as soon as the left character is
+        // a number.  Deliberately do not inspect the right side so the preedit
+        // does not change later when the next character is entered.
+        const bool lhs_check = (i > 0 && char_scripts[i - 1] == NUMBER);
+        if (lhs_check) {
+          CharacterFormManager::GetCharacterFormManager()->ConvertPreeditString(
+              "/", &append_char);
           DCHECK(!append_char.empty());
         }
         break;

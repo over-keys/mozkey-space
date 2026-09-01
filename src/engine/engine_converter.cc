@@ -32,8 +32,10 @@
 #include "engine/engine_converter.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -73,6 +75,348 @@ namespace {
 
 using ::mozc::commands::Request;
 using ::mozc::config::Config;
+
+
+bool IsAsciiAlphabet(unsigned char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+bool ContainsAlphabetScript(absl::string_view text) {
+  if (!Util::IsValidUtf8(text)) {
+    return true;
+  }
+  return Util::ContainsScriptType(text, Util::ALPHABET);
+}
+
+struct AsciiResidual {
+  size_t byte_index = 0;
+  char consonant = '\0';
+};
+
+struct KanaRow {
+  char consonant;
+  std::array<absl::string_view, 5> kana;  // a, i, u, e, o
+};
+
+// Deliberately small, deterministic romanization table.  Only substitutions
+// that turn the single residual ASCII consonant into exactly one hiragana
+// character are listed.  `n` is excluded because it is also a valid prefix for
+// ん, and x/l/j/f/v/q/c are excluded because they are special/non-gojuon
+// prefixes whose interpretation is more table-dependent.
+constexpr std::array<KanaRow, 13> kAsciiResidualKanaRows = {{
+    {'k', {"か", "き", "く", "け", "こ"}},
+    {'s', {"さ", "し", "す", "せ", "そ"}},
+    {'t', {"た", "ち", "つ", "て", "と"}},
+    {'h', {"は", "ひ", "ふ", "へ", "ほ"}},
+    {'m', {"ま", "み", "む", "め", "も"}},
+    {'y', {"や", "", "ゆ", "", "よ"}},
+    {'r', {"ら", "り", "る", "れ", "ろ"}},
+    {'w', {"わ", "", "", "", "を"}},
+    {'g', {"が", "ぎ", "ぐ", "げ", "ご"}},
+    {'z', {"ざ", "じ", "ず", "ぜ", "ぞ"}},
+    {'d', {"だ", "ぢ", "づ", "で", "ど"}},
+    {'b', {"ば", "び", "ぶ", "べ", "ぼ"}},
+    {'p', {"ぱ", "ぴ", "ぷ", "ぺ", "ぽ"}},
+}};
+
+const KanaRow* FindKanaRow(char consonant) {
+  for (const KanaRow& row : kAsciiResidualKanaRows) {
+    if (row.consonant == consonant) {
+      return &row;
+    }
+  }
+  return nullptr;
+}
+
+// The repair is intentionally narrow: the conversion key must otherwise be
+// hiragana, with exactly one unresolved lowercase consonant from the fixed
+// table above.  This excludes mixed English, katakana/kanji, digits/symbols,
+// bare n, and malformed UTF-8 before any alternative conversion is attempted.
+std::optional<AsciiResidual> FindSingleAsciiResidual(absl::string_view key) {
+  if (!Util::IsValidUtf8(key)) {
+    return std::nullopt;
+  }
+
+  const std::vector<std::string> chars = Util::SplitStringToUtf8Chars(key);
+  constexpr size_t kMaxAsciiResidualKeyChars = 128;
+  if (chars.empty() || chars.size() > kMaxAsciiResidualKeyChars) {
+    return std::nullopt;
+  }
+
+  std::optional<AsciiResidual> residual;
+  bool has_kana = false;
+  size_t byte_index = 0;
+  for (const std::string& ch : chars) {
+    if (ch.size() == 1) {
+      const unsigned char c = static_cast<unsigned char>(ch[0]);
+      if (!IsAsciiAlphabet(c) || residual.has_value() || c < 'a' || c > 'z' ||
+          FindKanaRow(static_cast<char>(c)) == nullptr) {
+        return std::nullopt;
+      }
+      residual = AsciiResidual{byte_index, static_cast<char>(c)};
+    } else {
+      const char32_t codepoint = Util::Utf8ToCodepoint(ch);
+      if (Util::GetScriptType(codepoint) != Util::HIRAGANA) {
+        return std::nullopt;
+      }
+      has_kana = true;
+    }
+    byte_index += ch.size();
+  }
+  // Require at least one already-resolved hiragana before the residual.
+  // A leading ASCII letter followed by Japanese text is much more likely to be
+  // intentional mixed text (for example a variable name) than a dropped vowel.
+  return has_kana && residual.has_value() && residual->byte_index > 0
+             ? residual
+             : std::nullopt;
+}
+
+std::vector<std::string> GenerateAsciiResidualReadings(absl::string_view key) {
+  const std::optional<AsciiResidual> residual = FindSingleAsciiResidual(key);
+  if (!residual.has_value()) {
+    return {};
+  }
+  const KanaRow* row = FindKanaRow(residual->consonant);
+  if (row == nullptr) {
+    return {};
+  }
+
+  std::vector<std::string> result;
+  result.reserve(5);
+  for (const absl::string_view kana : row->kana) {
+    if (kana.empty()) {
+      continue;
+    }
+    std::string corrected;
+    corrected.reserve(key.size() - 1 + kana.size());
+    corrected.append(key.substr(0, residual->byte_index));
+    corrected.append(kana);
+    corrected.append(key.substr(residual->byte_index + 1));
+    result.push_back(std::move(corrected));
+  }
+  return result;
+}
+
+std::string TopSurface(const Segments& segments) {
+  std::string result;
+  for (const Segment& segment : segments.conversion_segments()) {
+    if (segment.candidates_size() == 0) {
+      return {};
+    }
+    result.append(segment.candidate(0).value);
+  }
+  return result;
+}
+
+int64_t TopPathCost(const Segments& segments) {
+  int64_t result = 0;
+  for (const Segment& segment : segments.conversion_segments()) {
+    if (segment.candidates_size() == 0) {
+      return std::numeric_limits<int64_t>::max();
+    }
+    result += static_cast<int64_t>(segment.candidate(0).cost);
+  }
+  return result;
+}
+
+bool TopPathHasReadingCorrection(const Segments& segments) {
+  for (const Segment& segment : segments.conversion_segments()) {
+    if (segment.candidates_size() == 0) {
+      return false;
+    }
+    if (segment.candidate(0).attributes &
+        (converter::Attribute::SPELLING_CORRECTION |
+         converter::Attribute::TYPING_CORRECTION |
+         converter::Attribute::KEY_EXPANDED_IN_DICTIONARY)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void MarkAsciiResidualCorrection(Segments* segments) {
+  bool marked_source = false;
+  for (Segment& segment : segments->conversion_segments()) {
+    for (size_t i = 0; i < segment.candidates_size(); ++i) {
+      segment.mutable_candidate(i)->attributes |=
+          converter::Attribute::NO_LEARNING;
+    }
+    for (converter::Candidate& candidate : *segment.mutable_meta_candidates()) {
+      candidate.attributes |= converter::Attribute::NO_LEARNING;
+    }
+    if (marked_source || segment.candidates_size() == 0) {
+      continue;
+    }
+    converter::Candidate* top = segment.mutable_candidate(0);
+    // SPELLING_CORRECTION is enough to keep the correction visible in the
+    // candidate UI.  Do not add TYPING_CORRECTION: that attribute is also used
+    // by prediction/history paths and has broader semantics than this narrow
+    // explicit-Space repair.
+    top->attributes |= converter::Attribute::SPELLING_CORRECTION;
+    // Match Mozc's legacy correction-rewriter UI exactly: the arrow and
+    // annotation are display metadata and are never committed as text.
+    top->prefix = "→ ";
+    top->description = "<もしかして>";
+    marked_source = true;
+  }
+}
+
+// Conservative reading normalization used only for reverse-reading equality.
+// Keep this deliberately narrower than linguistic normalization: width and
+// kana-script variants are normalized, but particles/orthographic variants
+// such as は/わ or じ/ぢ are never treated as equivalent.
+char32_t HalfwidthKatakanaToFullwidth(char32_t c) {
+  switch (c) {
+    case 0xFF61: return 0x3002;  // ｡ -> 。
+    case 0xFF62: return 0x300C;  // ｢ -> 「
+    case 0xFF63: return 0x300D;  // ｣ -> 」
+    case 0xFF64: return 0x3001;  // ､ -> 、
+    case 0xFF65: return 0x30FB;  // ･ -> ・
+    case 0xFF66: return 0x30F2;  // ｦ -> ヲ
+    case 0xFF67: return 0x30A1;  // ｧ -> ァ
+    case 0xFF68: return 0x30A3;
+    case 0xFF69: return 0x30A5;
+    case 0xFF6A: return 0x30A7;
+    case 0xFF6B: return 0x30A9;
+    case 0xFF6C: return 0x30E3;
+    case 0xFF6D: return 0x30E5;
+    case 0xFF6E: return 0x30E7;
+    case 0xFF6F: return 0x30C3;
+    case 0xFF70: return 0x30FC;
+    case 0xFF71: return 0x30A2;
+    case 0xFF72: return 0x30A4;
+    case 0xFF73: return 0x30A6;
+    case 0xFF74: return 0x30A8;
+    case 0xFF75: return 0x30AA;
+    case 0xFF76: return 0x30AB;
+    case 0xFF77: return 0x30AD;
+    case 0xFF78: return 0x30AF;
+    case 0xFF79: return 0x30B1;
+    case 0xFF7A: return 0x30B3;
+    case 0xFF7B: return 0x30B5;
+    case 0xFF7C: return 0x30B7;
+    case 0xFF7D: return 0x30B9;
+    case 0xFF7E: return 0x30BB;
+    case 0xFF7F: return 0x30BD;
+    case 0xFF80: return 0x30BF;
+    case 0xFF81: return 0x30C1;
+    case 0xFF82: return 0x30C4;
+    case 0xFF83: return 0x30C6;
+    case 0xFF84: return 0x30C8;
+    case 0xFF85: return 0x30CA;
+    case 0xFF86: return 0x30CB;
+    case 0xFF87: return 0x30CC;
+    case 0xFF88: return 0x30CD;
+    case 0xFF89: return 0x30CE;
+    case 0xFF8A: return 0x30CF;
+    case 0xFF8B: return 0x30D2;
+    case 0xFF8C: return 0x30D5;
+    case 0xFF8D: return 0x30D8;
+    case 0xFF8E: return 0x30DB;
+    case 0xFF8F: return 0x30DE;
+    case 0xFF90: return 0x30DF;
+    case 0xFF91: return 0x30E0;
+    case 0xFF92: return 0x30E1;
+    case 0xFF93: return 0x30E2;
+    case 0xFF94: return 0x30E4;
+    case 0xFF95: return 0x30E6;
+    case 0xFF96: return 0x30E8;
+    case 0xFF97: return 0x30E9;
+    case 0xFF98: return 0x30EA;
+    case 0xFF99: return 0x30EB;
+    case 0xFF9A: return 0x30EC;
+    case 0xFF9B: return 0x30ED;
+    case 0xFF9C: return 0x30EF;
+    case 0xFF9D: return 0x30F3;
+    default: return c;
+  }
+}
+
+bool ComposeVoicedKana(char32_t mark, char32_t* previous) {
+  if (previous == nullptr) {
+    return false;
+  }
+  const bool dakuten =
+      mark == 0x3099 || mark == 0x309B || mark == 0xFF9E;
+  const bool handakuten =
+      mark == 0x309A || mark == 0x309C || mark == 0xFF9F;
+  if (!dakuten && !handakuten) {
+    return false;
+  }
+
+  char32_t c = *previous;
+  if (dakuten) {
+    if (c == 0x3046) {  // う -> ゔ
+      *previous = 0x3094;
+      return true;
+    }
+    if (c == 0x30A6) {  // ウ -> ヴ
+      *previous = 0x30F4;
+      return true;
+    }
+    const char32_t dakuten_bases[] = {
+        0x304B, 0x304D, 0x304F, 0x3051, 0x3053,
+        0x3055, 0x3057, 0x3059, 0x305B, 0x305D,
+        0x305F, 0x3061, 0x3064, 0x3066, 0x3068,
+        0x306F, 0x3072, 0x3075, 0x3078, 0x307B,
+        0x30AB, 0x30AD, 0x30AF, 0x30B1, 0x30B3,
+        0x30B5, 0x30B7, 0x30B9, 0x30BB, 0x30BD,
+        0x30BF, 0x30C1, 0x30C4, 0x30C6, 0x30C8,
+        0x30CF, 0x30D2, 0x30D5, 0x30D8, 0x30DB,
+    };
+    for (const char32_t base : dakuten_bases) {
+      if (c == base) {
+        *previous = c + 1;
+        return true;
+      }
+    }
+  }
+
+  if (handakuten) {
+    const char32_t handakuten_bases[] = {
+        0x306F, 0x3072, 0x3075, 0x3078, 0x307B,
+        0x30CF, 0x30D2, 0x30D5, 0x30D8, 0x30DB,
+    };
+    for (const char32_t base : handakuten_bases) {
+      if (c == base) {
+        *previous = c + 2;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::string NormalizeReadingForComparison(absl::string_view input) {
+  const std::u32string source = Util::Utf8ToUtf32(input);
+  std::u32string normalized;
+  normalized.reserve(source.size());
+
+  for (char32_t c : source) {
+    if (c == 0xFF9E || c == 0xFF9F || c == 0x3099 || c == 0x309A ||
+        c == 0x309B || c == 0x309C) {
+      if (!normalized.empty() && ComposeVoicedKana(c, &normalized.back())) {
+        continue;
+      }
+      // A standalone voice mark is not discarded; keep it distinct so the
+      // comparison fails closed rather than manufacturing an equivalence.
+      normalized.push_back(c == 0xFF9E ? 0x3099
+                           : c == 0xFF9F ? 0x309A
+                                        : c);
+      continue;
+    }
+
+    c = HalfwidthKatakanaToFullwidth(c);
+    // Standard katakana letters map to hiragana by U+60.  This intentionally
+    // excludes punctuation, prolonged sound mark, and the voiced-wa extension.
+    if (c >= 0x30A1 && c <= 0x30F6) {
+      c -= 0x60;
+    }
+    normalized.push_back(c);
+  }
+
+  return Util::Utf32ToUtf8(normalized);
+}
 
 #if defined(_WIN32) && defined(MOZC_LEFT_CONTEXT_DEBUG)
 std::wstring Utf8ToWideForDebug(absl::string_view s) {
@@ -184,6 +528,7 @@ bool EngineConverter::ConvertWithPreferences(
 
   DCHECK(request_);
   DCHECK(config_);
+  conversion_key_override_.clear();
   ConversionRequest::Options options;
   options.enable_user_history_for_conversion = preferences.use_history;
   SetRequestType(ConversionRequest::CONVERSION, options);
@@ -212,10 +557,111 @@ bool EngineConverter::ConvertWithPreferences(
 
   segment_index_ = 0;
   state_ = CONVERSION;
+  current_conversion_uses_user_history_ = preferences.use_history;
   // If TalkBack is enabled, the candidate list should be always visible to
   // propagate the candidate words to TalkBack. Otherwise, the candidate list
   // is not visible on the first conversion.
   candidate_list_visible_ = request_->is_a11y_talkback_enabled();
+  UpdateCandidateList();
+  InitializeSelectedCandidateIndices();
+  return true;
+}
+
+bool EngineConverter::TryAsciiResidualCorrection(
+    const composer::Composer& composer) {
+  if (!CheckState(CONVERSION) || CurrentConversionHasReadingCorrection()) {
+    return false;
+  }
+
+  DCHECK(request_);
+  DCHECK(config_);
+  // This feature repairs an unfinished romaji syllable.  In kana-input mode
+  // or with a custom roman table, the fixed table below is not authoritative,
+  // so fail closed instead of guessing.
+  if (config_->preedit_method() != config::Config::ROMAN ||
+      !config_->custom_roman_table().empty()) {
+    return false;
+  }
+
+  ConversionRequest::Options options;
+  options.request_type = ConversionRequest::CONVERSION;
+  options.enable_user_history_for_conversion =
+      current_conversion_uses_user_history_;
+  const ConversionRequest base_request =
+      ConversionRequestBuilder()
+          .SetComposer(composer)
+          .SetRequestView(*request_)
+          .SetConfigView(*config_)
+          .SetOptions(std::move(options))
+          .Build();
+
+  const std::vector<std::string> corrected_readings =
+      GenerateAsciiResidualReadings(base_request.key());
+  if (corrected_readings.empty()) {
+    return false;
+  }
+
+  config::Config probe_config = base_request.config();
+  // Each one-kana proposal must stand on its own.  Do not let Mozc perform a
+  // second spelling correction inside a probe and thereby hide a bad vowel.
+  probe_config.set_use_spelling_correction(false);
+
+  int64_t best_cost = std::numeric_limits<int64_t>::max();
+  size_t best_count = 0;
+  std::string best_reading;
+  Segments best_segments;
+  for (const std::string& corrected_reading : corrected_readings) {
+    const ConversionRequest probe_request =
+        ConversionRequestBuilder()
+            .SetConversionRequestView(base_request)
+            .SetConfig(probe_config)
+            .SetKey(corrected_reading)
+            .Build();
+    // Preserve the same committed-history segments as the original
+    // conversion. StartConversion() replaces only conversion segments, so a
+    // fresh Segments here would silently discard left-context history.
+    Segments probe_segments = segments_;
+    if (!converter_->StartConversion(probe_request, &probe_segments)) {
+      continue;
+    }
+    ContextualCandidateReranker probe_reranker;
+    probe_reranker.Rerank(&probe_segments);
+    // A vowel proposal is valid only when that exact reading stands on its
+    // own.  Reject a probe if Mozc performs another reading-changing
+    // correction inside it; otherwise best_reading could disagree with the
+    // reading that actually produced the selected surface.
+    if (TopPathHasReadingCorrection(probe_segments)) {
+      continue;
+    }
+    const std::string surface = TopSurface(probe_segments);
+    const int64_t cost = TopPathCost(probe_segments);
+    if (surface.empty() || ContainsAlphabetScript(surface) ||
+        cost == std::numeric_limits<int64_t>::max()) {
+      continue;
+    }
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_count = 1;
+      best_reading = corrected_reading;
+      best_segments = probe_segments;
+    } else if (cost == best_cost) {
+      ++best_count;
+    }
+  }
+
+  // Compare only the equally scoped one-kana repairs.  The original
+  // mixed-ASCII reading is intentionally not placed on the same cost scale.
+  // If Mozc cannot identify one unique best vowel, leave the current
+  // conversion completely untouched.
+  if (best_count != 1) {
+    return false;
+  }
+
+  ResetResult();
+  segments_ = best_segments;
+  conversion_key_override_ = best_reading;
+  segment_index_ = 0;
+  MarkAsciiResidualCorrection(&segments_);
   UpdateCandidateList();
   InitializeSelectedCandidateIndices();
   return true;
@@ -242,6 +688,265 @@ bool EngineConverter::GetReadingText(absl::string_view source_text,
     }
     reading->append(segment.candidate(0).value);
   }
+  return true;
+}
+
+bool EngineConverter::IsReadingEquivalent(
+    absl::string_view source_text,
+    absl::string_view expected_reading) {
+  const std::string normalized_expected_reading =
+      NormalizeReadingForComparison(expected_reading);
+  if (NormalizeReadingForComparison(source_text) ==
+      normalized_expected_reading) {
+    return true;
+  }
+
+  Segments reverse_segments;
+  if (!converter_->StartReverseConversion(&reverse_segments, source_text) ||
+      reverse_segments.segments_size() == 0) {
+    return false;
+  }
+
+  std::string primary_reading;
+  for (const Segment& segment : reverse_segments) {
+    if (segment.candidates_size() == 0) {
+      return false;
+    }
+    primary_reading.append(segment.candidate(0).value);
+  }
+  if (NormalizeReadingForComparison(primary_reading) ==
+      normalized_expected_reading) {
+    return true;
+  }
+
+  // The common path above is O(n). Only ambiguous reverse readings need this
+  // exact dynamic-programming fallback. Bound the fallback so malformed or
+  // unusually broad reverse-conversion results cannot make Zenz validation
+  // expensive.
+  constexpr size_t kMaxReverseSegments = 64;
+  constexpr size_t kMaxCandidatesPerSegment = 16;
+  constexpr size_t kMaxExpectedReadingBytes = 2048;
+  if (static_cast<size_t>(reverse_segments.segments_size()) >
+          kMaxReverseSegments ||
+      normalized_expected_reading.size() > kMaxExpectedReadingBytes) {
+    return false;
+  }
+
+  // Reverse conversion can have multiple legitimate readings, e.g.
+  // 「一昨日」 -> 「おととい」 / 「いっさくじつ」. Walk the fixed reverse
+  // segment sequence and keep only byte offsets in |expected_reading| that can
+  // be reached by exact candidate readings. This needs one reverse-conversion
+  // request and never enumerates the Cartesian product.
+  std::vector<size_t> reachable_offsets = {0};
+  for (const Segment& segment : reverse_segments) {
+    std::vector<size_t> next_offsets;
+    const size_t candidate_count = std::min<size_t>(
+        segment.candidates_size(), kMaxCandidatesPerSegment);
+    for (const size_t offset : reachable_offsets) {
+      for (size_t i = 0; i < candidate_count; ++i) {
+        const absl::string_view candidate_reading = segment.candidate(i).value;
+        const std::string normalized_candidate_reading =
+            NormalizeReadingForComparison(candidate_reading);
+        if (normalized_candidate_reading.empty() ||
+            offset + normalized_candidate_reading.size() >
+                normalized_expected_reading.size()) {
+          continue;
+        }
+        if (normalized_expected_reading.substr(
+                offset, normalized_candidate_reading.size()) ==
+            normalized_candidate_reading) {
+          next_offsets.push_back(offset + normalized_candidate_reading.size());
+        }
+      }
+    }
+    if (next_offsets.empty()) {
+      return false;
+    }
+    std::sort(next_offsets.begin(), next_offsets.end());
+    next_offsets.erase(
+        std::unique(next_offsets.begin(), next_offsets.end()),
+        next_offsets.end());
+    reachable_offsets = std::move(next_offsets);
+  }
+
+  return std::binary_search(reachable_offsets.begin(),
+                            reachable_offsets.end(),
+                            normalized_expected_reading.size());
+}
+
+bool EngineConverter::GetUniqueReadingSurfaceAlignment(
+    absl::string_view source_text, absl::string_view expected_reading,
+    std::vector<ReadingSurfaceAlignmentSegment>* alignment) {
+  if (alignment == nullptr) {
+    return false;
+  }
+  alignment->clear();
+  if (source_text.empty() || expected_reading.empty()) {
+    return false;
+  }
+
+  const std::string normalized_expected_reading =
+      NormalizeReadingForComparison(expected_reading);
+  if (normalized_expected_reading.empty() ||
+      normalized_expected_reading.size() != expected_reading.size()) {
+    // The returned byte offsets must address the original expected reading.
+    // Most Japanese reading normalization is width/script preserving; for an
+    // unusual length-changing normalization, conservatively decline alignment.
+    return false;
+  }
+
+  if (NormalizeReadingForComparison(source_text) ==
+      normalized_expected_reading && source_text.size() == expected_reading.size()) {
+    ReadingSurfaceAlignmentSegment direct;
+    direct.reading = std::string(expected_reading);
+    direct.surface = std::string(source_text);
+    direct.reading_begin = 0;
+    direct.reading_end = expected_reading.size();
+    alignment->push_back(std::move(direct));
+    return true;
+  }
+
+  Segments reverse_segments;
+  if (!converter_->StartReverseConversion(&reverse_segments, source_text) ||
+      reverse_segments.segments_size() == 0) {
+    return false;
+  }
+
+  constexpr size_t kMaxReverseSegments = 64;
+  constexpr size_t kMaxCandidatesPerSegment = 16;
+  constexpr size_t kMaxExpectedReadingBytes = 2048;
+  const size_t segment_count = reverse_segments.segments_size();
+  if (segment_count > kMaxReverseSegments ||
+      normalized_expected_reading.size() > kMaxExpectedReadingBytes) {
+    return false;
+  }
+
+  std::string reconstructed_surface;
+  for (const Segment& segment : reverse_segments) {
+    if (segment.key().empty() || segment.candidates_size() == 0) {
+      return false;
+    }
+    reconstructed_surface.append(segment.key());
+  }
+  if (reconstructed_surface != source_text) {
+    return false;
+  }
+
+  struct AlignmentNode {
+    uint8_t path_count = 0;  // saturated at 2; 2 means ambiguous.
+    size_t previous_offset = 0;
+    size_t candidate_index = 0;
+  };
+
+  const size_t reading_size = normalized_expected_reading.size();
+  std::vector<std::vector<AlignmentNode>> layers(
+      segment_count + 1,
+      std::vector<AlignmentNode>(reading_size + 1));
+  layers[0][0].path_count = 1;
+
+  for (size_t segment_index = 0; segment_index < segment_count;
+       ++segment_index) {
+    const Segment& segment = reverse_segments.segment(segment_index);
+    const size_t candidate_count =
+        std::min<size_t>(segment.candidates_size(), kMaxCandidatesPerSegment);
+
+    // Duplicate candidate readings are the same alignment path, not evidence of
+    // ambiguity. Keep only the first candidate for each normalized reading.
+    std::vector<std::pair<std::string, size_t>> candidate_readings;
+    candidate_readings.reserve(candidate_count);
+    for (size_t i = 0; i < candidate_count; ++i) {
+      const std::string normalized =
+          NormalizeReadingForComparison(
+              segment.candidate(i).value);
+      if (normalized.empty()) {
+        continue;
+      }
+      bool duplicate = false;
+      for (const auto& [existing, unused_index] : candidate_readings) {
+        (void)unused_index;
+        if (existing == normalized) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        candidate_readings.push_back({normalized, i});
+      }
+    }
+    if (candidate_readings.empty()) {
+      return false;
+    }
+
+    for (size_t offset = 0; offset <= reading_size; ++offset) {
+      const AlignmentNode& previous = layers[segment_index][offset];
+      if (previous.path_count == 0) {
+        continue;
+      }
+
+      for (const auto& [candidate_reading, candidate_index] :
+           candidate_readings) {
+        if (offset + candidate_reading.size() > reading_size ||
+            normalized_expected_reading.substr(offset,
+                                               candidate_reading.size()) !=
+                candidate_reading) {
+          continue;
+        }
+
+        const size_t next_offset = offset + candidate_reading.size();
+        AlignmentNode& next = layers[segment_index + 1][next_offset];
+        const uint8_t added_paths = previous.path_count;
+        if (next.path_count == 0 && added_paths == 1) {
+          next.previous_offset = offset;
+          next.candidate_index = candidate_index;
+        }
+        const int total_paths =
+            static_cast<int>(next.path_count) + added_paths;
+        next.path_count = static_cast<uint8_t>(std::min(total_paths, 2));
+      }
+    }
+  }
+
+  if (layers[segment_count][reading_size].path_count != 1) {
+    return false;
+  }
+
+  std::vector<ReadingSurfaceAlignmentSegment> reversed;
+  reversed.reserve(segment_count);
+  size_t offset = reading_size;
+  for (size_t i = segment_count; i > 0; --i) {
+    const AlignmentNode& node = layers[i][offset];
+    if (node.path_count != 1 || node.previous_offset >= offset) {
+      alignment->clear();
+      return false;
+    }
+
+    const size_t segment_index = i - 1;
+    const Segment& segment = reverse_segments.segment(segment_index);
+    const std::string normalized_candidate =
+        NormalizeReadingForComparison(
+            segment.candidate(node.candidate_index).value);
+    if (normalized_expected_reading.substr(
+            node.previous_offset, offset - node.previous_offset) !=
+        normalized_candidate) {
+      alignment->clear();
+      return false;
+    }
+
+    ReadingSurfaceAlignmentSegment item;
+    item.reading = std::string(expected_reading.substr(
+        node.previous_offset, offset - node.previous_offset));
+    item.surface = segment.key();
+    item.reading_begin = node.previous_offset;
+    item.reading_end = offset;
+    reversed.push_back(std::move(item));
+    offset = node.previous_offset;
+  }
+  if (offset != 0) {
+    return false;
+  }
+
+  std::reverse(reversed.begin(), reversed.end());
+  *alignment = std::move(reversed);
   return true;
 }
 
@@ -362,6 +1067,26 @@ void CycleAlphaCase(Attributes query_attr, CandidateList& candidate_list) {
   }
 }
 }  // namespace
+
+bool EngineConverter::CurrentConversionHasReadingCorrection() const {
+  if (!CheckState(CONVERSION) || segments_.conversion_segments_size() == 0) {
+    return false;
+  }
+  if (!conversion_key_override_.empty()) {
+    return true;
+  }
+
+  for (size_t i = 0; i < segments_.conversion_segments_size(); ++i) {
+    const converter::Candidate& candidate = GetSelectedCandidate(i);
+    if (candidate.attributes &
+        (converter::Attribute::SPELLING_CORRECTION |
+         converter::Attribute::TYPING_CORRECTION |
+         converter::Attribute::KEY_EXPANDED_IN_DICTIONARY)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool EngineConverter::ConvertToTransliteration(
     const composer::Composer& composer,
@@ -664,6 +1389,9 @@ bool EngineConverter::PredictWithPreferences(
   // DCHECK(CheckState(COMPOSITION | SUGGESTION | PREDICTION));
   DCHECK(CheckState(COMPOSITION | SUGGESTION | CONVERSION | PREDICTION));
   ResetResult();
+  // Prediction rebuilds candidates from the Composer's original key, so any
+  // explicit residual-romaji key override no longer describes segments_.
+  conversion_key_override_.clear();
 
   // Initialize the segments and conversion_request for prediction
   ConversionRequest::Options options;
@@ -788,12 +1516,17 @@ void EngineConverter::Commit(const composer::Composer& composer,
   CommitSegmentsSize(state_, context);
   DCHECK(request_);
   DCHECK(config_);
-  const ConversionRequest conversion_request = ConversionRequestBuilder()
-                                                   .SetComposer(composer)
-                                                   .SetRequestView(*request_)
-                                                   .SetContextView(context)
-                                                   .SetConfigView(*config_)
-                                                   .Build();
+  ConversionRequestBuilder conversion_request_builder;
+  conversion_request_builder
+      .SetComposer(composer)
+      .SetRequestView(*request_)
+      .SetContextView(context)
+      .SetConfigView(*config_);
+  if (!conversion_key_override_.empty()) {
+    conversion_request_builder.SetKey(conversion_key_override_);
+  }
+  const ConversionRequest conversion_request =
+      conversion_request_builder.Build();
   converter_->FinishConversion(conversion_request, &segments_);
   ResetState();
 }
@@ -1042,6 +1775,13 @@ void EngineConverter::CommitSegmentsInternal(const composer::Composer& composer,
   // Commit the [0, segments_to_commit - 1] conversion segment.
   CommitSegmentsSize(segments_to_commit);
 
+  if (!conversion_key_override_.empty()) {
+    conversion_key_override_.clear();
+    for (const Segment& segment : segments_.conversion_segments()) {
+      conversion_key_override_.append(segment.key());
+    }
+  }
+
   // Adjust the segment_index, since the [0, segment_to_commit - 1] segments
   // disappeared.
   // Note that segment_index_ is unsigned.
@@ -1251,14 +1991,27 @@ void EngineConverter::ResizeSegmentWidth(const composer::Composer& composer,
 
   DCHECK(request_);
   DCHECK(config_);
-  const ConversionRequest conversion_request = ConversionRequestBuilder()
-                                                   .SetComposer(composer)
-                                                   .SetRequestView(*request_)
-                                                   .SetConfigView(*config_)
-                                                   .Build();
+  ConversionRequestBuilder conversion_request_builder;
+  conversion_request_builder.SetComposer(composer).SetRequestView(*request_);
+  if (!conversion_key_override_.empty()) {
+    // Keep manual segment resizing on the already-repaired reading.  A second
+    // spelling-correction pass here could change that reading while the
+    // override still points at the earlier repair.
+    config::Config resize_config = *config_;
+    resize_config.set_use_spelling_correction(false);
+    conversion_request_builder.SetConfig(resize_config);
+    conversion_request_builder.SetKey(conversion_key_override_);
+  } else {
+    conversion_request_builder.SetConfigView(*config_);
+  }
+  const ConversionRequest conversion_request =
+      conversion_request_builder.Build();
   if (!converter_->ResizeSegment(&segments_, conversion_request, segment_index_,
                                  delta)) {
     return;
+  }
+  if (!conversion_key_override_.empty()) {
+    MarkAsciiResidualCorrection(&segments_);
   }
 
   UpdateCandidateList();
@@ -1450,6 +2203,177 @@ bool EngineConverter::GetConversionSegmentKeys(
   return !segment_keys->empty();
 }
 
+void EngineConverter::GetUserHistoryConversionPreferences(
+    std::vector<UserHistoryConversionPreference>* preferences) const {
+  if (preferences == nullptr) {
+    return;
+  }
+
+  preferences->clear();
+  if (!CheckState(CONVERSION) || converter_ == nullptr ||
+      !current_conversion_uses_user_history_ || config_ == nullptr ||
+      request_ == nullptr ||
+      config_->history_learning_level() == config::Config::NO_HISTORY ||
+      config_->incognito_mode() || request_->is_incognito_mode()) {
+    return;
+  }
+
+  struct PreferenceAtom {
+    std::string key;
+    std::string value;
+  };
+
+  // Flatten the currently selected Mozc conversion into a small sequence of
+  // reading/surface atoms.  UserSegmentHistoryRewriter may learn either the
+  // outer conversion segment or its inner segments depending on the request,
+  // so later we probe bounded contiguous spans rather than assuming that the
+  // current segmentation is identical to the segmentation used when the user
+  // originally made the explicit selection.
+  constexpr size_t kMaxAtoms = 32;
+  std::vector<PreferenceAtom> atoms;
+  atoms.reserve(std::min<size_t>(segments_.conversion_segments_size() * 2,
+                                 kMaxAtoms));
+
+  for (size_t i = 0;
+       i < segments_.conversion_segments_size() && atoms.size() < kMaxAtoms;
+       ++i) {
+    const Segment& segment = segments_.conversion_segment(i);
+    if (segment.key().empty() || segment.candidates_size() == 0) {
+      continue;
+    }
+
+    int candidate_index = 0;
+    if (i == segment_index_ && candidate_list_.size() > 0) {
+      const int focused_id = candidate_list_.focused_id();
+      if (segment.is_valid_index(focused_id)) {
+        candidate_index = focused_id;
+      }
+    }
+    const converter::Candidate& candidate = segment.candidate(candidate_index);
+    bool added_inner = false;
+    if (!candidate.inner_segment_boundary.empty()) {
+      for (const auto& inner : candidate.inner_segments()) {
+        if (atoms.size() >= kMaxAtoms) {
+          break;
+        }
+        const absl::string_view inner_key = inner.GetKey();
+        const absl::string_view inner_value = inner.GetValue();
+        if (inner_key.empty() || inner_value.empty()) {
+          continue;
+        }
+        atoms.push_back(
+            {std::string(inner_key), std::string(inner_value)});
+        added_inner = true;
+      }
+    }
+
+    if (!added_inner && !candidate.value.empty()) {
+      atoms.push_back({std::string(segment.key()), candidate.value});
+    }
+  }
+
+  if (atoms.empty()) {
+    return;
+  }
+
+  // A repeated reading or surface makes the locality ambiguous before any
+  // candidate span is constructed.  In particular, concatenating two equal
+  // atoms would itself form a unique longer span and could otherwise trigger a
+  // persistent-history lookup even though we cannot prove which occurrence
+  // should be protected.  Fail closed before consulting user history.
+  for (size_t i = 0; i < atoms.size(); ++i) {
+    for (size_t j = i + 1; j < atoms.size(); ++j) {
+      if (atoms[i].key == atoms[j].key ||
+          atoms[i].value == atoms[j].value) {
+        return;
+      }
+    }
+  }
+
+  std::string full_key;
+  std::string full_value;
+  for (const PreferenceAtom& atom : atoms) {
+    full_key.append(atom.key);
+    full_value.append(atom.value);
+  }
+
+  const auto count_occurrences = [](absl::string_view text,
+                                    absl::string_view needle) {
+    if (needle.empty()) {
+      return size_t{0};
+    }
+    size_t count = 0;
+    size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != absl::string_view::npos) {
+      ++count;
+      pos += needle.size();
+    }
+    return count;
+  };
+
+  // A context-independent Current feature in UserSegmentHistoryRewriter is
+  // created by a reranked learning commit (ordinary default commits can only
+  // refresh an entry that already exists).  Query that persistent
+  // evidence directly instead of relying on transient candidate attributes,
+  // which can disappear when the same learned word is embedded in a longer
+  // conversion such as "ちょっとりせきします".
+  //
+  // Probe longest spans first and claim their atoms so a learned phrase is not
+  // also emitted as overlapping shorter preferences.  Six atoms is ample for a
+  // lexical/phrase preference while keeping the hot-path work tightly bounded
+  // (at most 32 * 6 in-memory lookups, and usually far fewer).
+  constexpr size_t kMaxPreferenceSpanAtoms = 6;
+  std::vector<bool> claimed(atoms.size(), false);
+  const size_t max_width =
+      std::min(kMaxPreferenceSpanAtoms, atoms.size());
+
+  for (size_t width = max_width; width > 0; --width) {
+    for (size_t begin = 0; begin + width <= atoms.size(); ++begin) {
+      bool overlaps_claimed = false;
+      for (size_t i = begin; i < begin + width; ++i) {
+        if (claimed[i]) {
+          overlaps_claimed = true;
+          break;
+        }
+      }
+      if (overlaps_claimed) {
+        continue;
+      }
+
+      std::string key;
+      std::string value;
+      for (size_t i = begin; i < begin + width; ++i) {
+        key.append(atoms[i].key);
+        value.append(atoms[i].value);
+      }
+
+      if (key.empty() || value.empty() || key == value ||
+          Util::CharsLen(key) < 2) {
+        continue;
+      }
+
+      // Preserve only unambiguous occurrences.  If the same reading or
+      // surface appears more than once in the current conversion, a literal
+      // post-Zenz preservation check cannot prove which occurrence survived.
+      // In that case leave the decision to Zenz rather than globally pinning
+      // the wrong occurrence.
+      if (count_occurrences(full_key, key) != 1 ||
+          count_occurrences(full_value, value) != 1) {
+        continue;
+      }
+
+      if (!converter_->HasUserSegmentHistoryPreference(key, value)) {
+        continue;
+      }
+
+      preferences->push_back({std::move(key), std::move(value)});
+      for (size_t i = begin; i < begin + width; ++i) {
+        claimed[i] = true;
+      }
+    }
+  }
+}
+
 void EngineConverter::FillOutput(const composer::Composer& composer,
                                  commands::Output* output) const {
   if (!output) {
@@ -1529,6 +2453,8 @@ void EngineConverter::ResetState() {
   candidate_list_.Clear();
   selected_candidate_indices_.clear();
   incognito_segments_.Clear();
+  current_conversion_uses_user_history_ = conversion_preferences_.use_history;
+  conversion_key_override_.clear();
 }
 
 void EngineConverter::SegmentFocus() {

@@ -1,6 +1,7 @@
 #ifndef MOZC_SESSION_ZENZ_FEEDBACK_STORE_H_
 #define MOZC_SESSION_ZENZ_FEEDBACK_STORE_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -56,25 +57,56 @@ struct ZenzFeedbackEntry {
   std::string key;
   std::string context_class;
   std::string value;
+  // Counts in this exact persisted coarse-context row.
   int accepted_count = 0;
   int rejected_count = 0;
+  // Counts after the same compatible-context aggregation used by runtime.
+  int effective_accepted_count = 0;
+  int effective_rejected_count = 0;
   int auto_block_reject_count = 0;
   bool hard_rejected = false;
   bool auto_blocked = false;
   std::string reason = "feedback_neutral";
 };
 
+// One direction of Local Zenz Preference evidence.  The store does not inspect
+// the current Mozc surface; opposite directions for the same reading may coexist.
+// Session code resolves each observation against the current Mozc result.
+struct ZenzLocalPreference {
+  std::string key;
+  std::string context_class;
+  std::string preferred_value;
+  std::string disfavored_value;
+  int observation_count = 0;
+};
+
+// Exact persisted Local Zenz Preference aggregate for management UI.  Unlike
+// GetLocalPreferences(), this view does not perform cross-context promotion or
+// current-reading filtering; it reflects what is actually stored.
+struct ZenzLocalPreferenceEntry {
+  std::string key;
+  std::string context_class;
+  std::string preferred_value;
+  std::string disfavored_value;
+  // Exact observations written with this source context class.
+  int observation_count = 0;
+  // Effective observations after the same coarse-context compatibility rule
+  // used by runtime lookup.  Management UI uses this for the threshold/status.
+  int effective_observation_count = 0;
+  int opposite_effective_observation_count = 0;
+};
+
 // Persistent local feedback for Zenz live correction.
 //
-// Scope is intentionally full-sequence only:
+// Ordinary accepted/rejected feedback remains full-sequence scoped:
 //   key   = the complete reading submitted to Zenz
 //   value = the complete Zenz correction shown to or accepted by the user
 //
-// This store does not own segment-local or lexical-unit learning.  If an
-// accepted full-sequence correction is later decomposed into safe local units,
-// those units belong to Mozc history/user-segment learning, not to this TSV.
-// The context dimension is also a coarse, non-reversible class.  Raw left
-// context must never be persisted here.
+// REV10 additionally stores conservative local preference observations as
+// atomic v3 records in the same TSV.  Those records never participate in
+// ordinary full-sequence promotion/decision lookup.  Raw left/right context is
+// never persisted; only the existing coarse non-reversible context class is
+// stored with a local observation.
 class ZenzFeedbackStore {
  public:
   ZenzFeedbackDecision Decide(absl::string_view key,
@@ -87,20 +119,6 @@ class ZenzFeedbackStore {
       absl::string_view value,
       const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const;
 
-  // Returns feedback-scored values for the given key/context_class.
-  //
-  // Compatible non-sensitive context classes are aggregated, as in Decide().
-  // Sensitive-like feedback is not promoted across context classes.
-  //
-  // The returned candidates are not a hard accepted/rejected binary list.
-  // Accepted feedback contributes positive score. Ordinary rejected feedback
-  // contributes a reason-dependent negative score and should be interpreted as
-  // a ranking signal, not as a command to suppress the candidate. Candidates
-  // with only negative observations are not returned because they provide no
-  // evidence that the value should be inserted into the normal conversion
-  // candidate list.
-  //
-  // The result is sorted by stronger total feedback score first.
   std::vector<ZenzFeedbackCandidate> GetRankedCandidates(
       absl::string_view key,
       absl::string_view context_class) const;
@@ -110,8 +128,6 @@ class ZenzFeedbackStore {
       absl::string_view context_class,
       const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const;
 
-  // Compatibility wrapper for older call sites.  Prefer GetRankedCandidates()
-  // for new code so rejected feedback can be used as a cost/ranking signal.
   std::vector<ZenzFeedbackCandidate> GetAcceptedCandidates(
       absl::string_view key,
       absl::string_view context_class) const;
@@ -121,45 +137,74 @@ class ZenzFeedbackStore {
       absl::string_view context_class,
       const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const;
 
-  // Returns exact persisted feedback entries aggregated by
-  // key/context_class/value.  Unlike ranked candidate lookup, this method does
-  // not merge compatible context classes.  It is intended for management UI.
+  // Returns local preference observations whose reading occurs uniquely in the
+  // current full reading and whose coarse source context is compatible.  The
+  // store deliberately does not filter by the current Mozc surface; Session is
+  // responsible for resolving preferred/disfavored/neither semantics so
+  // opposite context-dependent directions can coexist.  A direction is returned
+  // only after its compatible-context observation count reaches
+  // min_observation_count; callers can therefore keep immature observations
+  // persisted without letting them affect conversion behavior.
+  std::vector<ZenzLocalPreference> GetLocalPreferences(
+      absl::string_view full_key,
+      absl::string_view context_class,
+      size_t max_results = 12,
+      int min_observation_count = 1) const;
+
+  // Lists exact persisted local-preference aggregates for management UI.
+  std::vector<ZenzLocalPreferenceEntry> ListLocalPreferenceEntries() const;
+
   std::vector<ZenzFeedbackEntry> ListEntries() const;
 
   std::vector<ZenzFeedbackEntry> ListEntries(
       const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const;
 
-  // Exports the raw feedback history as normalized v2 UTF-8 TSV.
   [[nodiscard]]
   bool ExportToFile(const std::wstring& path) const;
 
-  // Imports normalized v2 UTF-8 TSV.  Legacy v1 rows are accepted and converted
-  // to the non-reversible "legacy" context class.
   [[nodiscard]]
   bool ImportFromFile(const std::wstring& path,
                       ZenzFeedbackImportMode mode);
 
-  // Deletes all raw records matching exactly key/context_class/value.
   [[nodiscard]]
   bool DeleteEntry(absl::string_view key,
                    absl::string_view context_class,
                    absl::string_view value);
 
-  // Removes all persisted zenz feedback data.
+  [[nodiscard]]
+  bool DeleteLocalPreference(absl::string_view key,
+                             absl::string_view context_class,
+                             absl::string_view preferred_value,
+                             absl::string_view disfavored_value);
+
   [[nodiscard]]
   bool ClearAll();
 
-  // Records one accepted full-sequence Zenz correction.
   void RecordAccepted(absl::string_view key,
                       absl::string_view context_class,
                       absl::string_view value);
 
-  // Records one rejected full-sequence Zenz correction.  Ordinary rejects are
-  // later interpreted as ranking signals; they are not segment-local negatives.
   void RecordRejected(absl::string_view key,
                       absl::string_view context_class,
                       absl::string_view value,
                       absl::string_view reason);
+
+  // Records one atomic v3 Local Zenz Preference observation.  Ordinary v2
+  // feedback remains full-sequence scoped.  REV9 local_revert pairs remain
+  // import-compatible but are never written by REV10.
+  void RecordLocalPreference(absl::string_view key,
+                             absl::string_view context_class,
+                             absl::string_view preferred_value,
+                             absl::string_view disfavored_value,
+                             absl::string_view reason =
+                                 "rejected_zenz_final_commit");
+
+  // Batches multiple independently validated local observations into one file
+  // append/flush.  This is used when one final commit safely localizes several
+  // disjoint spans, avoiding one disk open per span.
+  void RecordLocalPreferences(
+      const std::vector<ZenzLocalPreference>& preferences,
+      absl::string_view reason = "rejected_zenz_final_commit");
 };
 
 }  // namespace session

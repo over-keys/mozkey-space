@@ -30,7 +30,7 @@ TEST(ZenzContextRequestTest, DisabledZenzRequestsNothing) {
   EXPECT_EQ(request.following_length, 0);
 }
 
-TEST(ZenzContextRequestTest, DisabledLiveConversionRequestsNothing) {
+TEST(ZenzContextRequestTest, DisabledLiveConversionStillRequestsZenzContext) {
   config::Config config;
   config.set_use_live_conversion(false);
   config.set_use_zenz_live_correction(true);
@@ -38,8 +38,8 @@ TEST(ZenzContextRequestTest, DisabledLiveConversionRequestsNothing) {
   const ZenzContextRequest request =
       GetZenzContextRequest(config, commands::Context::NORMAL, true);
 
-  EXPECT_EQ(request.preceding_length, 0);
-  EXPECT_EQ(request.following_length, 0);
+  EXPECT_EQ(request.preceding_length, 24);
+  EXPECT_EQ(request.following_length, 24);
 }
 
 TEST(ZenzContextRequestTest, NonSnapshotStateRequestsNothing) {

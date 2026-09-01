@@ -4,10 +4,14 @@ on:
   push:
     branches:
       - main
+      - codex/space-zenz-conversion
   pull_request:
     branches:
       - main
   workflow_dispatch:
+  release:
+    types:
+      - published
 
 permissions:
   contents: read
@@ -26,6 +30,7 @@ jobs:
       - name: Checkout Mozkey
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
           submodules: false
           persist-credentials: false
 
@@ -215,6 +220,7 @@ jobs:
       - name: Checkout identical Mozkey commit
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
           submodules: false
           persist-credentials: false
 
@@ -342,3 +348,41 @@ jobs:
           tail -n 300 \
             formal-package/intel-verify/packaged-scorer.log \
             2>/dev/null || true
+
+  publish_macos_release:
+    name: Publish macOS PKG to GitHub Release
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: verify_same_package_on_native_intel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified Universal PKG
+        uses: actions/download-artifact@v6
+        with:
+          name: mozkey-zenz-formal-universal-package
+          path: formal-package
+
+      - name: Upload macOS PKG and checksum to Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          asset="Mozkey_${RELEASE_TAG}_macos_universal_zenz.pkg"
+          checksum="${asset}.sha256"
+
+          install \
+            -m 0644 \
+            formal-package/Mozc_Zenz_Universal_formal_dev.pkg \
+            "$asset"
+          sha256sum "$asset" > "$checksum"
+
+          gh release upload \
+            "$RELEASE_TAG" \
+            "$asset" \
+            "$checksum" \
+            --clobber

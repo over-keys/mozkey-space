@@ -66,7 +66,7 @@ constexpr int kLlamaReadyProbeHttpTimeoutMsec = 1500;
 
 // Minimum wait budget used only while llama-server is still loading.
 // The actual completion request still uses the request timeout from Mozc.
-constexpr uint32_t kMinLlamaReadyWaitMsec = 1500;
+constexpr uint32_t kMinLlamaReadyWaitMsec = 8000;
 
 // Hard caps for the named-pipe protocol.  The pipe is restricted to the current
 // user, but the scorer still must not trust client-provided lengths/timeouts.

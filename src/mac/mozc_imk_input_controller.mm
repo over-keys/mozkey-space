@@ -80,6 +80,7 @@ using mozc::config::Config;
 using SetOfString = std::set<std::string, std::less<>>;
 
 @interface MozcImkInputController ()
+@property(nonatomic, assign) BOOL zenzContextContinuityResetPending;
 - (void)cancelDelayedSessionCommand;
 - (void)delayedInvokeSessionCommandFromTimer:(NSTimer *)timer;
 - (void)dispatchSessionCommand:(const SessionCommand *)command client:(id)sender;
@@ -344,6 +345,7 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
   hasLiveConversionAnchorLeft_ = false;
   useLiveConversion_ = false;
   useZenzContextAcquisition_ = false;
+  self.zenzContextContinuityResetPending = (server != nil);
   secureEventInputStateForTest_ = (server == nil) ? 0 : -1;
   // Unit tests inject mock renderer/client objects immediately after
   // construction. Avoid creating production process/IPC dependencies in the
@@ -415,6 +417,7 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
   if (imkClientForTest_) {
     return;
   }
+  self.zenzContextContinuityResetPending = YES;
   [super activateServer:sender];
   [self setupClientBundle:sender];
   if (rendererCommand_.visible() && mozcRenderer_) {
@@ -441,6 +444,9 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
     return;
   }
 
+  // The next real key starts a new input stream even if InputMethodKit later
+  // reuses this controller for the same application/document.
+  self.zenzContextContinuityResetPending = YES;
   [self cancelDelayedSessionCommand];
 
   RendererCommand clearCommand;
@@ -496,9 +502,11 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
   [keyCodeMap_ setInputMode:input_mode];
   yenSignCharacter_ = config.yen_sign_character();
   useLiveConversion_ = config.use_live_conversion();
-  // Avoid an extra TEST_SEND_KEY round trip for ordinary Mozc input.
-  useZenzContextAcquisition_ =
-      useLiveConversion_ && config.use_zenz_live_correction();
+  // Zenz context is snapshotted when a new composition starts, regardless of
+  // whether live conversion is enabled.  This lets an explicit Space conversion
+  // use the same bounded left/right context while keeping the existing frozen
+  // snapshot semantics for the rest of the composition.
+  useZenzContextAcquisition_ = config.use_zenz_live_correction();
 
   if (config.use_japanese_layout()) {
     // Apple does not have "Japanese" layout actually -- here sets
@@ -1287,6 +1295,11 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
     // TODO(komatsu, horo): Support Google Omnibox too.
     context.add_experimental_features("google_search_box");
   }
+  const bool resetZenzContextContinuity =
+      self.zenzContextContinuityResetPending;
+  if (resetZenzContextContinuity) {
+    context.add_experimental_features("mozkey_zenz_context_reset");
+  }
   keyEvent.set_mode(mode_);
 
   const bool secureEventInput =
@@ -1304,6 +1317,11 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
   } else if (canAcquireSurroundingContext) {
     // Preserve the historical generic-context behavior as a best-effort path.
     [self fillSurroundingContext:&context client:sender];
+  } else if (useZenzContextAcquisition_) {
+    // Examples include Microsoft Word/Excel/PowerPoint, where selectedRange:
+    // is intentionally avoided for compatibility. Session may use only its
+    // volatile continuous-input left cache; no native text is fabricated.
+    context.add_experimental_features("mozkey_zenz_context_unavailable");
   }
 
   // Zenz-specific acquisition is independently bounded, so a legacy generic
@@ -1328,6 +1346,9 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
 
   if (!mozcClient_->SendKeyWithContext(keyEvent, context, &output)) {
     return NO;
+  }
+  if (resetZenzContextContinuity) {
+    self.zenzContextContinuityResetPending = NO;
   }
 
   [self processOutput:&output client:sender];

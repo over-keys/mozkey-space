@@ -276,7 +276,7 @@ ZenzUnixSocketClient::ZenzUnixSocketClient(
     std::string socket_path, ScorerLauncher scorer_launcher)
     : ZenzUnixSocketClient(std::move(socket_path),
                            std::move(scorer_launcher),
-                           absl::Milliseconds(1500)) {}
+                           absl::Milliseconds(8000)) {}
 
 ZenzUnixSocketClient::ZenzUnixSocketClient(
     std::string socket_path, ScorerLauncher scorer_launcher,

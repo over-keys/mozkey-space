@@ -396,10 +396,13 @@ void FillMozcContextForOnKey(
     mozc_context->set_following_text(generic_following);
   }
 
-  // The IMM32 document-feed fallback has no TSF InputScope signal. Preserve
-  // its generic Mozc context for compatibility, but explicitly prevent Zenz
-  // from falling back to those generic fields.
+  // Legacy IMM32/IMR_DOCUMENTFEED remains valid generic Mozc context,
+  // but its completeness is application-defined. Do not classify it as
+  // authoritative for Zenz. Session may use only its still-continuous volatile
+  // left-context fallback; right context remains unavailable.
   if (generic_info->used_legacy_imm32_fallback) {
+    mozc_context->add_experimental_features(
+        "mozkey_zenz_context_unavailable");
     SetZenzContextUnavailable(mozc_context);
     return;
   }
@@ -408,7 +411,11 @@ void FillMozcContextForOnKey(
     return;
   }
 
+  // A generic TSF read is caret/selection based.  While an active
+  // composition exists it is never a trustworthy Zenz boundary, even if it
+  // happens to contain enough characters.  Force the Zenz-only boundary read.
   const bool needs_extended_acquisition =
+      generic_info->in_composition ||
       (zenz_context_request.preceding_length > 0 &&
        (!generic_info->has_preceding_text ||
         !HasAtLeastZenzContextCharacters(
@@ -429,31 +436,49 @@ void FillMozcContextForOnKey(
   const bool has_trusted_extended_info =
       has_extended_info && !extended_info.used_legacy_imm32_fallback;
 
+  // If TSF says a composition is active, never fall back to generic caret
+  // text. Mark native Zenz context unavailable so Session can use only a
+  // still-continuous volatile left-context fallback.
+  if (generic_info->in_composition && !has_trusted_extended_info) {
+    mozc_context->add_experimental_features(
+        "mozkey_zenz_context_unavailable");
+    SetZenzContextUnavailable(mozc_context);
+    return;
+  }
+
   if (zenz_context_request.preceding_length > 0) {
     const bool use_extended_preceding =
         has_trusted_extended_info && extended_info.has_preceding_text;
-    if (use_extended_preceding || generic_info->has_preceding_text) {
-      const std::string source =
-          use_extended_preceding
-              ? WideToUtf8(extended_info.preceding_text)
-              : generic_preceding;
+    if (use_extended_preceding) {
       mozc_context->set_zenz_preceding_text(
           TakeTrailingZenzContextCharacters(
-              source, zenz_context_request.preceding_length));
+              WideToUtf8(extended_info.preceding_text),
+              zenz_context_request.preceding_length));
+    } else if (!generic_info->in_composition &&
+               generic_info->has_preceding_text) {
+      mozc_context->set_zenz_preceding_text(
+          TakeTrailingZenzContextCharacters(
+              generic_preceding, zenz_context_request.preceding_length));
+    } else if (generic_info->in_composition) {
+      mozc_context->set_zenz_preceding_text("");
     }
   }
 
   if (zenz_context_request.following_length > 0) {
     const bool use_extended_following =
         has_trusted_extended_info && extended_info.has_following_text;
-    if (use_extended_following || generic_info->has_following_text) {
-      const std::string source =
-          use_extended_following
-              ? WideToUtf8(extended_info.following_text)
-              : generic_following;
+    if (use_extended_following) {
       mozc_context->set_zenz_following_text(
           TakeLeadingZenzContextCharacters(
-              source, zenz_context_request.following_length));
+              WideToUtf8(extended_info.following_text),
+              zenz_context_request.following_length));
+    } else if (!generic_info->in_composition &&
+               generic_info->has_following_text) {
+      mozc_context->set_zenz_following_text(
+          TakeLeadingZenzContextCharacters(
+              generic_following, zenz_context_request.following_length));
+    } else if (generic_info->in_composition) {
+      mozc_context->set_zenz_following_text("");
     }
   }
 }
@@ -599,9 +624,9 @@ HRESULT OnKey(TipTextService* text_service, ITfContext* context,
         TipSurroundingText::Get(text_service, context, &generic_info);
 
     // Some TSF hosts deliver OnKey without the matching OnTestKey. Synthesize
-    // TestSendKey only for trusted TSF surrounding text outside an existing
-    // composition. Legacy IMM32 document-feed text is never acquired for Zenz,
-    // so it does not need a synthetic context-length request.
+    // TestSendKey only for authoritative full-TSF surrounding text outside an
+    // existing composition. Legacy IMM32 is intentionally unavailable to Zenz
+    // and therefore needs no synthetic context-length request.
     if (!generic_info.is_password_input_scope &&
         ShouldRunZenzContextRequestFallback(
             has_test_key_result, has_generic_info,

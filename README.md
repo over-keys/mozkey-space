@@ -1,27 +1,25 @@
 <p align="center">
-  <img src="src/data/images/icon.svg" width="112" height="112" alt="Mozkey icon">
+  <img src="src/data/images/icon.svg" width="112" height="112" alt="mozkey-space icon">
 </p>
 
-<h1 align="center">Mozkey（もずきー）</h1>
+<h1 align="center">mozkey-space</h1>
 
 <p align="center">
-  <strong>Mozc をベースに、遅延付きライブ変換・ローカル Zenz 補正・ダークテーマ対応<br>句読点単打確定・文脈を見た変換補正などを統合した、ローカルファーストな日本語入力 fork です。</strong>
+  <strong><a href="https://github.com/google/mozc">Mozc</a> をベースにした <a href="https://github.com/koyasi777/mozkey">Mozkey</a> から派生した、mozkey-space です。<br>Mozkey をベースに、通常のライブ変換だけでなく Space キーによる変換でも Zenz 補正を利用できるようにしています。</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/koyasi777/mozkey/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/koyasi777/mozkey?include_prereleases&label=release"></a>
+  <a href="https://github.com/over-keys/mozkey-space/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/over-keys/mozkey-space?include_prereleases&label=release"></a>
   <img alt="Based on Mozc" src="https://img.shields.io/badge/based%20on-Mozc-88A2DD">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-Zenz-53D4C7">
-  <img alt="Release build" src="https://img.shields.io/badge/release-Windows%20MSI-178B8B">
+  <img alt="Release build" src="https://img.shields.io/badge/release-Windows%20MSI%20%2B%20macOS%20PKG-178B8B">
   <img alt="macOS status" src="https://img.shields.io/badge/macOS-Zenz%20tested-2EA44F">
   <img alt="Linux status" src="https://img.shields.io/badge/Linux-untested-lightgrey">
 </p>
 
 <br>
 
-Mozkey（もずきー）は [google/mozc](https://github.com/google/mozc) をベースにした非公式フォークです。
-
-本 fork は、主に自分の Windows / macOS 環境で日常的に使うために、Mozc に入力補助・ライブ変換・文脈補正・ローカル Zenz 補正・オフライン配布向けの調整を加えたものです。
+このリポジトリは、[google/mozc](https://github.com/google/mozc) をベースにした [koyasi777/mozkey](https://github.com/koyasi777/mozkey) から派生した `mozkey-space` です。
 
 本プロジェクトは Google 日本語入力ではありません。
 Google または google/mozc の公式配布物ではありません。
@@ -32,20 +30,32 @@ upstream Mozc との追従性および既存インストールとの互換性を
 
 <br>
 
+mozkey-space の変更点（Mozkey からの差分）
+------------------------------------------
+
+mozkey-space 固有の変更点は、元の Mozkey に対する次の差分です。
+
+- 通常のライブ変換だけでなく、Space キーまたは `Convert` による通常変換でも、ローカル Zenz 補正を利用
+- ライブ変換を OFF にしていても、初回の通常変換後に Zenz 補正を開始し、通常の Mozc 候補を安全なフォールバックとして保持
+- `でs` のような、かなの後ろに残った未完成ローマ字を Space キーで補正し、最も確かな一かな候補だけを通常変換へ反映
+- 通常変換の入力経路でも、Zenz 補正の結果を既存の安全な候補・文脈処理と整合する形で扱う
+
+元の Mozc から Mozkey への変更点は、下の
+[主な追加機能](#mozkey-changes-from-mozc-ja) を参照してください。
+
+<br>
+
 ダウンロード / インストール
 --------------------------
 
-現時点で Releases から公開しているビルド済みパッケージは Windows 向けです。
+Windows 用の MSI と macOS 用の Universal Zenz PKG を、ビルド済みパッケージとして Releases から公開しています。GitHub Release を公開すると、macOS 用の PKG は CI で生成・検証したうえで、同じ Release に自動添付されます。
 
-Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
+### Windows
 
-Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
-
-Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mozkey/releases) からダウンロードできます。
+Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
 
 - 通常の x64 Windows では、Releases にある最新の `Mozkey_v*_x64.msi` を使用してください。
-- Windows on Arm（ARM64）では、その release に ARM64 と明記された MSI が含まれる場合は ARM64 版を使用してください。ARM64 MSI は Mozkey 本体、`mozc_zenz_scorer.exe`、`llama-server.exe` を native ARM64 payload として構成します。
-- `universal` MSI は x64 / ARM64 の全実行ファイルを dual-native 化した whole-product package ではありません。通常の配布選択では architecture-specific な x64 / ARM64 MSI を優先してください。
+- 現在の Windows 向け CI / リリースは x64 版のみを対象としています。Windows on Arm（ARM64）向け MSI と `universal` MSI は提供していません。
 - 本 fork のリリースは個人用の experimental build として公開しています。
 - Zenz 同梱版は、ローカル推論 runtime と GGUF model を含むため、従来の offline MSI よりファイルサイズが大きくなります。
 - Windows 向けリリース MSI には、ローカル生成した `daily` system dictionary profile を同梱する場合があります。
@@ -57,10 +67,28 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mo
 > 個人用 fork の experimental / pre-release build です。
 > MSI は署名されていないため、Windows の警告が表示される場合があります。
 
+### macOS について
+
+Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
+
+macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。Universal Zenz PKG は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。GitHub Release には `Mozkey_<tag>_macos_universal_zenz.pkg` と SHA-256 checksum が添付されます。PKG は、Apple Silicon と native Intel の両方で同一成果物を検証した後に公開されますが、macOS の PKG は実機検証用の experimental build として扱ってください。
+
+- Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
+- 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
+- 現在の開発用 PKG は Developer ID 署名および notarization の対象外です。ダウンロードした PKG では Gatekeeper の警告やインストール拒否が発生する可能性があるため、一般配布用の正式リリースとして扱わないでください。
+- macOS の Secure Event Input が有効なパスワード欄では、プライバシー保護のため surrounding text と Zenz 用の前後文脈を取得しません。Microsoft Word / Excel / PowerPoint などでは、アプリ互換性のため同様にネイティブ文脈取得を抑制する場合があります。
+
+### Linux について
+
+Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
+
 <br>
 
+<a id="mozkey-changes-from-mozc-ja"></a>
 主な追加機能
 ---------------------------
+
+元の Mozkey README にある主な追加機能です。mozkey-space はこれらを引き継いでいます。
 
 - 曖昧なローマ字規則でも途中表示できるオプションを追加
 - ローマ字テーブル編集画面に、そのオプション用のチェックボックス UI を追加
@@ -588,9 +616,11 @@ upstream 提案向けの変更は `pr/*` branches に整理しています。
 
 # English
 
-This repository is my personal fork of [google/mozc](https://github.com/google/mozc).
+<p align="center">
+  <strong>mozkey-space is derived from <a href="https://github.com/koyasi777/mozkey">Mozkey</a>, which is based on <a href="https://github.com/google/mozc">Mozc</a>.<br>It extends Mozkey so that Zenz correction is available not only during live conversion, but also when converting with the Space key.</strong>
+</p>
 
-This fork is mainly maintained for my own Windows / macOS environments and adds input assistance, live conversion, context-aware conversion, local Zenz correction, and offline-distribution-oriented adjustments to Mozc.
+This repository is the `mozkey-space` fork derived from [koyasi777/mozkey](https://github.com/koyasi777/mozkey), which is based on [google/mozc](https://github.com/google/mozc).
 
 This build is not an official google/mozc distribution.
 
@@ -658,17 +688,14 @@ See also:
 Download / Install
 ------------------
 
-At the moment, prebuilt packages published from Releases are available for Windows.
+Prebuilt packages for both Windows and macOS are available from Releases. Windows releases provide MSI packages; when a GitHub Release is published, CI builds and verifies a Universal Zenz macOS PKG on native Apple Silicon and Intel, then attaches it to the same Release.
 
-In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
+### Windows
 
-Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
-
-Windows MSI packages are available from [Releases](https://github.com/koyasi777/mozkey/releases).
+Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
 
 - On x64 Windows, use the latest `Mozkey_v*_x64.msi` from Releases.
-- On Windows on Arm (ARM64), when a release contains an MSI explicitly labeled ARM64, use the ARM64 package. The ARM64 MSI packages Mozkey, `mozc_zenz_scorer.exe`, and `llama-server.exe` as native ARM64 payloads.
-- The `universal` MSI is not a dual-native whole-product package containing native x64 and ARM64 versions of every executable. Prefer the architecture-specific x64 / ARM64 MSI for normal release installation.
+- The current Windows CI and releases target x64 only. MSI packages for Windows on Arm (ARM64) and `universal` MSI packages are not provided.
 - For the Zenz-bundled build, choose an MSI whose file name contains `zenz` or `zenz_offline`.
 - Releases from this fork are published as personal experimental builds.
 - Zenz-bundled builds are larger than the traditional offline MSI because they include a local inference runtime and a GGUF model.
@@ -681,6 +708,16 @@ Windows MSI packages are available from [Releases](https://github.com/koyasi777/
 > It is an experimental / pre-release build from a personal fork.
 > The MSI is not code-signed, so Windows may show a warning.
 
+### macOS
+
+In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
+
+The macOS Universal Zenz PKG is available from [Releases](https://github.com/over-keys/mozkey-space/releases). The asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
+
+### Linux
+
+Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
+
 Main branches
 -------------
 
@@ -688,8 +725,26 @@ Main branches
 - `master`: upstream tracking branch
 - `pr/*`: upstream-oriented proposal branches
 
-Main features added in this fork
---------------------------------
+mozkey-space changes (delta from Mozkey)
+-----------------------------------------
+
+The changes specific to mozkey-space are the following additions on top of
+Mozkey:
+
+- Applies local Zenz correction not only to live conversion but also to ordinary conversion started with Space or `Convert`
+- Starts the same Zenz correction path after the first ordinary conversion even when live conversion is disabled, while keeping the normal Mozc candidate as a safe fallback
+- Repairs an unfinished single-kana ASCII residual such as `でs` when Space is pressed, and applies only a unique best reading to ordinary conversion
+- Keeps the ordinary-conversion path consistent with the existing safe-candidate and context-handling rules
+
+For the original changes from Mozc to Mozkey, see
+[Main additions](#mozkey-changes-from-mozc-en) below.
+
+<a id="mozkey-changes-from-mozc-en"></a>
+Main additions
+--------------
+
+These are the main additions from the original Mozkey README. mozkey-space
+inherits them as its base feature set.
 
 - Adds an option to display ambiguous romaji rules before the input is fully disambiguated
 - Adds a checkbox UI for that option to the romaji table editor

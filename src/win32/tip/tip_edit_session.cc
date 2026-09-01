@@ -300,7 +300,11 @@ class AsyncSessionCommandEditSessionImpl final
         output.callback().has_session_command() &&
         output.callback().session_command().has_type()) {
       const Output::Callback& callback = output.callback();
-      if (callback.has_delay_millisec() && callback.delay_millisec() > 0) {
+      // An explicitly present delay of 0 ms still means "run this callback".
+      // PostDelayedSessionCommand() deliberately normalizes 0 ms to a 1 ms
+      // timer, avoiding synchronous TSF reentrancy while preserving the
+      // user-visible zero-delay setting.
+      if (callback.has_delay_millisec()) {
         text_service_->PostDelayedSessionCommand(
             context_.get(),
             callback.session_command(),
@@ -610,7 +614,11 @@ bool OnOutputReceivedImpl(TipTextService* text_service,
     const SessionCommand& session_command = callback.session_command();
     const SessionCommand::CommandType type = session_command.type();
 
-    if (callback.has_delay_millisec() && callback.delay_millisec() > 0) {
+    // A delay field explicitly set to 0 is a valid asynchronous callback.
+    // The task-window scheduler converts it to a 1 ms timer, so do not drop it
+    // here.  Callback types with no delay field keep the historical immediate
+    // switch handling below (reconversion, undo, etc.).
+    if (callback.has_delay_millisec()) {
       text_service->PostDelayedSessionCommand(
         context, session_command, callback.delay_millisec());
 

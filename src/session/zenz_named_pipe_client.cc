@@ -31,6 +31,10 @@ using ::mozc::zenz::ZenzWireResponseHeader;
 
 #if defined(_WIN32)
 
+constexpr uint32_t kMaxResponseValueBytes = 1024 * 1024;
+constexpr uint32_t kMaxResponseDebugBytes = 64 * 1024;
+constexpr uint32_t kScorerProcessStartupGraceMsec = 1500;
+
 std::wstring Utf8ToWidePipeName(const std::string& s) {
   if (s.empty()) {
     return L"";
@@ -209,7 +213,7 @@ HANDLE OpenPipeWithAutoLaunch(const std::wstring& pipe_name,
 
     constexpr uint32_t kColdStartRetryMsec = 50;
     const uint32_t retry_budget_msec =
-        std::max<uint32_t>(timeout_msec, kColdStartRetryMsec);
+        std::max<uint32_t>(timeout_msec, kScorerProcessStartupGraceMsec);
     const uint32_t retry_attempts =
         std::max<uint32_t>(1, retry_budget_msec / kColdStartRetryMsec);
 
@@ -405,6 +409,13 @@ ZenzLiveResponse ZenzNamedPipeClient::Convert(
     ::CloseHandle(pipe);
     response.ok = false;
     response.debug = "pipe_response_header_invalid";
+    return response;
+  }
+  if (response_header.value_size > kMaxResponseValueBytes ||
+      response_header.debug_size > kMaxResponseDebugBytes) {
+    ::CloseHandle(pipe);
+    response.ok = false;
+    response.debug = "pipe_response_payload_too_large";
     return response;
   }
 

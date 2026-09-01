@@ -10,8 +10,8 @@ namespace mozc {
 namespace session {
 namespace {
 
-// Platform acquisition is intentionally bounded even though the historical
-// Session-side left-context setting has no equivalent clamp.
+// Platform acquisition is intentionally bounded to the same maximum used by
+// Session-side Zenz context selection.
 constexpr uint32_t kMaxAcquisitionLength = 128;
 
 }  // namespace
@@ -22,8 +22,12 @@ ZenzContextRequest GetZenzContextRequest(
     const bool may_snapshot_client_context) {
   ZenzContextRequest request;
 
+  // Context snapshotting is useful for both live Zenz correction and explicit
+  // Space/normal conversion Zenz correction.  The platform asks only while the
+  // session is about to enter a new composition, then the Session freezes that
+  // bounded snapshot for the lifetime of the composition.  Therefore live
+  // conversion is deliberately not part of this gate.
   if (!may_snapshot_client_context ||
-      !config.use_live_conversion() ||
       !config.use_zenz_live_correction() ||
       input_field_type == commands::Context::PASSWORD) {
     return request;

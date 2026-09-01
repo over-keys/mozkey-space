@@ -4080,15 +4080,10 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
   liveConversionMinKeyLengthSpinBox->setEnabled(enabled);
   showLiveConversionRubyWindow->setEnabled(enabled);
   showCandidateWindowOnInitialConversionCheckBox->setEnabled(!enabled);
-
-  zenzLiveCorrectionCheckBox->setEnabled(enabled);
-  SelectZenzLiveCorrectionSetting(
-      enabled ? static_cast<int>(zenzLiveCorrectionCheckBox->isChecked()) : 0);
 }
 
 void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
-  const bool enabled =
-      liveConversionCheckBox->isChecked() && static_cast<bool>(state);
+  const bool enabled = static_cast<bool>(state);
 
   zenzLiveCorrectionDelayLabel->setEnabled(enabled);
   zenzLiveCorrectionDelaySpinBox->setEnabled(enabled);
@@ -4114,7 +4109,6 @@ void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
 
 void ConfigDialog::SelectZenzFeedbackLearningSetting(int state) {
   const bool enabled =
-      liveConversionCheckBox->isChecked() &&
       zenzLiveCorrectionCheckBox->isChecked() &&
       static_cast<bool>(state);
 
@@ -4127,8 +4121,7 @@ void ConfigDialog::SelectZenzFeedbackLearningSetting(int state) {
 }
 
 void ConfigDialog::SelectZenzRightContextSetting(int state) {
-  const bool enabled = liveConversionCheckBox->isChecked() &&
-                       zenzLiveCorrectionCheckBox->isChecked() &&
+  const bool enabled = zenzLiveCorrectionCheckBox->isChecked() &&
                        static_cast<bool>(state);
 
   zenzLiveCorrectionRightContextLengthLabel->setEnabled(enabled);

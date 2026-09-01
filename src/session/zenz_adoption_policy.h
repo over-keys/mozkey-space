@@ -62,6 +62,12 @@ struct ProtectedConversionSpan {
   // reading-derived kana spelling can be found unambiguously in the Zenz output.
   bool repairable = false;
 
+  // True when the same visible protected surface is associated with multiple
+  // readings in the current Mozc conversion.  Such a span is fail-closed: it
+  // must not be used for reading projection or bounded repair because the
+  // occurrence-to-reading correspondence cannot be proven uniquely.
+  bool ambiguous = false;
+
   // Number of occurrences of this surface in the normal Mozc live-conversion
   // value.  Zenz adoption must preserve at least this many occurrences, or
   // repair the missing occurrence when it is safe.
