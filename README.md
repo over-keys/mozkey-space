@@ -52,6 +52,15 @@ mozkey-space 固有の変更点は、元の Mozkey に対する次の差分で�
 
 Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
 
+### macOS について
+
+macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。ただし、現時点で Releases から一般公開している完成済み macOS PKG はありません。macOS の PKG は実機検証用の experimental build として扱ってください。
+
+- Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
+- 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
+- 現在の開発用PKGは Developer ID 署名および notarization の対象外です。ダウンロードしたPKGでは Gatekeeper の警告やインストール拒否が発生する可能性があるため、一般配布用の正式リリースとして扱わないでください。
+- macOS の Secure Event Input が有効なパスワード欄では、プライバシー保護のため surrounding text と Zenz 用の前後文脈を取得しません。Microsoft Word / Excel / PowerPoint などでは、アプリ互換性のため同様にネイティブ文脈取得を抑制する場合があります。
+
 Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
 
 Windows 用のビルド済み MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
