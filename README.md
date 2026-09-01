@@ -12,7 +12,7 @@
   <a href="https://github.com/over-keys/mozkey-space/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/over-keys/mozkey-space?include_prereleases&label=release"></a>
   <img alt="Based on Mozc" src="https://img.shields.io/badge/based%20on-Mozc-88A2DD">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-Zenz-53D4C7">
-  <img alt="Release build" src="https://img.shields.io/badge/release-Windows%20MSI-178B8B">
+  <img alt="Release build" src="https://img.shields.io/badge/release-Windows%20MSI%20%2B%20macOS%20PKG-178B8B">
   <img alt="macOS status" src="https://img.shields.io/badge/macOS-Zenz%20tested-2EA44F">
   <img alt="Linux status" src="https://img.shields.io/badge/Linux-untested-lightgrey">
 </p>
@@ -48,13 +48,13 @@ mozkey-space 固有の変更点は、元の Mozkey に対する次の差分で�
 ダウンロード / インストール
 --------------------------
 
-現時点で Releases から公開しているビルド済みパッケージは Windows 向けです。
+Windows 用のビルド済みパッケージを Releases から公開しています。GitHub Release を公開すると、macOS 用の Universal Zenz PKG もCIで生成・検証したうえで、同じReleaseに自動添付します。
 
 Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
 
 ### macOS について
 
-macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。ただし、現時点で Releases から一般公開している完成済み macOS PKG はありません。macOS の PKG は実機検証用の experimental build として扱ってください。
+macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。GitHub Release には `Mozkey_<tag>_macos_universal_zenz.pkg` と SHA-256 checksum を添付します。PKGは、Apple Siliconとnative Intelの両方で同一成果物を検証した後に公開されますが、macOS のPKGは実機検証用の experimental build として扱ってください。
 
 - Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
 - 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
@@ -681,13 +681,15 @@ See also:
 Download / Install
 ------------------
 
-At the moment, prebuilt packages published from Releases are available for Windows.
+Windows prebuilt packages are published from Releases. When a GitHub Release is published, CI builds and verifies a Universal Zenz macOS PKG on native Apple Silicon and Intel, then attaches it to the same Release.
 
 In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
 
 Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
 
 Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
+
+The macOS asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
 
 - On x64 Windows, use the latest `Mozkey_v*_x64.msi` from Releases.
 - On Windows on Arm (ARM64), when a release contains an MSI explicitly labeled ARM64, use the ARM64 package. The ARM64 MSI packages Mozkey, `mozc_zenz_scorer.exe`, and `llama-server.exe` as native ARM64 payloads.
