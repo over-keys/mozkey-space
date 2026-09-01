@@ -60,6 +60,15 @@ namespace {
 
 bool IsComposerApplicable(const ConversionRequest& request,
                           const Segments* segments) {
+  // An explicit key can intentionally differ from the composer's current
+  // conversion query (for example, a corrected reading probe).  In that case
+  // the composer's transliterations describe the old input and must not be
+  // copied onto candidates produced from the new key.
+  if (request.request_type() == ConversionRequest::CONVERSION &&
+      request.key() != request.composer().GetQueryForConversion()) {
+    return false;
+  }
+
   std::string segments_key;
   for (const Segment& segment : segments->conversion_segments()) {
     segments_key.append(segment.key());

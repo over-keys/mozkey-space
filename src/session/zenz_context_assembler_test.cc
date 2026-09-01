@@ -33,7 +33,7 @@ TEST(ZenzContextAssemblerTest,
 }
 
 TEST(ZenzContextAssemblerTest,
-     LeftCrossesSingleLineBreakWithinParagraph) {
+     LeftStopsAtSingleLineBreak) {
   ZenzContextAssemblyInput input;
   input.preceding_text =
       "前の行\n現在の文脈";
@@ -44,7 +44,7 @@ TEST(ZenzContextAssemblerTest,
 
   EXPECT_EQ(
       result.left.prompt_context,
-      "前の行\n現在の文脈");
+      "現在の文脈");
 
   EXPECT_TRUE(
       result.left.allowed_for_prompt);
@@ -55,7 +55,7 @@ TEST(ZenzContextAssemblerTest,
 }
 
 TEST(ZenzContextAssemblerTest,
-     LeftCrossesSingleCrLfWithinParagraph) {
+     LeftStopsAtSingleCrLf) {
   ZenzContextAssemblyInput input;
   input.preceding_text =
       "前の行\r\n現在の文脈";
@@ -66,7 +66,7 @@ TEST(ZenzContextAssemblerTest,
 
   EXPECT_EQ(
       result.left.prompt_context,
-      "前の行\r\n現在の文脈");
+      "現在の文脈");
 
   EXPECT_TRUE(
       result.left.allowed_for_prompt);
@@ -185,7 +185,7 @@ TEST(ZenzContextAssemblerTest,
 }
 
 TEST(ZenzContextAssemblerTest,
-     RightCrossesSingleLineBreakWithinContinuation) {
+     RightStopsAtSingleLineBreak) {
   ZenzContextAssemblyInput input;
   input.following_text =
       "を採用し\n継続する。次の文";
@@ -196,14 +196,14 @@ TEST(ZenzContextAssemblerTest,
 
   EXPECT_EQ(
       result.right.prompt_context,
-      "を採用し\n継続する。");
+      "を採用し");
 
   EXPECT_TRUE(
       result.right.allowed_for_prompt);
 }
 
 TEST(ZenzContextAssemblerTest,
-     RightCrossesSingleCrLfWithinContinuation) {
+     RightStopsAtSingleCrLf) {
   ZenzContextAssemblyInput input;
   input.following_text =
       "を採用し\r\n継続する。次の文";
@@ -214,7 +214,7 @@ TEST(ZenzContextAssemblerTest,
 
   EXPECT_EQ(
       result.right.prompt_context,
-      "を採用し\r\n継続する。");
+      "を採用し");
 
   EXPECT_TRUE(
       result.right.allowed_for_prompt);
