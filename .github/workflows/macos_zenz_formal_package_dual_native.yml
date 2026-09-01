@@ -382,6 +382,7 @@ jobs:
           sha256sum "$asset" > "$checksum"
 
           gh release upload \
+            --repo "$GITHUB_REPOSITORY" \
             "$RELEASE_TAG" \
             "$asset" \
             "$checksum" \
