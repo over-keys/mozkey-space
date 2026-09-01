@@ -158,7 +158,11 @@ jobs:
           path: src/bazel-bin/win32/installer/Mozc64.msi
           if-no-files-found: warn
 
+  # Windows distribution and validation currently target x64 only.  Keep the
+  # ARM64/universal jobs below as dormant definitions so they can be restored
+  # later without losing the audit history, but do not schedule them.
   build_universal:
+    if: ${{ false }}
     needs: prepare_daily_dictionary
     # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
     runs-on: windows-2025
@@ -274,6 +278,7 @@ jobs:
           if-no-files-found: warn
 
   build_arm64:
+    if: ${{ false }}
     needs: prepare_daily_dictionary
     # https://github.com/actions/runner-images/blob/main/images/windows/Windows11-Arm64-Readme.md
     runs-on: windows-11-arm
@@ -389,6 +394,7 @@ jobs:
           if-no-files-found: warn
 
   build_arm64_lifecycle_baseline:
+    if: ${{ false }}
     needs: prepare_daily_dictionary
     # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
     runs-on: windows-2025
@@ -587,6 +593,7 @@ jobs:
           if-no-files-found: error
 
   test_arm64_cross_native_parity:
+    if: ${{ false }}
     name: ARM64 cross/native package parity audit
     needs:
       - build_arm64
@@ -631,6 +638,7 @@ jobs:
           retention-days: 7
 
   test_arm64_installer_lifecycle:
+    if: ${{ false }}
     name: Native ARM64 installer lifecycle audit
     needs:
       - build_arm64
@@ -674,6 +682,7 @@ jobs:
           if-no-files-found: warn
 
   test_arm64_installed_msi:
+    if: ${{ false }}
     name: Native ARM64 installed MSI Zenz audit
     needs: build_arm64
     runs-on: windows-11-arm
@@ -1692,6 +1701,7 @@ jobs:
           path: ${{ runner.temp }}\mozkey-w4-arm64-msi-evidence
           if-no-files-found: warn
   test_arm64_tip_client_architecture:
+    if: ${{ false }}
     name: ARM64 TIP client-architecture smoke
     needs: build_arm64
     runs-on: windows-11-arm
@@ -2090,9 +2100,10 @@ jobs:
         env:
           ANDROID_NDK_HOME: ""
         run: |
-          bazelisk test ... -c dbg --build_tests_only
+          bazelisk test ... -c dbg --build_tests_only --test_output=errors
 
   test_arm64:
+    if: ${{ false }}
     needs: prepare_daily_dictionary
     # https://github.com/actions/runner-images/blob/main/images/windows/Windows11-Arm64-Readme.md
     runs-on: windows-11-arm
@@ -2136,6 +2147,7 @@ jobs:
   # in other jobs. Another approach would be to use "needs:".
   # https://docs.github.com/en/actions/using-jobs/using-jobs-in-a-workflow
   test_arm64_tsf_application_host_foundation:
+    if: ${{ false }}
     name: ARM64 installed-IME TSF application-host foundation
     needs: build_arm64
     runs-on: windows-11-arm

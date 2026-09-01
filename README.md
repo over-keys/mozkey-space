@@ -55,8 +55,7 @@ Windows 用の MSI と macOS 用の Universal Zenz PKG を、ビルド済みパ�
 Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
 
 - 通常の x64 Windows では、Releases にある最新の `Mozkey_v*_x64.msi` を使用してください。
-- Windows on Arm（ARM64）では、その release に ARM64 と明記された MSI が含まれる場合は ARM64 版を使用してください。ARM64 MSI は Mozkey 本体、`mozc_zenz_scorer.exe`、`llama-server.exe` を native ARM64 payload として構成します。
-- `universal` MSI は x64 / ARM64 の全実行ファイルを dual-native 化した whole-product package ではありません。通常の配布選択では architecture-specific な x64 / ARM64 MSI を優先してください。
+- 現在の Windows 向け CI / リリースは x64 版のみを対象としています。Windows on Arm（ARM64）向け MSI と `universal` MSI は提供していません。
 - 本 fork のリリースは個人用の experimental build として公開しています。
 - Zenz 同梱版は、ローカル推論 runtime と GGUF model を含むため、従来の offline MSI よりファイルサイズが大きくなります。
 - Windows 向けリリース MSI には、ローカル生成した `daily` system dictionary profile を同梱する場合があります。
@@ -696,8 +695,7 @@ Prebuilt packages for both Windows and macOS are available from Releases. Window
 Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
 
 - On x64 Windows, use the latest `Mozkey_v*_x64.msi` from Releases.
-- On Windows on Arm (ARM64), when a release contains an MSI explicitly labeled ARM64, use the ARM64 package. The ARM64 MSI packages Mozkey, `mozc_zenz_scorer.exe`, and `llama-server.exe` as native ARM64 payloads.
-- The `universal` MSI is not a dual-native whole-product package containing native x64 and ARM64 versions of every executable. Prefer the architecture-specific x64 / ARM64 MSI for normal release installation.
+- The current Windows CI and releases target x64 only. MSI packages for Windows on Arm (ARM64) and `universal` MSI packages are not provided.
 - For the Zenz-bundled build, choose an MSI whose file name contains `zenz` or `zenz_offline`.
 - Releases from this fork are published as personal experimental builds.
 - Zenz-bundled builds are larger than the traditional offline MSI because they include a local inference runtime and a GGUF model.
