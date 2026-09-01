@@ -19,11 +19,7 @@
 
 <br>
 
-Mozkey（もずきー）は [google/mozc](https://github.com/google/mozc) をベースにした非公式フォークです。
-
-`mozkey-space` は、通常のライブ変換だけでなく、Spaceキーによる通常変換でもローカル Zenz 補正を利用できることを中心に整備しています。
-
-本 fork は、主に自分の Windows / macOS 環境で日常的に使うために、Mozc に入力補助・ライブ変換・文脈補正・ローカル Zenz 補正・オフライン配布向けの調整を加えたものです。
+このリポジトリは、[google/mozc](https://github.com/google/mozc) をベースにした Mozkey から派生した `mozkey-space` です。
 
 本プロジェクトは Google 日本語入力ではありません。
 Google または google/mozc の公式配布物ではありません。
@@ -31,6 +27,21 @@ Google によるサポートや品質保証の対象ではありません。
 
 upstream Mozc との追従性および既存インストールとの互換性を保つため、
 一部の内部実行ファイル名、パス、実装上の識別子には `mozc` / `Mozc` 名が残ります。
+
+<br>
+
+mozkey-space の変更点（Mozkey からの差分）
+------------------------------------------
+
+mozkey-space 固有の変更点は、元の Mozkey に対する次の差分です。
+
+- 通常のライブ変換だけでなく、Space キーまたは `Convert` による通常変換でも、ローカル Zenz 補正を利用
+- ライブ変換を OFF にしていても、初回の通常変換後に Zenz 補正を開始し、通常の Mozc 候補を安全なフォールバックとして保持
+- `でs` のような、かなの後ろに残った未完成ローマ字を Space キーで補正し、最も確かな一かな候補だけを通常変換へ反映
+- 通常変換の入力経路でも、Zenz 補正の結果を既存の安全な候補・文脈処理と整合する形で扱う
+
+元の Mozc から Mozkey への変更点は、下の
+[Mozkey の変更点（Mozc からの変更）](#mozkey-changes-from-mozc-ja) を参照してください。
 
 <br>
 
@@ -61,8 +72,11 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/over-keys/mo
 
 <br>
 
-主な追加機能
----------------------------
+<a id="mozkey-changes-from-mozc-ja"></a>
+Mozkey の変更点（Mozc からの変更）
+----------------------------------
+
+以下は、元の Mozkey が Mozc に加えた変更点です。mozkey-space はこれらを基盤として引き継いでいます。
 
 - 曖昧なローマ字規則でも途中表示できるオプションを追加
 - ローマ字テーブル編集画面に、そのオプション用のチェックボックス UI を追加
@@ -107,7 +121,6 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/over-keys/mo
 - `には` や `してたの` のような自然な機能語かな列が、`二は` や `して他の` のような 1 文字漢字候補に過剰変換される挙動を抑制
 - `にじ` のような 2 文字ひらがな入力で、`に|じ` のような短すぎる文節分割が全体候補を隠す挙動を抑制
 - llama.cpp ベースのローカル Zenz live correction pipeline を追加
-- ライブ変換を OFF にしていても、Space キーによる通常変換の結果へローカル Zenz 補正を適用
 - Zenz 文脈処理を共通化し、通常 Mozc の `preceding_text` / `following_text` とは分離した `zenz_preceding_text` / `zenz_following_text` を使用
 - Zenz が必要とする preceding / following の長さを Server から Client へ通知し、Windows TSF / macOS IMK では要求された方向・長さだけ surrounding text を追加取得
 - Zenz の前方・後方文脈を用途に応じて独立して選択し、Unicode-aware な文字種判定と privacy filtering を共通処理として適用
@@ -591,9 +604,7 @@ upstream 提案向けの変更は `pr/*` branches に整理しています。
 
 # English
 
-This repository is my personal fork of [google/mozc](https://github.com/google/mozc).
-
-This fork is mainly maintained for my own Windows / macOS environments and adds input assistance, live conversion, context-aware conversion, local Zenz correction, and offline-distribution-oriented adjustments to Mozc.
+This repository is the `mozkey-space` fork derived from Mozkey, which is based on [google/mozc](https://github.com/google/mozc).
 
 This build is not an official google/mozc distribution.
 
@@ -691,8 +702,26 @@ Main branches
 - `master`: upstream tracking branch
 - `pr/*`: upstream-oriented proposal branches
 
-Main features added in this fork
---------------------------------
+mozkey-space changes (delta from Mozkey)
+-----------------------------------------
+
+The changes specific to mozkey-space are the following additions on top of
+Mozkey:
+
+- Applies local Zenz correction not only to live conversion but also to ordinary conversion started with Space or `Convert`
+- Starts the same Zenz correction path after the first ordinary conversion even when live conversion is disabled, while keeping the normal Mozc candidate as a safe fallback
+- Repairs an unfinished single-kana ASCII residual such as `でs` when Space is pressed, and applies only a unique best reading to ordinary conversion
+- Keeps the ordinary-conversion path consistent with the existing safe-candidate and context-handling rules
+
+For the original changes from Mozc to Mozkey, see
+[Mozkey changes from Mozc](#mozkey-changes-from-mozc-en) below.
+
+<a id="mozkey-changes-from-mozc-en"></a>
+Mozkey changes from Mozc
+------------------------
+
+The following are the original changes that Mozkey adds to Mozc. mozkey-space
+inherits them as its base feature set.
 
 - Adds an option to display ambiguous romaji rules before the input is fully disambiguated
 - Adds a checkbox UI for that option to the romaji table editor
@@ -735,7 +764,7 @@ Main features added in this fork
 - Keeps large generated dictionary files out of Git and switches Bazel dictionary inputs to locally generated files
 - Reduces over-conversion of natural functional kana sequences such as `には` and `してたの`
 - Reduces cases where short two-character hiragana inputs such as `にじ` are split too aggressively
-- Adds a local Zenz correction pipeline based on llama.cpp for live conversion and ordinary Space conversion
+- Adds a local Zenz live correction pipeline based on llama.cpp
 - Uses dedicated `zenz_preceding_text` / `zenz_following_text` fields for Zenz context without changing the normal Mozc `preceding_text` / `following_text` semantics
 - Lets the Server request the required preceding / following lengths and lets Windows TSF / macOS IMK acquire only the requested directions and lengths
 - Selects preceding and following Zenz context independently and applies shared Unicode-aware script analysis and privacy filtering
@@ -821,13 +850,9 @@ The live conversion feature can be enabled or disabled from the config dialog. T
 
 ### Zenz live correction
 
-When Zenz correction is enabled, this fork can refine both the normal live
-conversion result and an ordinary conversion started with Space or Convert.
-With live conversion enabled, Mozkey first shows the normal Mozc live conversion
-result and then asynchronously asks a local Zenz runtime to refine the visible
-preedit. With live conversion disabled, the same Zenz path is started after the
-ordinary Space conversion, while the normal Mozc candidate remains the safe
-fallback.
+When both live conversion and Zenz live correction are enabled, this fork first
+shows the normal Mozc live conversion result and then asynchronously asks a local
+Zenz runtime to refine the visible preedit.
 
 On Windows, the Zenz request is sent from `mozc_server` to
 `mozc_zenz_scorer.exe` through a Windows named pipe. The scorer then calls the
