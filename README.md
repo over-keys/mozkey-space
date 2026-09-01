@@ -50,20 +50,9 @@ mozkey-space 固有の変更点は、元の Mozkey に対する次の差分で�
 
 Windows 用の MSI と macOS 用の Universal Zenz PKG を、ビルド済みパッケージとして Releases から公開しています。GitHub Release を公開すると、macOS 用の PKG は CI で生成・検証したうえで、同じ Release に自動添付されます。
 
-Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
+### Windows
 
-### macOS について
-
-macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。GitHub Release には `Mozkey_<tag>_macos_universal_zenz.pkg` と SHA-256 checksum を添付します。PKGは、Apple Siliconとnative Intelの両方で同一成果物を検証した後に公開されますが、macOS のPKGは実機検証用の experimental build として扱ってください。
-
-- Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
-- 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
-- 現在の開発用PKGは Developer ID 署名および notarization の対象外です。ダウンロードしたPKGでは Gatekeeper の警告やインストール拒否が発生する可能性があるため、一般配布用の正式リリースとして扱わないでください。
-- macOS の Secure Event Input が有効なパスワード欄では、プライバシー保護のため surrounding text と Zenz 用の前後文脈を取得しません。Microsoft Word / Excel / PowerPoint などでは、アプリ互換性のため同様にネイティブ文脈取得を抑制する場合があります。
-
-Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
-
-Windows 用の MSI と macOS 用の Universal Zenz PKG は、いずれも [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
+Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
 
 - 通常の x64 Windows では、Releases にある最新の `Mozkey_v*_x64.msi` を使用してください。
 - Windows on Arm（ARM64）では、その release に ARM64 と明記された MSI が含まれる場合は ARM64 版を使用してください。ARM64 MSI は Mozkey 本体、`mozc_zenz_scorer.exe`、`llama-server.exe` を native ARM64 payload として構成します。
@@ -78,6 +67,21 @@ Windows 用の MSI と macOS 用の Universal Zenz PKG は、いずれも [Relea
 > このビルドは google/mozc の公式配布物ではありません。
 > 個人用 fork の experimental / pre-release build です。
 > MSI は署名されていないため、Windows の警告が表示される場合があります。
+
+### macOS について
+
+Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
+
+macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。Universal Zenz PKG は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。GitHub Release には `Mozkey_<tag>_macos_universal_zenz.pkg` と SHA-256 checksum が添付されます。PKG は、Apple Silicon と native Intel の両方で同一成果物を検証した後に公開されますが、macOS の PKG は実機検証用の experimental build として扱ってください。
+
+- Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
+- 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
+- 現在の開発用 PKG は Developer ID 署名および notarization の対象外です。ダウンロードした PKG では Gatekeeper の警告やインストール拒否が発生する可能性があるため、一般配布用の正式リリースとして扱わないでください。
+- macOS の Secure Event Input が有効なパスワード欄では、プライバシー保護のため surrounding text と Zenz 用の前後文脈を取得しません。Microsoft Word / Excel / PowerPoint などでは、アプリ互換性のため同様にネイティブ文脈取得を抑制する場合があります。
+
+### Linux について
+
+Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
 
 <br>
 
@@ -683,13 +687,9 @@ Download / Install
 
 Prebuilt packages for both Windows and macOS are available from Releases. Windows releases provide MSI packages; when a GitHub Release is published, CI builds and verifies a Universal Zenz macOS PKG on native Apple Silicon and Intel, then attaches it to the same Release.
 
-In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
+### Windows
 
-Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
-
-Windows MSI packages and the macOS Universal Zenz PKG are both available from [Releases](https://github.com/over-keys/mozkey-space/releases).
-
-The macOS asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
+Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
 
 - On x64 Windows, use the latest `Mozkey_v*_x64.msi` from Releases.
 - On Windows on Arm (ARM64), when a release contains an MSI explicitly labeled ARM64, use the ARM64 package. The ARM64 MSI packages Mozkey, `mozc_zenz_scorer.exe`, and `llama-server.exe` as native ARM64 payloads.
@@ -705,6 +705,16 @@ The macOS asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a 
 > This build is not an official google/mozc distribution.
 > It is an experimental / pre-release build from a personal fork.
 > The MSI is not code-signed, so Windows may show a warning.
+
+### macOS
+
+In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
+
+The macOS Universal Zenz PKG is available from [Releases](https://github.com/over-keys/mozkey-space/releases). The asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
+
+### Linux
+
+Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
 
 Main branches
 -------------
