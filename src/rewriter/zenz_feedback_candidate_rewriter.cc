@@ -198,6 +198,10 @@ int ZenzFeedbackCandidateRewriter::capability(
     return RewriterInterface::NOT_AVAILABLE;
   }
 
+  if (request.options().incognito_mode) {
+    return RewriterInterface::NOT_AVAILABLE;
+  }
+
   if (request.config().history_learning_level() ==
       config::Config::NO_HISTORY) {
     return RewriterInterface::NOT_AVAILABLE;
