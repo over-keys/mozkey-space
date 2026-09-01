@@ -1,8 +1,9 @@
 name: CI for Linux
 # https://github.com/google/mozc/blob/master/docs/build_mozc_for_linux.md
 
-# Run on push.
-on: push
+# Run manually when needed.
+on:
+  workflow_dispatch:
 
 permissions:
   contents: read

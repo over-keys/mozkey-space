@@ -139,6 +139,70 @@ if (-not (Test-Path $MakePath)) {
     throw "make.sh was not found: $MakePath"
 }
 
+# merge-ut-dictionaries resolves the Mozc revision through the unauthenticated
+# GitHub API. Several platform jobs can hit that API at the same time, so
+# replace only that lookup with the Git protocol, which does not use the API
+# rate limit. The imported script remains otherwise unchanged.
+$MergeScriptPath = Join-Path $MergeRepo "src\merge\merge_dictionaries.py"
+if (-not (Test-Path $MergeScriptPath)) {
+    throw "merge_dictionaries.py was not found: $MergeScriptPath"
+}
+
+$MergeScript = Get-Content -Raw -Encoding UTF8 $MergeScriptPath
+$MergeScript = $MergeScript.Replace("`r`n", "`n")
+$OriginalMozcLookup = @'
+    # Mozc の最終コミット日を取得
+    url = 'https://api.github.com/repos/google/mozc/commits/master'
+
+    with urllib.request.urlopen(url) as response:
+        data = json.loads(response.read().decode())
+        date_str = data['commit']['committer']['date']
+
+    date_str = datetime.fromisoformat(date_str)
+    date_str = date_str.strftime('%Y%m%d')
+
+    # Mozc のアーカイブを取得
+    url = 'https://github.com/google/mozc/archive/refs/heads/master.zip'
+
+    if not Path(f'mozc-{date_str}.zip').exists():
+        urllib.request.urlretrieve(
+                url, f'mozc-{date_str}.zip')
+'@
+$DirectMozcLookup = @'
+    # Resolve the Mozc master revision through the Git protocol instead of
+    # the unauthenticated GitHub API, which is rate-limited in parallel CI.
+    remote = 'https://github.com/google/mozc.git'
+    remote_output = subprocess.check_output(
+        ['git', 'ls-remote', remote, 'refs/heads/master'],
+        text=True,
+    )
+    date_str = remote_output.split()[0]
+    if not date_str:
+        raise RuntimeError('Could not resolve google/mozc master commit.')
+
+    # Mozc のアーカイブを取得
+    url = f'https://github.com/google/mozc/archive/{date_str}.zip'
+
+    if not Path(f'mozc-{date_str}.zip').exists():
+        urllib.request.urlretrieve(
+                url, f'mozc-{date_str}.zip')
+'@
+
+if (-not $MergeScript.Contains("import subprocess`n")) {
+    $MergeScript = $MergeScript.Replace("import json`n", "import json`nimport subprocess`n")
+}
+
+if (-not $MergeScript.Contains($DirectMozcLookup)) {
+    if (-not $MergeScript.Contains($OriginalMozcLookup)) {
+        throw "Unexpected merge_dictionaries.py Mozc lookup layout; refusing to patch it."
+    }
+
+    $MergeScript = $MergeScript.Replace($OriginalMozcLookup, $DirectMozcLookup)
+}
+
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($MergeScriptPath, $MergeScript, $Utf8NoBom)
+
 $Flags = @{
     alt_cannadic   = $false
     edict2         = $false
