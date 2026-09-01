@@ -5,7 +5,7 @@
 <h1 align="center">Mozkey（もずきー）</h1>
 
 <p align="center">
-  <strong>Mozc をベースに、遅延付きライブ変換・ローカル Zenz 補正・ダークテーマ対応<br>句読点単打確定・文脈を見た変換補正などを統合した、ローカルファーストな日本語入力 fork です。</strong>
+  <strong>Mozc をベースに、Windows / macOS で利用できるローカルファーストな日本語入力 fork です。<br>遅延付きライブ変換・ローカル Zenz 補正・文脈を見た変換補正・句読点単打確定などを統合しています。</strong>
 </p>
 
 <p align="center">
@@ -616,6 +616,10 @@ upstream 提案向けの変更は `pr/*` branches に整理しています。
 <br>
 
 # English
+
+<p align="center">
+  <strong>A local-first Japanese input fork for Windows and macOS, based on Mozc.<br>It integrates debounced live conversion, local Zenz correction, context-aware conversion correction, and one-key punctuation commit.</strong>
+</p>
 
 This repository is the `mozkey-space` fork derived from [koyasi777/mozkey](https://github.com/koyasi777/mozkey), which is based on [google/mozc](https://github.com/google/mozc).
 
