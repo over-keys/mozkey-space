@@ -109,6 +109,10 @@ class KeyCorrectedNodeListBuilder : public BaseNodeListBuilder {
       return TRAVERSE_NEXT_KEY;
     }
     Node* node = NewNodeFromToken(token);
+    // KeyCorrector looked up a different reading but intentionally restores
+    // the original input into node->key. Preserve that provenance with the
+    // existing invisible key-expansion marker.
+    node->attributes |= Node::KEY_EXPANDED;
     node->key.assign(original_lookup_key_.data() + pos_, offset);
     node->wcost += KeyCorrector::GetCorrectedCostPenalty(node->key);
     AppendToResult(node);

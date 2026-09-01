@@ -157,6 +157,11 @@ class EngineConverterTest : public testing::TestWithTempUserProfile {
     converter->state_ = state;
   }
 
+  static void SetCurrentConversionUsesUserHistory(
+      bool use_history, EngineConverter* converter) {
+    converter->current_conversion_uses_user_history_ = use_history;
+  }
+
   static size_t GetSegmentIndex(const EngineConverter& converter) {
     return converter.segment_index_;
   }
@@ -513,6 +518,98 @@ TEST_F(EngineConverterTest, ConvertWithA11yTalkbackEnabled) {
   EXPECT_TRUE(converter.Convert(*composer_));
   ASSERT_TRUE(converter.IsActive());
   EXPECT_TRUE(IsCandidateListVisible(converter));
+}
+
+TEST_F(EngineConverterTest, IsReadingEquivalentUsesAlternativeReverseReading) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  Segments reverse_segments;
+  Segment* segment = reverse_segments.add_segment();
+  segment->set_key("一昨日");
+  segment->add_candidate()->value = "おととい";
+  segment->add_candidate()->value = "いっさくじつ";
+
+  EXPECT_CALL(*mock_converter, StartReverseConversion(_, "一昨日"))
+      .WillOnce(DoAll(SetArgPointee<0>(reverse_segments), Return(true)));
+
+  EXPECT_TRUE(converter.IsReadingEquivalent("一昨日", "いっさくじつ"));
+}
+
+TEST_F(EngineConverterTest, IsReadingEquivalentRejectsDroppedReading) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  Segments reverse_segments;
+  Segment* segment = reverse_segments.add_segment();
+  segment->set_key("今日はゆっくり行っています");
+  segment->add_candidate()->value = "きょうはゆっくりいっています";
+
+  EXPECT_CALL(*mock_converter,
+              StartReverseConversion(_, "今日はゆっくり行っています"))
+      .WillOnce(DoAll(SetArgPointee<0>(reverse_segments), Return(true)));
+
+  EXPECT_FALSE(converter.IsReadingEquivalent(
+      "今日はゆっくり行っています",
+      "きょうはとうきょうにはいっています"));
+}
+
+TEST_F(EngineConverterTest, GetUniqueReadingSurfaceAlignment) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  Segments reverse_segments;
+  Segment* s0 = reverse_segments.add_segment();
+  s0->set_key("ちょっと");
+  s0->add_candidate()->value = "ちょっと";
+  Segment* s1 = reverse_segments.add_segment();
+  s1->set_key("離席");
+  s1->add_candidate()->value = "りせき";
+  s1->add_candidate()->value = "はなれせき";
+  Segment* s2 = reverse_segments.add_segment();
+  s2->set_key("します");
+  s2->add_candidate()->value = "します";
+
+  EXPECT_CALL(*mock_converter,
+              StartReverseConversion(_, "ちょっと離席します"))
+      .WillOnce(DoAll(SetArgPointee<0>(reverse_segments), Return(true)));
+
+  std::vector<ReadingSurfaceAlignmentSegment> alignment;
+  ASSERT_TRUE(converter.GetUniqueReadingSurfaceAlignment(
+      "ちょっと離席します", "ちょっとりせきします", &alignment));
+  ASSERT_EQ(alignment.size(), 3);
+  EXPECT_EQ(alignment[0].reading, "ちょっと");
+  EXPECT_EQ(alignment[0].surface, "ちょっと");
+  EXPECT_EQ(alignment[1].reading, "りせき");
+  EXPECT_EQ(alignment[1].surface, "離席");
+  EXPECT_EQ(alignment[2].reading, "します");
+  EXPECT_EQ(alignment[2].surface, "します");
+  EXPECT_EQ(alignment.front().reading_begin, 0);
+  EXPECT_EQ(alignment.back().reading_end,
+            std::string("ちょっとりせきします").size());
+}
+
+TEST_F(EngineConverterTest, GetUniqueReadingSurfaceAlignmentRejectsAmbiguity) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  Segments reverse_segments;
+  Segment* s0 = reverse_segments.add_segment();
+  s0->set_key("甲");
+  s0->add_candidate()->value = "あ";
+  s0->add_candidate()->value = "あい";
+  Segment* s1 = reverse_segments.add_segment();
+  s1->set_key("乙");
+  s1->add_candidate()->value = "いう";
+  s1->add_candidate()->value = "う";
+
+  EXPECT_CALL(*mock_converter, StartReverseConversion(_, "甲乙"))
+      .WillOnce(DoAll(SetArgPointee<0>(reverse_segments), Return(true)));
+
+  std::vector<ReadingSurfaceAlignmentSegment> alignment;
+  EXPECT_FALSE(converter.GetUniqueReadingSurfaceAlignment(
+      "甲乙", "あいう", &alignment));
+  EXPECT_TRUE(alignment.empty());
 }
 
 TEST_F(EngineConverterTest, ConvertToTransliteration) {
@@ -2395,6 +2492,126 @@ TEST_F(EngineConverterTest, SuppressSuggestionOnPasswordField) {
   EXPECT_FALSE(converter.IsActive());
 }
 
+TEST_F(EngineConverterTest, ReportsPersistentMozcUserHistoryPreference) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EXPECT_CALL(*mock_converter,
+              HasUserSegmentHistoryPreference("りせきします", "離席します"))
+      .WillRepeatedly(Return(true));
+  EngineConverter converter(mock_converter, request_, config_);
+  SetState(EngineConverterInterface::CONVERSION, &converter);
+
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "りせきします", "離席します");
+  SetSegments(segments, &converter);
+
+  std::vector<UserHistoryConversionPreference> preferences;
+  converter.GetUserHistoryConversionPreferences(&preferences);
+
+  ASSERT_EQ(preferences.size(), 1);
+  EXPECT_EQ(preferences[0].key, "りせきします");
+  EXPECT_EQ(preferences[0].value, "離席します");
+}
+
+TEST_F(EngineConverterTest, FindsLearnedPreferenceInsideLongerConversion) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EXPECT_CALL(*mock_converter, HasUserSegmentHistoryPreference(_, _))
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(*mock_converter,
+              HasUserSegmentHistoryPreference("りせきします", "離席します"))
+      .WillRepeatedly(Return(true));
+  EngineConverter converter(mock_converter, request_, config_);
+  SetState(EngineConverterInterface::CONVERSION, &converter);
+
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "ちょっとりせきします",
+                                "ちょっと離席します");
+  converter::Candidate* candidate =
+      segments.mutable_conversion_segment(0)->mutable_candidate(0);
+  candidate->inner_segment_boundary = converter::BuildInnerSegmentBoundary(
+      {
+          {12, 12, 12, 12},
+          {9, 6, 9, 6},
+          {9, 9, 9, 9},
+      },
+      candidate->key, candidate->value);
+  SetSegments(segments, &converter);
+
+  std::vector<UserHistoryConversionPreference> preferences;
+  converter.GetUserHistoryConversionPreferences(&preferences);
+
+  ASSERT_EQ(preferences.size(), 1);
+  EXPECT_EQ(preferences[0].key, "りせきします");
+  EXPECT_EQ(preferences[0].value, "離席します");
+}
+
+TEST_F(EngineConverterTest, DoesNotReportPreferenceWhenHistoryIsDisabled) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EXPECT_CALL(*mock_converter, HasUserSegmentHistoryPreference(_, _)).Times(0);
+  EngineConverter converter(mock_converter, request_, config_);
+  SetState(EngineConverterInterface::CONVERSION, &converter);
+  SetCurrentConversionUsesUserHistory(false, &converter);
+
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "りせきします", "離席します");
+  SetSegments(segments, &converter);
+
+  std::vector<UserHistoryConversionPreference> preferences;
+  converter.GetUserHistoryConversionPreferences(&preferences);
+  EXPECT_TRUE(preferences.empty());
+}
+
+TEST_F(EngineConverterTest, DoesNotReportPreferenceInNoHistoryConfig) {
+  config_->set_history_learning_level(Config::NO_HISTORY);
+  auto mock_converter = std::make_shared<MockConverter>();
+  EXPECT_CALL(*mock_converter, HasUserSegmentHistoryPreference(_, _)).Times(0);
+  EngineConverter converter(mock_converter, request_, config_);
+  SetState(EngineConverterInterface::CONVERSION, &converter);
+
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "りせきします", "離席します");
+  SetSegments(segments, &converter);
+
+  std::vector<UserHistoryConversionPreference> preferences;
+  converter.GetUserHistoryConversionPreferences(&preferences);
+  EXPECT_TRUE(preferences.empty());
+}
+
+TEST_F(EngineConverterTest, SkipsAmbiguousRepeatedLearnedPreference) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EXPECT_CALL(*mock_converter, HasUserSegmentHistoryPreference(_, _)).Times(0);
+  EngineConverter converter(mock_converter, request_, config_);
+  SetState(EngineConverterInterface::CONVERSION, &converter);
+
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "りせきします", "離席します");
+  AddSegmentWithSingleCandidate(&segments, "りせきします", "離席します");
+  SetSegments(segments, &converter);
+
+  std::vector<UserHistoryConversionPreference> preferences;
+  converter.GetUserHistoryConversionPreferences(&preferences);
+  EXPECT_TRUE(preferences.empty());
+}
+
+TEST_F(EngineConverterTest, TransientRerankedAttributesAloneDoNotCreatePreference) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  SetState(EngineConverterInterface::CONVERSION, &converter);
+
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "りせきします", "離席します");
+  converter::Candidate* candidate =
+      segments.mutable_conversion_segment(0)->mutable_candidate(0);
+  candidate->attributes |=
+      converter::Attribute::BEST_CANDIDATE |
+      converter::Attribute::USER_SEGMENT_HISTORY_REWRITER |
+      converter::Attribute::RERANKED;
+  SetSegments(segments, &converter);
+
+  std::vector<UserHistoryConversionPreference> preferences;
+  converter.GetUserHistoryConversionPreferences(&preferences);
+  EXPECT_TRUE(preferences.empty());
+}
+
 TEST_F(EngineConverterTest, AppendCandidateList) {
   auto mock_converter = std::make_shared<MockConverter>();
   EngineConverter converter(mock_converter, request_, config_);
@@ -3909,6 +4126,599 @@ TEST_F(EngineConverterTest, ResultTokensWithInnerSegements) {
   EXPECT_EQ(output.result().tokens(2).value(), "晴れ");
   EXPECT_EQ(output.result().tokens(2).lid(), -1);
   EXPECT_EQ(output.result().tokens(2).rid(), 201);
+}
+
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairUsesUniqueBestReading) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  auto fill_conversion = [](const ConversionRequest& request,
+                            Segments* segments) {
+    segments->Clear();
+    const std::string key(request.key());
+    std::string value = key;
+    int cost = 900;
+    if (key == "でさ") {
+      value = "でさ";
+      cost = 500;
+    } else if (key == "でし") {
+      value = "弟子";
+      cost = 300;
+    } else if (key == "です") {
+      value = "です";
+      cost = 100;
+    } else if (key == "でせ") {
+      value = "でせ";
+      cost = 450;
+    } else if (key == "でそ") {
+      value = "でそ";
+      cost = 400;
+    }
+    Segment* segment = segments->add_segment();
+    segment->set_key(key);
+    converter::Candidate* candidate = segment->add_candidate();
+    candidate->key = key;
+    candidate->content_key = key;
+    candidate->value = value;
+    candidate->content_value = value;
+    candidate->cost = cost;
+    candidate->wcost = cost;
+    return true;
+  };
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(fill_conversion));
+
+  composer_->InsertCharacterKeyAndPreedit("de", "で");
+  composer_->InsertCharacterKeyAndPreedit("s", "s");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
+
+  const Segments& repaired = GetSegments(converter);
+  ASSERT_EQ(repaired.conversion_segments_size(), 1);
+  ASSERT_GT(repaired.conversion_segment(0).candidates_size(), 0);
+  const converter::Candidate& top = repaired.conversion_segment(0).candidate(0);
+  EXPECT_EQ(top.value, "です");
+  EXPECT_EQ(top.prefix, "→ ");
+  EXPECT_EQ(top.description, "<もしかして>");
+  EXPECT_NE(top.attributes & converter::Attribute::SPELLING_CORRECTION, 0);
+  EXPECT_EQ(top.attributes & converter::Attribute::TYPING_CORRECTION, 0);
+  for (size_t i = 0; i < repaired.conversion_segment(0).candidates_size(); ++i) {
+    EXPECT_NE(repaired.conversion_segment(0).candidate(i).attributes &
+                  converter::Attribute::NO_LEARNING,
+              0);
+  }
+
+  std::string finish_key;
+  EXPECT_CALL(*mock_converter, FinishConversion(_, _))
+      .WillOnce(::testing::Invoke(
+          [&finish_key](const ConversionRequest& request, Segments*) {
+            finish_key = std::string(request.key());
+          }));
+  converter.Commit(*composer_, Context::default_instance());
+  EXPECT_EQ(finish_key, "です");
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairPreservesHistorySegments) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  int call_count = 0;
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [&call_count](const ConversionRequest& request, Segments* segments) {
+            const std::string key(request.key());
+            if (call_count == 0) {
+              segments->Clear();
+              Segment* history = segments->add_segment();
+              history->set_segment_type(Segment::HISTORY);
+              history->set_key("まえ");
+              converter::Candidate* history_candidate = history->add_candidate();
+              history_candidate->key = "まえ";
+              history_candidate->value = "前";
+              history_candidate->content_key = history_candidate->key;
+              history_candidate->content_value = history_candidate->value;
+            } else {
+              EXPECT_EQ(segments->history_segments_size(), 1);
+              EXPECT_EQ(segments->history_segment(0).candidate(0).value, "前");
+              segments->clear_conversion_segments();
+            }
+            ++call_count;
+            Segment* segment = segments->add_segment();
+            segment->set_key(key);
+            converter::Candidate* candidate = segment->add_candidate();
+            candidate->key = key;
+            candidate->content_key = key;
+            candidate->value = key;
+            candidate->content_value = key;
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+
+  const Segments& repaired = GetSegments(converter);
+  ASSERT_EQ(repaired.history_segments_size(), 1);
+  EXPECT_EQ(repaired.history_segment(0).candidate(0).value, "前");
+  ASSERT_EQ(repaired.conversion_segments_size(), 1);
+  EXPECT_EQ(repaired.conversion_segment(0).candidate(0).value, "です");
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairPreservesNoHistoryMode) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            EXPECT_FALSE(request.options().enable_user_history_for_conversion);
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key, key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ConversionPreferences preferences = converter.conversion_preferences();
+  preferences.use_history = false;
+  ASSERT_TRUE(converter.ConvertWithPreferences(*composer_, preferences));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_EQ(GetSegments(converter).conversion_segment(0).candidate(0).value,
+            "です");
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairWorksInsideKana) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            Segment* segment = segments->add_segment();
+            segment->set_key(key);
+            converter::Candidate* candidate = segment->add_candidate();
+            candidate->key = key;
+            candidate->content_key = key;
+            candidate->value = key == "おつかれさまです" ? "お疲れ様です" : key;
+            candidate->content_value = candidate->value;
+            candidate->cost = key == "おつかれさまです" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "おつかれsまです");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
+  const Segments& result = GetSegments(converter);
+  ASSERT_EQ(result.conversion_segments_size(), 1);
+  EXPECT_EQ(result.conversion_segment(0).candidate(0).value, "お疲れ様です");
+  EXPECT_EQ(result.conversion_segment(0).candidate(0).prefix, "→ ");
+  EXPECT_EQ(result.conversion_segment(0).candidate(0).description,
+            "<もしかして>");
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairFailsClosedOnTie) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            Segment* segment = segments->add_segment();
+            segment->set_key(key);
+            converter::Candidate* candidate = segment->add_candidate();
+            candidate->key = key;
+            candidate->content_key = key;
+            candidate->value = key;
+            candidate->content_value = key;
+            candidate->cost = key == "でs" ? 900 : 100;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("de", "で");
+  composer_->InsertCharacterKeyAndPreedit("s", "s");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_FALSE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_FALSE(converter.CurrentConversionHasReadingCorrection());
+  const Segments& result = GetSegments(converter);
+  ASSERT_EQ(result.conversion_segments_size(), 1);
+  EXPECT_EQ(result.conversion_segment(0).candidate(0).value, "でs");
+}
+
+TEST_F(EngineConverterTest,
+       ExplicitAsciiResidualRepairRejectsNestedMozcReadingCorrection) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key, key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            // Make でし look artificially best, but only through another
+            // reading-changing Mozc correction.  The residual repair must
+            // ignore that probe and choose the best self-standing reading.
+            if (key == "でし") {
+              candidate->value = "別の補正";
+              candidate->content_value = candidate->value;
+              candidate->cost = 10;
+              candidate->attributes |=
+                  converter::Attribute::TYPING_CORRECTION;
+            } else if (key == "です") {
+              candidate->cost = 100;
+            } else {
+              candidate->cost = 500;
+            }
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  const Segments& repaired = GetSegments(converter);
+  ASSERT_EQ(repaired.conversion_segments_size(), 1);
+  EXPECT_EQ(repaired.conversion_segment(0).candidate(0).value, "です");
+}
+
+TEST_F(EngineConverterTest,
+       ExplicitAsciiResidualRepairRejectsNestedKeyCorrectorReadingCorrection) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key, key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            // Model the legacy KeyCorrector path: the candidate key remains the
+            // requested reading, while invisible provenance records that Mozc
+            // used another dictionary reading internally.  Such a probe must
+            // not outrank a reading that stands on its own.
+            if (key == "でし") {
+              candidate->value = "別の内部補正";
+              candidate->content_value = candidate->value;
+              candidate->cost = 10;
+              candidate->attributes |=
+                  converter::Attribute::KEY_EXPANDED_IN_DICTIONARY;
+            } else if (key == "です") {
+              candidate->cost = 100;
+            } else {
+              candidate->cost = 500;
+            }
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  const Segments& repaired = GetSegments(converter);
+  ASSERT_EQ(repaired.conversion_segments_size(), 1);
+  EXPECT_EQ(repaired.conversion_segment(0).candidate(0).value, "です");
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairRejectsUnsafeForms) {
+  for (const std::string& input :
+       {"でss", "でn", "でS", "でj", "でf", "でv", "でq",
+        "でx", "でl", "でc", "3sです", "s", "sです", "デs"}) {
+    auto mock_converter = std::make_shared<MockConverter>();
+    EngineConverter converter(mock_converter, request_, config_);
+    EXPECT_CALL(*mock_converter, StartConversion(_, _))
+        .Times(1)
+        .WillOnce(::testing::Invoke(
+            [](const ConversionRequest& request, Segments* segments) {
+              segments->Clear();
+              const std::string key(request.key());
+              AddSegmentWithSingleCandidate(segments, key, key);
+              segments->mutable_conversion_segment(0)->mutable_candidate(0)->cost =
+                  100;
+              return true;
+            }));
+
+    composer_->Reset();
+    composer_->InsertCharacterKeyAndPreedit("raw", input);
+    ASSERT_TRUE(converter.Convert(*composer_));
+    EXPECT_FALSE(converter.TryAsciiResidualCorrection(*composer_));
+    EXPECT_FALSE(converter.CurrentConversionHasReadingCorrection());
+  }
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairRequiresStandardRomanInput) {
+  for (const bool use_kana_mode : {true, false}) {
+    auto mock_converter = std::make_shared<MockConverter>();
+    EngineConverter converter(mock_converter, request_, config_);
+    if (use_kana_mode) {
+      config_->set_preedit_method(config::Config::KANA);
+      config_->clear_custom_roman_table();
+    } else {
+      config_->set_preedit_method(config::Config::ROMAN);
+      config_->set_custom_roman_table("custom");
+    }
+
+    EXPECT_CALL(*mock_converter, StartConversion(_, _))
+        .Times(1)
+        .WillOnce(::testing::Invoke(
+            [](const ConversionRequest& request, Segments* segments) {
+              segments->Clear();
+              AddSegmentWithSingleCandidate(segments, request.key(),
+                                            request.key());
+              return true;
+            }));
+
+    composer_->Reset();
+    composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+    ASSERT_TRUE(converter.Convert(*composer_));
+    EXPECT_FALSE(converter.TryAsciiResidualCorrection(*composer_));
+  }
+
+  config_->set_preedit_method(config::Config::ROMAN);
+  config_->clear_custom_roman_table();
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairSupportsYRow) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(4)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key, key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            candidate->cost = key == "へやです" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+  composer_->InsertCharacterKeyAndPreedit("raw", "へyです");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_EQ(GetSegments(converter).conversion_segment(0).candidate(0).value,
+            "へやです");
+}
+
+TEST_F(EngineConverterTest, ExplicitAsciiResidualRepairSupportsWRow) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(3)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key, key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            candidate->cost = key == "ほんをよみます" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+  composer_->InsertCharacterKeyAndPreedit("raw", "ほんwよみます");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_EQ(GetSegments(converter).conversion_segment(0).candidate(0).value,
+            "ほんをよみます");
+}
+
+TEST_F(EngineConverterTest, MozcSolvedAsciiResidualStillEstablishesCorrectedKey) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key,
+                                          key == "でs" ? "です" : key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
+  const auto& top = GetSegments(converter).conversion_segment(0).candidate(0);
+  EXPECT_EQ(top.value, "です");
+  EXPECT_EQ(top.prefix, "→ ");
+  EXPECT_EQ(top.description, "<もしかして>");
+  EXPECT_NE(top.attributes & converter::Attribute::NO_LEARNING, 0);
+
+  std::string finish_key;
+  EXPECT_CALL(*mock_converter, FinishConversion(_, _))
+      .WillOnce(::testing::Invoke(
+          [&finish_key](const ConversionRequest& request, Segments*) {
+            finish_key = std::string(request.key());
+          }));
+  converter.Commit(*composer_, Context::default_instance());
+  EXPECT_EQ(finish_key, "です");
+}
+
+TEST_F(EngineConverterTest, TypingCorrectionAttributeBlocksNormalZenz) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "ほにゃにいく", "本屋に行く");
+  segments.mutable_conversion_segment(0)->mutable_candidate(0)->attributes |=
+      converter::Attribute::TYPING_CORRECTION;
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  composer_->InsertCharacterKeyAndPreedit("honyaniiku", "ほにゃにいく");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
+}
+
+TEST_F(EngineConverterTest, FullwidthAlphabetResidualStillRunsRepair) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(
+                segments, key, key == "でs" ? "でｓ" : key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_FALSE(converter.CurrentConversionHasReadingCorrection());
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_EQ(GetSegments(converter).conversion_segment(0).candidate(0).value,
+            "です");
+}
+
+TEST_F(EngineConverterTest, OverlongAsciiResidualFailsClosedWithoutProbes) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(1)
+      .WillOnce(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            AddSegmentWithSingleCandidate(segments, request.key(), request.key());
+            return true;
+          }));
+
+  std::string input;
+  for (int i = 0; i < 128; ++i) {
+    input.append("あ");
+  }
+  input.push_back('s');
+  composer_->InsertCharacterKeyAndPreedit("raw", input);
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_FALSE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_FALSE(converter.CurrentConversionHasReadingCorrection());
+}
+
+TEST_F(EngineConverterTest, AsciiResidualResizeUsesCorrectedKeyWithoutSpellingCorrection) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            AddSegmentWithSingleCandidate(segments, key, key);
+            auto* candidate =
+                segments->mutable_conversion_segment(0)->mutable_candidate(0);
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            return true;
+          }));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  ASSERT_TRUE(converter.TryAsciiResidualCorrection(*composer_));
+
+  EXPECT_CALL(*mock_converter, ResizeSegment(_, _, _, _))
+      .WillOnce(::testing::Invoke(
+          [](Segments*, const ConversionRequest& request, size_t, int) {
+            EXPECT_EQ(request.key(), "です");
+            EXPECT_FALSE(request.config().use_spelling_correction());
+            return true;
+          }));
+  converter.SegmentWidthExpand(*composer_);
+}
+
+TEST_F(EngineConverterTest, MozcReadingCorrectionSkipsAsciiRepair) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "でs", "です");
+  segments.mutable_conversion_segment(0)->mutable_candidate(0)->attributes |=
+      converter::Attribute::SPELLING_CORRECTION;
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .Times(1)
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  composer_->InsertCharacterKeyAndPreedit("raw", "でs");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_FALSE(converter.TryAsciiResidualCorrection(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
+  EXPECT_EQ(GetSegments(converter).conversion_segment(0).candidate(0).value,
+            "です");
+}
+
+TEST_F(EngineConverterTest, KeyCorrectorCandidateIsReadingCorrection) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("ほにゃにいく");
+  converter::Candidate* candidate = segment->add_candidate();
+  // KeyCorrectedNodeListBuilder deliberately restores the original key.
+  // The provenance marker, not a key mismatch, identifies this path.
+  candidate->key = "ほにゃにいく";
+  candidate->content_key = candidate->key;
+  candidate->value = "本屋に行く";
+  candidate->content_value = candidate->value;
+  candidate->attributes |= converter::Attribute::KEY_EXPANDED_IN_DICTIONARY;
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  composer_->InsertCharacterPreedit("ほにゃにいく");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
+}
+
+TEST_F(EngineConverterTest, MozcReadingCorrectionIsExposedToSession) {
+  auto mock_converter = std::make_shared<MockConverter>();
+  EngineConverter converter(mock_converter, request_, config_);
+  Segments segments;
+  AddSegmentWithSingleCandidate(&segments, "ほにゃ", "本屋");
+  segments.mutable_conversion_segment(0)->mutable_candidate(0)->attributes |=
+      converter::Attribute::SPELLING_CORRECTION;
+  EXPECT_CALL(*mock_converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  composer_->InsertCharacterKeyAndPreedit("honya", "ほにゃ");
+  ASSERT_TRUE(converter.Convert(*composer_));
+  EXPECT_TRUE(converter.CurrentConversionHasReadingCorrection());
 }
 
 TEST_F(EngineConverterTest, CommitContext) {

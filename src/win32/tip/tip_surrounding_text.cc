@@ -62,10 +62,12 @@ class SurroudingTextUpdater final : public TipComImplements<ITfEditSession> {
  public:
   SurroudingTextUpdater(wil::com_ptr_nothrow<ITfContext> context,
                         bool move_anchor, bool retrieve_selected_text,
+                        bool anchor_at_composition_boundary,
                         int max_preceding_length, int max_following_length)
       : context_(std::move(context)),
         move_anchor_(move_anchor),
         retrieve_selected_text_(retrieve_selected_text),
+        anchor_at_composition_boundary_(anchor_at_composition_boundary),
         max_preceding_length_(max_preceding_length),
         max_following_length_(max_following_length) {}
 
@@ -74,11 +76,9 @@ class SurroudingTextUpdater final : public TipComImplements<ITfEditSession> {
  private:
   STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
     HRESULT result = S_OK;
-    {
-      wil::com_ptr_nothrow<ITfCompositionView> composition_view =
-          TipCompositionUtil::GetCompositionView(context_.get(), edit_cookie);
-      result_.in_composition = !!composition_view;
-    }
+    wil::com_ptr_nothrow<ITfCompositionView> composition_view =
+        TipCompositionUtil::GetCompositionView(context_.get(), edit_cookie);
+    result_.in_composition = !!composition_view;
 
     wil::com_ptr_nothrow<ITfRange> selected_range;
     {
@@ -116,12 +116,28 @@ class SurroudingTextUpdater final : public TipComImplements<ITfEditSession> {
       }
     }
 
+    // Generic Mozc surrounding text remains selection/caret based.
+    // Zenz-only acquisition, however, must never treat the active uncommitted
+    // preedit as committed context.  When a TSF composition exists, anchor the
+    // left side at composition START and the right side at composition END.
+    // If the composition range cannot be obtained, fail closed rather than
+    // silently falling back to the caret inside the preedit.
+    wil::com_ptr_nothrow<ITfRange> composition_range;
+    ITfRange* surrounding_anchor = selected_range.get();
+    if (anchor_at_composition_boundary_ && composition_view) {
+      if (FAILED(composition_view->GetRange(&composition_range)) ||
+          composition_range == nullptr) {
+        return E_FAIL;
+      }
+      surrounding_anchor = composition_range.get();
+    }
+
     const TF_HALTCOND halt_cond = {nullptr, TF_ANCHOR_START, TF_HF_OBJECT};
 
     if (max_preceding_length_ > 0) {
       wil::com_ptr_nothrow<ITfRange> preceding_range;
       LONG preceding_range_shifted = 0;
-      if (SUCCEEDED(selected_range->Clone(&preceding_range)) &&
+      if (SUCCEEDED(surrounding_anchor->Clone(&preceding_range)) &&
           SUCCEEDED(preceding_range->Collapse(edit_cookie, TF_ANCHOR_START)) &&
           SUCCEEDED(preceding_range->ShiftStart(
               edit_cookie, -max_preceding_length_, &preceding_range_shifted,
@@ -135,7 +151,7 @@ class SurroudingTextUpdater final : public TipComImplements<ITfEditSession> {
     if (max_following_length_ > 0) {
       wil::com_ptr_nothrow<ITfRange> following_range;
       LONG following_range_shifted = 0;
-      if (SUCCEEDED(selected_range->Clone(&following_range)) &&
+      if (SUCCEEDED(surrounding_anchor->Clone(&following_range)) &&
           SUCCEEDED(following_range->Collapse(edit_cookie, TF_ANCHOR_END)) &&
           SUCCEEDED(following_range->ShiftEnd(
               edit_cookie, max_following_length_, &following_range_shifted,
@@ -153,6 +169,7 @@ class SurroudingTextUpdater final : public TipComImplements<ITfEditSession> {
   TipSurroundingTextInfo result_;
   bool move_anchor_;
   bool retrieve_selected_text_;
+  bool anchor_at_composition_boundary_;
   int max_preceding_length_;
   int max_following_length_;
 };
@@ -293,7 +310,7 @@ bool TipSurroundingText::Get(TipTextService* text_service, ITfContext* context,
   }
 
   auto updater = MakeComPtr<SurroudingTextUpdater>(
-      full_context, false, true, kDefaultMaxSurroundingLength,
+      full_context, false, true, false, kDefaultMaxSurroundingLength,
       kDefaultMaxSurroundingLength);
 
   HRESULT edit_session_result = S_OK;
@@ -320,7 +337,9 @@ bool TipSurroundingText::GetForZenzContext(
   wil::com_ptr_nothrow<ITfContext> full_context(
       TipTransitoryExtension::AsFullContext(context));
   if (full_context == nullptr) {
-    // Zenz deliberately does not use the legacy IMM32 document-feed path.
+    // This is the Zenz-specific *extended TSF* acquisition path. Legacy IMM32
+    // is not authoritative for Zenz; ordinary Mozc already made its one
+    // generic document-feed request, so do not issue another one here.
     return false;
   }
 
@@ -333,7 +352,7 @@ bool TipSurroundingText::GetForZenzContext(
           ? kMaxCharacterLength
           : static_cast<int>(max_following_length);
   auto updater = MakeComPtr<SurroudingTextUpdater>(
-      full_context, false, false, preceding_limit, following_limit);
+      full_context, false, false, true, preceding_limit, following_limit);
 
   HRESULT edit_session_result = S_OK;
   const HRESULT hr = full_context->RequestEditSession(
@@ -362,7 +381,7 @@ bool PrepareForReconversionTSF(TipTextService* text_service,
   // So we need to ensure that AddRef/Release should be called at least once
   // per object.
   auto updater = MakeComPtr<SurroudingTextUpdater>(
-      full_context, true, true, kDefaultMaxSurroundingLength,
+      full_context, true, true, false, kDefaultMaxSurroundingLength,
       kDefaultMaxSurroundingLength);
 
   HRESULT edit_session_result = S_OK;

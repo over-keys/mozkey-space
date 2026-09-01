@@ -194,16 +194,16 @@ int ZenzFeedbackCandidateRewriter::capability(
     return RewriterInterface::NOT_AVAILABLE;
   }
 
-  if (request.incognito_mode()) {
-    return RewriterInterface::NOT_AVAILABLE;
-  }
-
   if (!request.options().enable_user_history_for_conversion) {
     return RewriterInterface::NOT_AVAILABLE;
   }
 
-  if (request.config().history_learning_level() !=
-      config::Config::DEFAULT_HISTORY) {
+  if (request.config().history_learning_level() ==
+      config::Config::NO_HISTORY) {
+    return RewriterInterface::NOT_AVAILABLE;
+  }
+
+  if (request.context().input_field_type() == commands::Context::PASSWORD) {
     return RewriterInterface::NOT_AVAILABLE;
   }
 

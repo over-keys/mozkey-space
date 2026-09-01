@@ -6,338 +6,149 @@ namespace mozc {
 namespace session {
 namespace {
 
-TEST(ZenzContextSelectorTest,
-     LeftCrossesSingleLfWithinSameParagraph) {
+TEST(ZenzContextSelectorTest, LeftStopsAtSingleLf) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の行\n現在の文脈",
-          128),
-      "前の行\n現在の文脈");
+  EXPECT_EQ(selector.SelectLeft("前の行\n現在の文脈", 128), "現在の文脈");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftCrossesSingleCrLfWithinSameParagraph) {
+TEST(ZenzContextSelectorTest, LeftStopsAtSingleCrLf) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の行\r\n現在の文脈",
-          128),
-      "前の行\r\n現在の文脈");
+  EXPECT_EQ(selector.SelectLeft("前の行\r\n現在の文脈", 128), "現在の文脈");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftStopsAtBlankLine) {
+TEST(ZenzContextSelectorTest, LeftStopsAtSingleCr) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の段落\n\n現在の段落",
-          128),
-      "現在の段落");
+  EXPECT_EQ(selector.SelectLeft("前の行\r現在の文脈", 128), "現在の文脈");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftStopsAtCrLfBlankLine) {
+TEST(ZenzContextSelectorTest, LeftAfterTrailingLineBreakIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の段落\r\n\r\n現在の段落",
-          128),
-      "現在の段落");
+  EXPECT_TRUE(selector.SelectLeft("前の行\n", 128).empty());
+  EXPECT_TRUE(selector.SelectLeft("前の行\r\n", 128).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftTreatsWhitespaceOnlyLineAsParagraphBoundary) {
+TEST(ZenzContextSelectorTest, LeftStopsAtBlankLine) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の段落\n  \t\n現在の段落",
-          128),
-      "現在の段落");
+  EXPECT_EQ(selector.SelectLeft("前の段落\n\n現在の段落", 128), "現在の段落");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftTreatsIdeographicSpaceOnlyLineAsParagraphBoundary) {
+TEST(ZenzContextSelectorTest, LeftSentenceTerminatorIsNotHardBoundary) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の段落\n　\n現在の段落",
-          128),
-      "現在の段落");
+  EXPECT_EQ(selector.SelectLeft("方式Aを提案した。その方法では", 128),
+            "方式Aを提案した。その方法では");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftSentenceTerminatorIsNotHardBoundary) {
+TEST(ZenzContextSelectorTest, LeftBudgetIsAppliedAfterLineSelection) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "方式Aを提案した。その方法では",
-          128),
-      "方式Aを提案した。その方法では");
+  EXPECT_EQ(selector.SelectLeft("前の行\n甲乙丙丁", 2), "丙丁");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftBudgetIsAppliedAfterParagraphSelection) {
+TEST(ZenzContextSelectorTest, LeftBudgetPreservesUnicodeCodepointBoundaries) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "前の段落\n\n甲乙丙丁",
-          2),
-      "丙丁");
+  EXPECT_EQ(selector.SelectLeft("甲😀乙", 2), "😀乙");
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftBudgetPreservesUnicodeCodepointBoundaries) {
+TEST(ZenzContextSelectorTest, LeftZeroBudgetIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectLeft(
-          "甲😀乙",
-          2),
-      "😀乙");
+  EXPECT_TRUE(selector.SelectLeft("日本語", 0).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     LeftZeroBudgetIsEmpty) {
+TEST(ZenzContextSelectorTest, RightStopsAfterJapaneseSentenceTerminator) {
   const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectLeft(
-          "日本語",
-          0).empty());
+  EXPECT_EQ(selector.SelectRight("を採用する。次の議題に移る", 128),
+            "を採用する。");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightStopsAfterJapaneseSentenceTerminator) {
+TEST(ZenzContextSelectorTest, RightStopsAfterFullWidthQuestionOrExclamation) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "を採用する。次の議題に移る",
-          128),
-      "を採用する。");
+  EXPECT_EQ(selector.SelectRight("でよい？次の文", 128), "でよい？");
+  EXPECT_EQ(selector.SelectRight("問題ない！次の文", 128), "問題ない！");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightStopsAfterFullWidthQuestionOrExclamation) {
+TEST(ZenzContextSelectorTest, RightStopsAfterAsciiQuestionOrExclamation) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "でよい？次の文",
-          128),
-      "でよい？");
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "問題ない！次の文",
-          128),
-      "問題ない！");
+  EXPECT_EQ(selector.SelectRight("でよい?次の文", 128), "でよい?");
+  EXPECT_EQ(selector.SelectRight("問題ない!次の文", 128), "問題ない!");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightStopsAfterAsciiQuestionOrExclamation) {
+TEST(ZenzContextSelectorTest, RightKeepsRepeatedTerminatorsAndClosingQuote) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "でよい?次の文",
-          128),
-      "でよい?");
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "問題ない!次の文",
-          128),
-      "問題ない!");
+  EXPECT_EQ(selector.SelectRight("だった！？」次の文", 128), "だった！？」");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightKeepsRepeatedTerminatorsAndClosingQuote) {
+TEST(ZenzContextSelectorTest, RightKeepsClosingBracketAfterSentenceTerminator) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "だった！？」次の文",
-          128),
-      "だった！？」");
-}
-TEST(ZenzContextSelectorTest,
-     RightKeepsClosingBracketAfterSentenceTerminator) {
-  const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "だった。）次の文",
-          128),
-      "だった。）");
+  EXPECT_EQ(selector.SelectRight("だった。）次の文", 128), "だった。）");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightCrossesSingleLfInsideContinuation) {
+TEST(ZenzContextSelectorTest, RightStopsBeforeSingleLf) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "を採用し\n継続する。次の文",
-          128),
-      "を採用し\n継続する。");
+  EXPECT_EQ(selector.SelectRight("を採用し\n継続する。次の文", 128), "を採用し");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightCrossesSingleCrLfInsideContinuation) {
+TEST(ZenzContextSelectorTest, RightStopsBeforeSingleCrLf) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "を採用し\r\n継続する。次の文",
-          128),
-      "を採用し\r\n継続する。");
+  EXPECT_EQ(selector.SelectRight("を採用し\r\n継続する。次の文", 128), "を採用し");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightStopsBeforeBlankLine) {
+TEST(ZenzContextSelectorTest, RightStopsBeforeSingleCr) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "を採用する\n\n次の段落",
-          128),
-      "を採用する");
+  EXPECT_EQ(selector.SelectRight("を採用し\r継続する。次の文", 128), "を採用し");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightStopsBeforeWhitespaceOnlyBlankLine) {
+TEST(ZenzContextSelectorTest, RightBeginningWithAsciiSpacesThenLfIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "を採用する\n \t\n次の段落",
-          128),
-      "を採用する");
+  EXPECT_TRUE(selector.SelectRight("   \n次の行", 128).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBeginningWithAsciiSpacesThenLfIsEmpty) {
+TEST(ZenzContextSelectorTest, RightBeginningWithTabThenCrLfIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectRight(
-          "   \n次の行",
-          128).empty());
+  EXPECT_TRUE(selector.SelectRight("\t\r\n次の行", 128).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBeginningWithTabThenCrLfIsEmpty) {
+TEST(ZenzContextSelectorTest, RightBeginningWithIdeographicSpaceThenLfIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectRight(
-          "\t\r\n次の行",
-          128).empty());
+  EXPECT_TRUE(selector.SelectRight("　\n次の行", 128).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBeginningWithIdeographicSpaceThenLfIsEmpty) {
+TEST(ZenzContextSelectorTest, RightLeadingSpacesWithoutLineBreakArePreserved) {
   const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectRight(
-          "　\n次の行",
-          128).empty());
+  EXPECT_EQ(selector.SelectRight("  を採用する。次の文", 128), "  を採用する。");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightLeadingSpacesWithoutLineBreakArePreserved) {
+TEST(ZenzContextSelectorTest, RightBeginningWithLfIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "  を採用する。次の文",
-          128),
-      "  を採用する。");
+  EXPECT_TRUE(selector.SelectRight("\n次の行", 128).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBeginningWithLfIsEmpty) {
+TEST(ZenzContextSelectorTest, RightBeginningWithCrLfIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectRight(
-          "\n次の行",
-          128).empty());
+  EXPECT_TRUE(selector.SelectRight("\r\n次の行", 128).empty());
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBeginningWithCrLfIsEmpty) {
+TEST(ZenzContextSelectorTest, RightBudgetIsAppliedFromLeadingEdge) {
   const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectRight(
-          "\r\n次の行",
-          128).empty());
+  EXPECT_EQ(selector.SelectRight("甲乙丙丁", 2), "甲乙");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBudgetIsAppliedFromLeadingEdge) {
+TEST(ZenzContextSelectorTest, RightBudgetPreservesUnicodeCodepointBoundaries) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "甲乙丙丁",
-          2),
-      "甲乙");
+  EXPECT_EQ(selector.SelectRight("甲😀乙", 2), "甲😀");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightBudgetPreservesUnicodeCodepointBoundaries) {
+TEST(ZenzContextSelectorTest, RightWithoutSentenceBoundaryUsesAvailableLine) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "甲😀乙",
-          2),
-      "甲😀");
+  EXPECT_EQ(selector.SelectRight("を採用して継続する", 128), "を採用して継続する");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightWithoutSentenceBoundaryUsesAvailableParagraph) {
+TEST(ZenzContextSelectorTest, RightDoesNotIncludeIndependentNextSentence) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "を採用して継続する",
-          128),
-      "を採用して継続する");
+  EXPECT_EQ(selector.SelectRight("である。次の文も存在する。", 128), "である。");
 }
 
-TEST(ZenzContextSelectorTest,
-     RightDoesNotIncludeIndependentNextSentence) {
+TEST(ZenzContextSelectorTest, RightZeroBudgetIsEmpty) {
   const ZenzContextSelector selector;
-
-  EXPECT_EQ(
-      selector.SelectRight(
-          "である。次の文も存在する。",
-          128),
-      "である。");
-}
-
-TEST(ZenzContextSelectorTest,
-     RightZeroBudgetIsEmpty) {
-  const ZenzContextSelector selector;
-
-  EXPECT_TRUE(
-      selector.SelectRight(
-          "日本語",
-          0).empty());
+  EXPECT_TRUE(selector.SelectRight("日本語", 0).empty());
 }
 
 }  // namespace

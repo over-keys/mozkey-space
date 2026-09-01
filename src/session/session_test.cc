@@ -76,6 +76,10 @@
 #include "testing/test_peer.h"
 #include "transliteration/transliteration.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #if defined(_WIN32)
 #include <windows.h>
 #endif
@@ -91,7 +95,8 @@ class SessionTestPeer : testing::TestPeer<Session> {
 
   PEER_METHOD(IsFullWidthInsertSpace);
   PEER_METHOD(PushUndoContext);
-  PEER_METHOD(MaybeApplyZenzFeedbackLiveCorrection);
+  PEER_METHOD(AdvancePendingZenzLiveCorrection);
+  PEER_METHOD(OutputZenzLiveCorrection);
   PEER_METHOD(SetPendingZenzFeedbackAccepted);
   PEER_METHOD(SetPendingZenzFeedbackRejected);
   PEER_METHOD(ObservePendingZenzFeedbackCommittedResult);
@@ -106,6 +111,9 @@ class SessionTestPeer : testing::TestPeer<Session> {
   PEER_METHOD(DiscardPendingDirectCommitLearning);
   PEER_METHOD(HandlePendingDirectCommitLearningForKeyEvent);
   PEER_METHOD(HandlePendingDirectCommitLearningForSessionCommand);
+  PEER_METHOD(PrepareZenzContinuationPrecedingContext);
+  PEER_METHOD(UpdateZenzContinuationContextCacheFromOutput);
+  PEER_METHOD(InvalidateZenzContinuationContextCacheForSessionCommand);
   PEER_METHOD(Suggest);
   PEER_METHOD(MaybeStartLiveConversion);
   PEER_METHOD(OutputPendingLiveConversion);
@@ -115,6 +123,7 @@ class SessionTestPeer : testing::TestPeer<Session> {
   PEER_VARIABLE(context_);
   PEER_VARIABLE(undo_contexts_);
   PEER_VARIABLE(live_conversion_active_);
+  PEER_VARIABLE(normal_conversion_zenz_active_);
   PEER_VARIABLE(live_conversion_pending_);
   PEER_VARIABLE(pending_live_conversion_key_);
   PEER_VARIABLE(live_conversion_key_);
@@ -124,13 +133,18 @@ class SessionTestPeer : testing::TestPeer<Session> {
   PEER_VARIABLE(pending_live_conversion_suggestion_candidate_window_);
   PEER_VARIABLE(live_conversion_suggestion_candidate_window_);
   PEER_VARIABLE(zenz_live_visible_generation_);
+  PEER_VARIABLE(zenz_live_display_key_);
   PEER_VARIABLE(zenz_live_key_);
   PEER_VARIABLE(zenz_live_value_);
   PEER_VARIABLE(zenz_live_mozc_value_);
   PEER_VARIABLE(zenz_live_context_class_);
+  PEER_VARIABLE(zenz_live_mozc_preedit_output_);
+  PEER_VARIABLE(zenz_live_from_live_conversion_);
   PEER_VARIABLE(zenz_feedback_store_);
+  PEER_VARIABLE(pending_zenz_live_);
   PEER_VARIABLE(pending_zenz_feedback_);
   PEER_VARIABLE(pending_direct_commit_learning_);
+  PEER_VARIABLE(zenz_continuation_left_context_);
 };
 
 namespace {
@@ -142,6 +156,27 @@ using ::testing::Invoke;
 using ::testing::Mock;
 using ::testing::Return;
 using ::testing::SetArgPointee;
+
+void ShowZenzCorrectionForTest(
+    SessionTestPeer* session_peer, absl::string_view key,
+    absl::string_view mozc_value, absl::string_view zenz_value,
+    absl::string_view context_class, commands::Command* command) {
+  ASSERT_NE(session_peer, nullptr);
+  ASSERT_NE(command, nullptr);
+
+  session_peer->zenz_live_visible_generation_() = 1;
+  session_peer->zenz_live_key_() = std::string(key);
+  session_peer->zenz_live_display_key_() = std::string(key);
+  session_peer->zenz_live_value_() = std::string(zenz_value);
+  session_peer->zenz_live_mozc_value_() = std::string(mozc_value);
+  session_peer->zenz_live_context_class_() =
+      context_class.empty() ? "empty" : std::string(context_class);
+  session_peer->zenz_live_mozc_preedit_output_() =
+      session_peer->live_conversion_preedit_output_();
+  session_peer->zenz_live_from_live_conversion_() = true;
+
+  ASSERT_TRUE(session_peer->OutputZenzLiveCorrection(zenz_value, command));
+}
 
 #if defined(_WIN32)
 
@@ -232,6 +267,16 @@ class ScopedUserProfileForZenzFeedbackSessionTest {
   std::wstring old_profile_;
   std::wstring profile_dir_;
 };
+
+void ExpectTentekiReadingEquivalent(MockConverter* converter) {
+  Segments reverse_segments;
+  Segment* segment = reverse_segments.add_segment();
+  segment->set_key("彼は天敵です");
+  segment->add_candidate()->value = "かれはてんてきです";
+
+  EXPECT_CALL(*converter, StartReverseConversion(_, "彼は天敵です"))
+      .WillOnce(DoAll(SetArgPointee<0>(reverse_segments), Return(true)));
+}
 
 #endif  // defined(_WIN32)
 
@@ -1019,6 +1064,18 @@ class SessionTest : public testing::TestWithTempUserProfile {
 // FYI, each TEST_F will be eventually expanded into a global variable
 // and global variables in a single translation unit (source file) are
 // always initialized in the order in which they are defined.
+TEST(ZenzLocalPreferenceConfigTest, ThresholdIsIndependentFromFullAutoBlock) {
+  config::Config config;
+  EXPECT_EQ(config.zenz_local_preference_threshold(), 2);
+
+  config.set_zenz_auto_block_reject_threshold(7);
+  EXPECT_EQ(config.zenz_local_preference_threshold(), 2);
+
+  config.set_zenz_local_preference_threshold(4);
+  EXPECT_EQ(config.zenz_local_preference_threshold(), 4);
+  EXPECT_EQ(config.zenz_auto_block_reject_threshold(), 7);
+}
+
 TEST_F(SessionTest, TestOfTestForSetup) {
   config::Config config;
   config::ConfigHandler::GetDefaultConfig(&config);
@@ -1179,7 +1236,9 @@ TEST_F(SessionTest, KeymapCommandSequenceCommitZenzLiveCorrectionAndImeOff) {
   segment->set_value_length(Util::CharsLen("点滴です"));
 
   commands::Command command;
-  ASSERT_TRUE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
+  ShowZenzCorrectionForTest(&session_peer, "かれはてんてきです",
+                            "彼は点滴です", "彼は天敵です", "empty",
+                            &command);
   ASSERT_TRUE(command.output().zenz_live_correction_applied());
   EXPECT_PREEDIT("彼は天敵です", command);
 
@@ -1297,6 +1356,12 @@ class RecordingExternalLearningConverter : public MockConverter {
         request.options().enable_user_history_for_conversion;
     last_key = std::string(key);
     last_value = std::string(value);
+    last_preceding_text = request.context().has_preceding_text()
+                              ? request.context().preceding_text()
+                              : std::string();
+    last_following_text = request.context().has_following_text()
+                              ? request.context().following_text()
+                              : std::string();
     learned_keys.push_back(last_key);
     learned_values.push_back(last_value);
     return learn_result;
@@ -1309,6 +1374,12 @@ class RecordingExternalLearningConverter : public MockConverter {
     last_request_type = request.request_type();
     last_enable_user_history =
         request.options().enable_user_history_for_conversion;
+    last_preceding_text = request.context().has_preceding_text()
+                              ? request.context().preceding_text()
+                              : std::string();
+    last_following_text = request.context().has_following_text()
+                              ? request.context().following_text()
+                              : std::string();
 
     std::vector<std::string> keys;
     std::vector<std::string> values;
@@ -1334,6 +1405,8 @@ class RecordingExternalLearningConverter : public MockConverter {
   mutable bool last_enable_user_history = false;
   mutable std::string last_key;
   mutable std::string last_value;
+  mutable std::string last_preceding_text;
+  mutable std::string last_following_text;
   mutable std::vector<std::string> learned_keys;
   mutable std::vector<std::string> learned_values;
   mutable std::vector<std::vector<std::string>> learned_segment_keys;
@@ -1384,6 +1457,28 @@ TEST_F(SessionTest, ZenzMozcHistoryLearningPassesFullSequenceToConverter) {
   EXPECT_TRUE(converter->last_enable_user_history);
   EXPECT_EQ(converter->last_key, "かれはてんきです");
   EXPECT_EQ(converter->last_value, "彼は天気です");
+}
+
+TEST_F(SessionTest, ZenzMozcHistoryLearningPreservesBothClientContexts) {
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  commands::Context* client_context =
+      session_peer.context_()->mutable_client_context();
+  client_context->set_preceding_text("前の文です。");
+  client_context->set_following_text("後ろの文です。");
+
+  EXPECT_TRUE(session_peer.MaybeLearnZenzCandidateToMozcHistory(
+      "りせきします", "離席します"));
+  EXPECT_EQ(converter->learn_call_count, 1);
+  EXPECT_EQ(converter->last_preceding_text, "前の文です。");
+  EXPECT_EQ(converter->last_following_text, "後ろの文です。");
 }
 
 TEST_F(SessionTest, ZenzMozcHistoryLearningRejectsEmptyKeyOrValue) {
@@ -1494,7 +1589,7 @@ TEST_F(SessionTest,
   EXPECT_EQ(entries[0].key, "かれはてんてきです");
   EXPECT_EQ(entries[0].value, "彼は天敵です");
 #else
-  GTEST_SKIP() << "Zenz feedback store persists only on Windows.";
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
 #endif
 }
 
@@ -1570,7 +1665,7 @@ TEST_F(SessionTest,
   EXPECT_EQ(converter->learned_segment_reranked[0],
             std::vector<bool>({false, true, false}));
 #else
-  GTEST_SKIP() << "Zenz feedback store persists only on Windows.";
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
 #endif
 }
 
@@ -1624,9 +1719,319 @@ TEST_F(SessionTest,
   EXPECT_EQ(entries[0].key, "かれはてんてきです");
   EXPECT_EQ(entries[0].value, "天敵です彼は");
 #else
-  GTEST_SKIP() << "Zenz feedback store persists only on Windows.";
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
 #endif
 }
+
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackDoesNotCaptureSyntheticMozcProjection) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "りせきします";
+  session_peer.live_conversion_value_() = "離席します";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "りせきします";
+  session_peer.zenz_live_value_() = "離籍します";
+  session_peer.zenz_live_mozc_value_() = "離席します";
+  session_peer.zenz_live_context_class_() = "empty";
+
+  commands::Preedit& mozc_preedit =
+      session_peer.zenz_live_mozc_preedit_output_();
+  mozc_preedit.Clear();
+  commands::Preedit::Segment* segment = mozc_preedit.add_segment();
+  segment->set_key("りせきします");
+  segment->set_value("離席します");
+  segment->set_value_length(Util::CharsLen("離席します"));
+
+  session_peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_()
+                  .reverse_learning_segments.empty());
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_()
+                  .reverse_projected_learning_segments.empty());
+}
+
+TEST_F(SessionTest,
+       RejectedZenzMozcLearningSkipsUnsafeSegmentAlignment) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "かれはてんてきです";
+  session_peer.live_conversion_value_() = "彼は点滴です";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "かれはてんてきです";
+  session_peer.zenz_live_value_() = "天敵です彼は";
+  session_peer.zenz_live_mozc_value_() = "彼は点滴です";
+  session_peer.zenz_live_context_class_() = "empty";
+
+  commands::Preedit& mozc_preedit =
+      session_peer.zenz_live_mozc_preedit_output_();
+  commands::Preedit::Segment* segment = mozc_preedit.add_segment();
+  segment->set_key("かれは");
+  segment->set_value("彼は");
+  segment->set_value_length(Util::CharsLen("彼は"));
+  segment = mozc_preedit.add_segment();
+  segment->set_key("てんてきです");
+  segment->set_value("点滴です");
+  segment->set_value_length(Util::CharsLen("点滴です"));
+
+  session_peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_()
+                  .reverse_projected_learning_segments.empty());
+}
+
+TEST_F(SessionTest,
+       NonSpaceZenzRejectDoesNotCapturePositiveMozcPreference) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "りせきします";
+  session_peer.live_conversion_value_() = "離席します";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "りせきします";
+  session_peer.zenz_live_value_() = "離籍します";
+  session_peer.zenz_live_mozc_value_() = "離席します";
+  session_peer.zenz_live_context_class_() = "empty";
+
+  commands::Preedit& mozc_preedit =
+      session_peer.zenz_live_mozc_preedit_output_();
+  commands::Preedit::Segment* segment = mozc_preedit.add_segment();
+  segment->set_key("りせきします");
+  segment->set_value("離席します");
+  segment->set_value_length(Util::CharsLen("離席します"));
+
+  session_peer.SetPendingZenzFeedbackRejected("explicit_conversion_after_zenz");
+
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_()
+                  .reverse_projected_learning_segments.empty());
+}
+
+TEST_F(SessionTest,
+       PendingRejectedSingleSegmentZenzNeverSynthesizesMozcHistory) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "りせきします";
+  session_peer.live_conversion_value_() = "離席します";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "りせきします";
+  session_peer.zenz_live_value_() = "離籍します";
+  session_peer.zenz_live_mozc_value_() = "離席します";
+  session_peer.zenz_live_context_class_() = "empty";
+
+  session_peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  session_peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_key("りせきします");
+  command.mutable_output()->mutable_result()->set_value("離席します");
+
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  session_peer.ConfirmPendingZenzFeedback();
+
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_EQ(converter->learn_call_count, 0);
+  EXPECT_EQ(converter->learn_segments_call_count, 0);
+  const std::vector<ZenzFeedbackEntry> entries =
+      session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].value, "離籍します");
+  EXPECT_EQ(entries[0].rejected_count, 1);
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+#if defined(__APPLE__) && TARGET_OS_OSX
+TEST_F(SessionTest,
+       RejectedLongZenzLearnsLocalPreferenceForShorterFutureReadingOnMac) {
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "ちょっとりせきします";
+  session_peer.live_conversion_value_() = "ちょっと離席します";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "ちょっとりせきします";
+  session_peer.zenz_live_value_() = "ちょっと離籍します";
+  session_peer.zenz_live_mozc_value_() = "ちょっと離席します";
+  session_peer.zenz_live_context_class_() = "empty";
+
+  session_peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  session_peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+  // Make full reverse conversion deliberately coarse.  The surface diff is
+  // only a span proposal; both proposed local surfaces must still reverse-read
+  // uniquely to the same reading before any local preference is persisted.
+  Segments preferred_full_reverse;
+  Segment* reverse_segment = preferred_full_reverse.add_segment();
+  reverse_segment->set_key("ちょっと離席します");
+  reverse_segment->add_candidate()->value = "ちょっとりせきします";
+
+  Segments zenz_full_reverse;
+  reverse_segment = zenz_full_reverse.add_segment();
+  reverse_segment->set_key("ちょっと離籍します");
+  reverse_segment->add_candidate()->value = "ちょっとりせきします";
+
+  Segments preferred_local_reverse;
+  reverse_segment = preferred_local_reverse.add_segment();
+  reverse_segment->set_key("離席");
+  reverse_segment->add_candidate()->value = "りせき";
+
+  Segments disfavored_local_reverse;
+  reverse_segment = disfavored_local_reverse.add_segment();
+  reverse_segment->set_key("離籍");
+  reverse_segment->add_candidate()->value = "りせき";
+
+  EXPECT_CALL(*converter,
+              StartReverseConversion(_, "ちょっと離席します"))
+      .WillOnce(DoAll(SetArgPointee<0>(preferred_full_reverse), Return(true)));
+  EXPECT_CALL(*converter,
+              StartReverseConversion(_, "ちょっと離籍します"))
+      .WillOnce(DoAll(SetArgPointee<0>(zenz_full_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離席"))
+      .WillOnce(DoAll(SetArgPointee<0>(preferred_local_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離籍"))
+      .WillOnce(DoAll(SetArgPointee<0>(disfavored_local_reverse), Return(true)));
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_key("ちょっとりせきします");
+  command.mutable_output()->mutable_result()->set_value("ちょっと離席します");
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  session_peer.ConfirmPendingZenzFeedback();
+
+  EXPECT_EQ(converter->learn_call_count, 0);
+  EXPECT_EQ(converter->learn_segments_call_count, 0);
+  const std::vector<ZenzLocalPreference> local =
+      session_peer.zenz_feedback_store_().GetLocalPreferences(
+          "りせきします", "empty");
+  ASSERT_EQ(local.size(), 1);
+  EXPECT_EQ(local[0].key, "りせき");
+  EXPECT_EQ(local[0].preferred_value, "離席");
+  EXPECT_EQ(local[0].disfavored_value, "離籍");
+}
+
+TEST_F(SessionTest,
+       RejectedZenzThirdFinalCandidateBecomesLocalPreferredOnMac) {
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "こうせいします";
+  session_peer.live_conversion_value_() = "更正します";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "こうせいします";
+  session_peer.zenz_live_value_() = "校正します";
+  session_peer.zenz_live_mozc_value_() = "更正します";
+  session_peer.zenz_live_context_class_() = "empty";
+
+  session_peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  session_peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+  Segments final_reverse;
+  Segment* reverse_segment = final_reverse.add_segment();
+  reverse_segment->set_key("構成します");
+  reverse_segment->add_candidate()->value = "こうせいします";
+
+  Segments zenz_reverse;
+  reverse_segment = zenz_reverse.add_segment();
+  reverse_segment->set_key("校正します");
+  reverse_segment->add_candidate()->value = "こうせいします";
+
+  Segments final_local_reverse;
+  reverse_segment = final_local_reverse.add_segment();
+  reverse_segment->set_key("構成");
+  reverse_segment->add_candidate()->value = "こうせい";
+
+  Segments zenz_local_reverse;
+  reverse_segment = zenz_local_reverse.add_segment();
+  reverse_segment->set_key("校正");
+  reverse_segment->add_candidate()->value = "こうせい";
+
+  EXPECT_CALL(*converter, StartReverseConversion(_, "構成します"))
+      .WillOnce(DoAll(SetArgPointee<0>(final_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "校正します"))
+      .WillOnce(DoAll(SetArgPointee<0>(zenz_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "構成"))
+      .WillOnce(DoAll(SetArgPointee<0>(final_local_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "校正"))
+      .WillOnce(DoAll(SetArgPointee<0>(zenz_local_reverse), Return(true)));
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_key("こうせいします");
+  command.mutable_output()->mutable_result()->set_value("構成します");
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  session_peer.ConfirmPendingZenzFeedback();
+
+  // REV10 itself does not project the rejection into Mozc history.  The final
+  // committed surface, not the original Mozc A, is the preferred side.
+  EXPECT_EQ(converter->learn_call_count, 0);
+  EXPECT_EQ(converter->learn_segments_call_count, 0);
+  const std::vector<ZenzLocalPreference> local =
+      session_peer.zenz_feedback_store_().GetLocalPreferences(
+          "こうせいします", "empty");
+  ASSERT_EQ(local.size(), 1);
+  EXPECT_EQ(local[0].key, "こうせい");
+  EXPECT_EQ(local[0].preferred_value, "構成");
+  EXPECT_EQ(local[0].disfavored_value, "校正");
+}
+
+#endif  // defined(__APPLE__) && TARGET_OS_OSX
 
 #if defined(_WIN32)
 void SetPendingRejectedZenzFeedbackForTest(SessionTestPeer* session_peer) {
@@ -1640,10 +2045,153 @@ void SetPendingRejectedZenzFeedbackForTest(SessionTestPeer* session_peer) {
   session_peer->zenz_live_mozc_value_() = "彼は点滴です";
   session_peer->zenz_live_context_class_() = "empty";
 
+  commands::Preedit& mozc_preedit =
+      session_peer->zenz_live_mozc_preedit_output_();
+  mozc_preedit.Clear();
+  commands::Preedit::Segment* segment = mozc_preedit.add_segment();
+  segment->set_key("かれは");
+  segment->set_value("彼は");
+  segment->set_value_length(Util::CharsLen("彼は"));
+  segment = mozc_preedit.add_segment();
+  segment->set_key("てんてきです");
+  segment->set_value("点滴です");
+  segment->set_value_length(Util::CharsLen("点滴です"));
+
   session_peer->SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
   session_peer->context_()->set_state(ImeContext::PRECOMPOSITION);
 }
 #endif  // defined(_WIN32)
+
+TEST_F(SessionTest, PendingZenzFeedbackNoHistoryDoesNotWrite) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_feedback_learning(true);
+  config.set_history_learning_level(config::Config::NO_HISTORY);
+  session.SetConfig(config);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+
+  // NO_HISTORY disables both persistent full feedback and Local Preference.
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListLocalPreferenceEntries()
+                  .empty());
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+TEST_F(SessionTest, PendingZenzFeedbackReadOnlyDoesNotWrite) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_feedback_learning(true);
+  config.set_history_learning_level(config::Config::READ_ONLY);
+  session.SetConfig(config);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+
+  // READ_ONLY may consult existing feedback, but no new persistent observation
+  // or Mozc history is created.
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListLocalPreferenceEntries()
+                  .empty());
+  EXPECT_EQ(converter->learn_call_count, 0);
+  EXPECT_EQ(converter->learn_segments_call_count, 0);
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+TEST_F(SessionTest, PendingZenzFeedbackConfigIncognitoDoesNotWrite) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_feedback_learning(true);
+  config.set_incognito_mode(true);
+  session.SetConfig(config);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+
+  // Incognito preserves read-side accuracy but never creates persistent data.
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+TEST_F(SessionTest, PendingZenzFeedbackRequestIncognitoDoesNotWrite) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  commands::Request request;
+  request.set_is_incognito_mode(true);
+  InitSessionToPrecomposition(&session, request);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_feedback_learning(true);
+  session.SetConfig(config);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+TEST_F(SessionTest, PendingZenzFeedbackPasswordDoesNotWrite) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+  SwitchInputFieldType(commands::Context::PASSWORD, &session);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
 
 TEST_F(SessionTest, PendingRejectedZenzFeedbackIsNeutralWithoutFinalCommit) {
 #if defined(_WIN32)
@@ -1665,7 +2213,7 @@ TEST_F(SessionTest, PendingRejectedZenzFeedbackIsNeutralWithoutFinalCommit) {
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
   EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
 #else
-  GTEST_SKIP() << "Zenz feedback store persists only on Windows.";
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
 #endif
 }
 
@@ -1701,14 +2249,116 @@ TEST_F(SessionTest, PendingRejectedZenzFeedbackIsNeutralWhenFinalCommitMatches) 
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
   EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
 #else
-  GTEST_SKIP() << "Zenz feedback store persists only on Windows.";
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
 #endif
 }
 
-TEST_F(SessionTest, PendingRejectedZenzFeedbackIsRecordedWhenFinalCommitDiffers) {
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackDifferentFinalCommitPersistsImmediately) {
 #if defined(_WIN32)
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(
+      commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_key("かれはてんてきです");
+  command.mutable_output()->mutable_result()->set_value("彼は点滴です");
+
+  // A genuinely different full commit is definitive rejected feedback and
+  // must reach persistent storage immediately, without waiting for another
+  // InsertCharacter event.
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  std::vector<ZenzFeedbackEntry> entries =
+      session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].value, "彼は天敵です");
+  EXPECT_EQ(entries[0].rejected_count, 1);
+
+  // Later generic confirmation is a no-op, so the same rejection is not
+  // counted twice.
+  session_peer.ConfirmPendingZenzFeedback();
+  entries = session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].rejected_count, 1);
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
+
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackIgnoresPartialNonStringAndEmptyResults) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(
+      commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_value("彼は点滴です");
+
+  // A partial commit still in CONVERSION is not a final full-sequence choice.
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "partial");
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().has_final_committed_value);
+
+  session_peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+  // Only Result::STRING represents inserted committed text for this purpose.
+  command.mutable_output()->mutable_result()->set_type(
+      commands::Result::NONE);
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "non_string");
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().has_final_committed_value);
+
+  // An empty STRING is likewise not affirmative evidence of a replacement.
+  command.mutable_output()->mutable_result()->set_type(
+      commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_value("");
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "empty");
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().has_final_committed_value);
+
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+  session_peer.DiscardPendingZenzFeedback("test_cleanup");
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
+
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackNeverSynthesizesOriginalMozcHistory) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
 
   ScopedUserProfileForZenzFeedbackSessionTest profile;
   ASSERT_TRUE(profile.ok());
@@ -1730,6 +2380,8 @@ TEST_F(SessionTest, PendingRejectedZenzFeedbackIsRecordedWhenFinalCommitDiffers)
   session_peer.ConfirmPendingZenzFeedback();
 
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_EQ(converter->learn_call_count, 0);
+  EXPECT_EQ(converter->learn_segments_call_count, 0);
 
   const std::vector<ZenzFeedbackEntry> entries =
       session_peer.zenz_feedback_store_().ListEntries();
@@ -1740,191 +2392,47 @@ TEST_F(SessionTest, PendingRejectedZenzFeedbackIsRecordedWhenFinalCommitDiffers)
   EXPECT_EQ(entries[0].accepted_count, 0);
   EXPECT_EQ(entries[0].rejected_count, 1);
 #else
-  GTEST_SKIP() << "Zenz feedback store persists only on Windows.";
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackDifferentFinalCandidateDoesNotSynthesizeMozcHistory) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_key("かれはてんてきです");
+  command.mutable_output()->mutable_result()->set_value("彼は天気です");
+
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  session_peer.ConfirmPendingZenzFeedback();
+
+  EXPECT_EQ(converter->learn_call_count, 0);
+  EXPECT_EQ(converter->learn_segments_call_count, 0);
+  const std::vector<ZenzFeedbackEntry> entries =
+      session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].value, "彼は天敵です");
+  EXPECT_EQ(entries[0].rejected_count, 1);
+#else
+  GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
 #endif
 }
 
 #if defined(_WIN32)
-
-TEST_F(SessionTest,
-       ZenzFeedbackFastPathAppliesAcceptedCandidateForMultiSegmentLiveConversion) {
-  MockEngine engine;
-  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
-
-  ScopedUserProfileForZenzFeedbackSessionTest profile;
-  ASSERT_TRUE(profile.ok());
-
-  Session session(engine);
-  SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-  EnableZenzLiveCorrectionWithFeedbackLearning(&session);
-
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "japanese_only",
-      "彼は天敵です");
-  ASSERT_FALSE(session_peer.zenz_feedback_store_().ListEntries().empty());
-
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "かれはてんてきです";
-  session_peer.live_conversion_value_() = "彼は点滴です";
-
-  commands::Preedit& live_preedit =
-      session_peer.live_conversion_preedit_output_();
-  live_preedit.Clear();
-
-  commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("かれは");
-  segment->set_value("彼は");
-  segment->set_value_length(Util::CharsLen("彼は"));
-
-  segment = live_preedit.add_segment();
-  segment->set_key("てんてきです");
-  segment->set_value("点滴です");
-  segment->set_value_length(Util::CharsLen("点滴です"));
-
-  commands::Command command;
-  EXPECT_TRUE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
-
-  EXPECT_TRUE(command.output().live_conversion());
-  EXPECT_FALSE(command.output().live_conversion_pending());
-  EXPECT_FALSE(command.output().zenz_live_correction_pending());
-  EXPECT_TRUE(command.output().zenz_live_correction_applied());
-  EXPECT_FALSE(command.output().has_callback());
-  EXPECT_SINGLE_SEGMENT_AND_KEY("彼は天敵です",
-                                "かれはてんてきです",
-                                command);
-
-  EXPECT_EQ(session_peer.zenz_live_key_(), "かれはてんてきです");
-  EXPECT_EQ(session_peer.zenz_live_value_(), "彼は天敵です");
-  EXPECT_EQ(session_peer.zenz_live_mozc_value_(), "彼は点滴です");
-  EXPECT_EQ(session_peer.zenz_live_context_class_(), "empty");
-}
-
-TEST_F(SessionTest, ZenzFeedbackFastPathSkipsAutoBlockedCandidate) {
-  MockEngine engine;
-  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
-
-  ScopedUserProfileForZenzFeedbackSessionTest profile;
-  ASSERT_TRUE(profile.ok());
-
-  Session session(engine);
-  SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-
-  config::Config config;
-  config::ConfigHandler::GetDefaultConfig(&config);
-  config.set_use_live_conversion(true);
-  config.set_use_zenz_live_correction(true);
-  config.set_use_zenz_feedback_learning(true);
-  config.set_use_zenz_synthetic_candidate(true);
-  config.set_zenz_live_correction_min_key_length(2);
-  config.set_use_zenz_auto_block_rejected_correction(true);
-  config.set_zenz_auto_block_reject_threshold(2);
-  session.SetConfig(config);
-
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "japanese_only",
-      "彼は天敵です");
-  session_peer.zenz_feedback_store_().RecordRejected(
-      "かれはてんてきです",
-      "empty",
-      "彼は天敵です",
-      "space_revert_zenz_to_mozc");
-  session_peer.zenz_feedback_store_().RecordRejected(
-      "かれはてんてきです",
-      "empty",
-      "彼は天敵です",
-      "space_revert_zenz_to_mozc");
-
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "かれはてんてきです";
-  session_peer.live_conversion_value_() = "彼は点滴です";
-
-  commands::Preedit& live_preedit =
-      session_peer.live_conversion_preedit_output_();
-  live_preedit.Clear();
-
-  commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("かれは");
-  segment->set_value("彼は");
-  segment->set_value_length(Util::CharsLen("彼は"));
-
-  segment = live_preedit.add_segment();
-  segment->set_key("てんてきです");
-  segment->set_value("点滴です");
-  segment->set_value_length(Util::CharsLen("点滴です"));
-
-  commands::Command command;
-  EXPECT_FALSE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
-  EXPECT_TRUE(session_peer.zenz_live_key_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_value_().empty());
-}
-
-TEST_F(SessionTest, ZenzFeedbackFastPathSkipsRejectDominantCandidate) {
-  MockEngine engine;
-  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
-
-  ScopedUserProfileForZenzFeedbackSessionTest profile;
-  ASSERT_TRUE(profile.ok());
-
-  Session session(engine);
-  SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-
-  config::Config config;
-  config::ConfigHandler::GetDefaultConfig(&config);
-  config.set_use_live_conversion(true);
-  config.set_use_zenz_live_correction(true);
-  config.set_use_zenz_feedback_learning(true);
-  config.set_use_zenz_synthetic_candidate(true);
-  config.set_zenz_live_correction_min_key_length(2);
-  config.set_use_zenz_auto_block_rejected_correction(false);
-  config.set_zenz_auto_block_reject_threshold(2);
-  session.SetConfig(config);
-
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "japanese_only",
-      "彼は天敵です");
-  session_peer.zenz_feedback_store_().RecordRejected(
-      "かれはてんてきです",
-      "empty",
-      "彼は天敵です",
-      "space_revert_zenz_to_mozc");
-  session_peer.zenz_feedback_store_().RecordRejected(
-      "かれはてんてきです",
-      "empty",
-      "彼は天敵です",
-      "space_revert_zenz_to_mozc");
-
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "かれはてんてきです";
-  session_peer.live_conversion_value_() = "彼は点滴です";
-
-  commands::Preedit& live_preedit =
-      session_peer.live_conversion_preedit_output_();
-  live_preedit.Clear();
-
-  commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("かれは");
-  segment->set_value("彼は");
-  segment->set_value_length(Util::CharsLen("彼は"));
-
-  segment = live_preedit.add_segment();
-  segment->set_key("てんてきです");
-  segment->set_value("点滴です");
-  segment->set_value_length(Util::CharsLen("点滴です"));
-
-  commands::Command command;
-  EXPECT_FALSE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
-  EXPECT_TRUE(session_peer.zenz_live_key_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_value_().empty());
-}
 
 TEST_F(SessionTest,
        SpaceWhileZenzLiveCorrectionVisibleRevertsToMozcNormalConversion) {
@@ -1966,7 +2474,9 @@ TEST_F(SessionTest,
   segment->set_value_length(Util::CharsLen("点滴です"));
 
   commands::Command command;
-  ASSERT_TRUE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
+  ShowZenzCorrectionForTest(&session_peer, "かれはてんてきです",
+                            "彼は点滴です", "彼は天敵です", "japanese_only",
+                            &command);
   ASSERT_TRUE(command.output().zenz_live_correction_applied());
   EXPECT_PREEDIT("彼は天敵です", command);
 
@@ -2049,7 +2559,9 @@ TEST_F(SessionTest,
   session_peer.live_conversion_preedit_output_() = command.output().preedit();
 
   command.Clear();
-  ASSERT_TRUE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
+  ShowZenzCorrectionForTest(&session_peer, "かれはてんてきです",
+                            "彼は点滴です", "彼は天敵です", "japanese_only",
+                            &command);
   ASSERT_TRUE(command.output().zenz_live_correction_applied());
   EXPECT_PREEDIT("彼は天敵です", command);
 
@@ -2072,152 +2584,6 @@ TEST_F(SessionTest,
   EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
   EXPECT_FALSE(session_peer.live_conversion_active_());
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
-}
-
-TEST_F(SessionTest,
-       ZenzFeedbackFastPathDoesNotOverrideSingleSegmentLiveConversion) {
-  MockEngine engine;
-  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
-
-  ScopedUserProfileForZenzFeedbackSessionTest profile;
-  ASSERT_TRUE(profile.ok());
-
-  Session session(engine);
-  SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-  EnableZenzLiveCorrectionWithFeedbackLearning(&session);
-
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "たなべ",
-      "japanese_only",
-      "田辺");
-  ASSERT_FALSE(session_peer.zenz_feedback_store_().ListEntries().empty());
-
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "たなべ";
-  session_peer.live_conversion_value_() = "田邊";
-
-  commands::Preedit& live_preedit =
-      session_peer.live_conversion_preedit_output_();
-  live_preedit.Clear();
-
-  commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("たなべ");
-  segment->set_value("田邊");
-  segment->set_value_length(Util::CharsLen("田邊"));
-
-  commands::Command command;
-  EXPECT_FALSE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
-
-  EXPECT_FALSE(command.output().zenz_live_correction_applied());
-  EXPECT_FALSE(command.output().has_callback());
-  EXPECT_FALSE(command.output().has_preedit());
-
-  EXPECT_TRUE(session_peer.zenz_live_key_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_value_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_mozc_value_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_context_class_().empty());
-}
-
-TEST_F(SessionTest,
-       ZenzFeedbackFastPathDoesNotApplySameValueAsMozc) {
-  MockEngine engine;
-  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
-
-  ScopedUserProfileForZenzFeedbackSessionTest profile;
-  ASSERT_TRUE(profile.ok());
-
-  Session session(engine);
-  SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-  EnableZenzLiveCorrectionWithFeedbackLearning(&session);
-
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "japanese_only",
-      "彼は点滴です");
-  ASSERT_FALSE(session_peer.zenz_feedback_store_().ListEntries().empty());
-
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "かれはてんてきです";
-  session_peer.live_conversion_value_() = "彼は点滴です";
-
-  commands::Preedit& live_preedit =
-      session_peer.live_conversion_preedit_output_();
-  live_preedit.Clear();
-
-  commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("かれは");
-  segment->set_value("彼は");
-  segment->set_value_length(Util::CharsLen("彼は"));
-
-  segment = live_preedit.add_segment();
-  segment->set_key("てんてきです");
-  segment->set_value("点滴です");
-  segment->set_value_length(Util::CharsLen("点滴です"));
-
-  commands::Command command;
-  EXPECT_FALSE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
-
-  EXPECT_FALSE(command.output().zenz_live_correction_applied());
-  EXPECT_TRUE(session_peer.zenz_live_key_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_value_().empty());
-}
-
-TEST_F(SessionTest,
-       ZenzFeedbackFastPathDoesNotPromoteSensitiveLikeFeedback) {
-  MockEngine engine;
-  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
-
-  ScopedUserProfileForZenzFeedbackSessionTest profile;
-  ASSERT_TRUE(profile.ok());
-
-  Session session(engine);
-  SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-  EnableZenzLiveCorrectionWithFeedbackLearning(&session);
-
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "sensitive_like",
-      "彼は天敵です");
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "sensitive_like",
-      "彼は天敵です");
-  session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
-      "sensitive_like",
-      "彼は天敵です");
-  ASSERT_FALSE(session_peer.zenz_feedback_store_().ListEntries().empty());
-
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "かれはてんてきです";
-  session_peer.live_conversion_value_() = "彼は点滴です";
-
-  commands::Preedit& live_preedit =
-      session_peer.live_conversion_preedit_output_();
-  live_preedit.Clear();
-
-  commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("かれは");
-  segment->set_value("彼は");
-  segment->set_value_length(Util::CharsLen("彼は"));
-
-  segment = live_preedit.add_segment();
-  segment->set_key("てんてきです");
-  segment->set_value("点滴です");
-  segment->set_value_length(Util::CharsLen("点滴です"));
-
-  commands::Command command;
-  EXPECT_FALSE(session_peer.MaybeApplyZenzFeedbackLiveCorrection(&command));
-
-  EXPECT_FALSE(command.output().zenz_live_correction_applied());
-  EXPECT_TRUE(session_peer.zenz_live_key_().empty());
-  EXPECT_TRUE(session_peer.zenz_live_value_().empty());
 }
 
 #endif  // defined(_WIN32)
@@ -2824,6 +3190,58 @@ TEST_F(SessionTest, SpaceDuringLiveConversionKeepsNormalCandidateNavigation) {
   EXPECT_PREEDIT("阿", command);
 }
 
+TEST_F(SessionTest, SpaceDuringLiveConversionRepairsAsciiResidual) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_live_conversion_delay_msec(0);
+  config.set_live_conversion_min_key_length(2);
+  config.set_session_keymap(config::Config::MSIME);
+  session.SetConfig(config);
+
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [this](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            Segment* segment = segments->add_segment();
+            segment->set_key(key);
+            converter::Candidate* candidate = segment->add_candidate();
+            candidate->key = key;
+            candidate->content_key = key;
+            candidate->value = key;
+            candidate->content_value = key;
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            FillT13Ns(request, segments);
+            return true;
+          }));
+
+  commands::Command command;
+  InsertCharacterChars("des", &session, &command);
+  ASSERT_EQ(session.context().state(), ImeContext::CONVERSION);
+  ASSERT_TRUE(session_peer.live_conversion_active_());
+  ASSERT_TRUE(command.output().live_conversion());
+  ASSERT_TRUE(EnsurePreedit("でs", command));
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+
+  EXPECT_TRUE(command.output().consumed());
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(session_peer.live_conversion_active_());
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_PREEDIT("です", command);
+}
+
 TEST_F(SessionTest, DownDuringLiveConversionFocusesPredictionCandidates) {
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
@@ -2942,6 +3360,63 @@ TEST_F(SessionTest,
   EXPECT_FALSE(command.output().live_conversion());
   EXPECT_FALSE(command.output().has_candidate_window());
   EXPECT_TRUE(EnsurePreedit("あ", command));
+}
+
+TEST_F(SessionTest,
+       LiveConversionKeepsMozcTypingCorrectionAndSkipsZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  // Build the composition without live conversion first so this regression
+  // exercises exactly one live-conversion StartConversion call below.
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  config.set_zenz_live_correction_delay_msec(1);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Command command;
+  InsertCharacterChars("honyaniiku", &session, &command);
+  ASSERT_EQ(session.context().state(), ImeContext::COMPOSITION);
+
+  config.set_use_live_conversion(true);
+  config.set_live_conversion_delay_msec(0);
+  config.set_live_conversion_min_key_length(2);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("ほにゃにいく");
+  converter::Candidate* candidate = segment->add_candidate();
+  candidate->key = "ほにゃにいく";
+  candidate->content_key = candidate->key;
+  candidate->value = "本屋に行く";
+  candidate->content_value = candidate->value;
+  candidate->attributes |= converter::Attribute::TYPING_CORRECTION;
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(session_peer.MaybeStartLiveConversion(&command));
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_TRUE(command.output().live_conversion());
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
+  ASSERT_TRUE(command.output().has_preedit());
+  ASSERT_GT(command.output().preedit().segment_size(), 0);
+  EXPECT_EQ(command.output().preedit().segment(0).value(), "本屋に行く");
 }
 
 TEST_F(SessionTest,
@@ -3074,6 +3549,56 @@ TEST_F(SessionTest, LiveConversionHonorsRaisedMinKeyLength) {
   EXPECT_TRUE(command.output().live_conversion());
   EXPECT_TRUE(EnsurePreedit("愛雨", command));
 }
+
+#if defined(_WIN32)
+
+TEST_F(SessionTest,
+       DelayedLiveConversionCallbackHonorsConfigOffWithoutBroadCancellation) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_live_conversion_delay_msec(1000);
+  config.set_live_conversion_min_key_length(1);
+  session.SetConfig(config);
+
+  commands::Command command;
+  InsertCharacterString("あめ", "ab", &session, &command);
+
+  ASSERT_TRUE(session_peer.live_conversion_pending_());
+  ASSERT_TRUE(command.output().live_conversion_pending());
+  ASSERT_TRUE(command.output().has_callback());
+  ASSERT_TRUE(command.output().callback().has_session_command());
+  const commands::SessionCommand delayed_callback =
+      command.output().callback().session_command();
+  ASSERT_EQ(delayed_callback.type(),
+            commands::SessionCommand::APPLY_LIVE_CONVERSION);
+
+  // SetConfig itself intentionally does not perform a broad cancellation.
+  // The delayed callback revalidates the current setting when it executes.
+  config.set_use_live_conversion(false);
+  session.SetConfig(config);
+  EXPECT_TRUE(session_peer.live_conversion_pending_());
+
+  command.Clear();
+  command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+  *command.mutable_input()->mutable_command() = delayed_callback;
+  ASSERT_TRUE(session.SendCommand(&command));
+
+  EXPECT_FALSE(session_peer.live_conversion_pending_());
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_FALSE(command.output().live_conversion_pending());
+  EXPECT_PREEDIT("あめ", command);
+  EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
+}
+
+#endif  // defined(_WIN32)
 
 TEST_F(SessionTest,
        PendingLiveConversionEnterCommitsVisibleRawPreeditWithoutConversion) {
@@ -4825,6 +5350,601 @@ TEST_F(SessionTest,
   ASSERT_TRUE(command.output().has_candidate_window());
   ASSERT_TRUE(command.output().candidate_window().has_focused_index());
   EXPECT_EQ(command.output().candidate_window().focused_index(), 1);
+}
+
+TEST_F(SessionTest,
+       ExplicitSpaceConversionSchedulesZenzWhenLiveConversionIsDisabled) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  config.set_zenz_live_correction_delay_msec(321);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Command command;
+  InsertCharacterChars("aiueo", &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  SetAiueo(&segments);
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+  EXPECT_TRUE(session_peer.pending_zenz_live_().use_conversion_history);
+  ASSERT_TRUE(command.output().has_callback());
+  EXPECT_EQ(command.output().callback().delay_millisec(), 321);
+  ASSERT_TRUE(command.output().callback().has_session_command());
+  EXPECT_EQ(
+      command.output().callback().session_command().type(),
+      commands::SessionCommand::APPLY_ZENZ_LIVE_CORRECTION);
+  EXPECT_EQ(
+      command.output().callback().session_command().live_conversion_key(),
+      "あいうえお");
+
+  // Regression for the real failure mode: the delayed callback must remain
+  // current after ordinary conversion.  It should submit the request and
+  // return a poll callback instead of being discarded as stale.
+  const commands::SessionCommand zenz_start_command =
+      command.output().callback().session_command();
+  command.Clear();
+  command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+  *command.mutable_input()->mutable_command() = zenz_start_command;
+  ASSERT_TRUE(session.SendCommand(&command));
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+  ASSERT_TRUE(command.output().has_callback());
+  EXPECT_EQ(command.output().callback().session_command().type(),
+            commands::SessionCommand::APPLY_ZENZ_LIVE_CORRECTION);
+}
+
+
+TEST_F(SessionTest,
+       AutoConversionPunctuationSchedulesNormalZenzWithHistory) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  config.set_zenz_live_correction_delay_msec(321);
+  config.set_use_direct_commit(false);
+  config.set_use_auto_conversion(true);
+  config.set_auto_conversion_key(config::Config::AUTO_CONVERSION_KUTEN);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  Segments segments;
+  SetAiueo(&segments);
+  ConversionRequest default_request;
+  FillT13Ns(default_request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  commands::Command command;
+  InsertCharacterChars("tesuto.", &session, &command);
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+  EXPECT_TRUE(session_peer.pending_zenz_live_().use_conversion_history);
+  EXPECT_EQ(session_peer.pending_zenz_live_().key, "てすと。");
+  ASSERT_TRUE(command.output().has_callback());
+  EXPECT_EQ(command.output().callback().delay_millisec(), 321);
+  ASSERT_TRUE(command.output().callback().has_session_command());
+  EXPECT_EQ(command.output().callback().session_command().type(),
+            commands::SessionCommand::APPLY_ZENZ_LIVE_CORRECTION);
+  EXPECT_EQ(command.output().callback().session_command().live_conversion_key(),
+            "てすと。");
+}
+
+
+TEST_F(SessionTest,
+       DirectCommitPunctuationDoesNotStartNormalConversionZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  config.set_use_auto_conversion(false);
+  config.set_use_direct_commit(true);
+  config.set_direct_commit_key(config::Config::DIRECT_COMMIT_KUTEN);
+  session.SetConfig(config);
+
+  EXPECT_CALL(*converter, StartConversion(_, _)).Times(0);
+
+  commands::Command command;
+  InsertCharacterChars("tesuto.", &session, &command);
+
+  EXPECT_RESULT("てすと。", command);
+  EXPECT_EQ(session.context().state(), ImeContext::PRECOMPOSITION);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
+}
+
+
+TEST_F(SessionTest, ZenzContextLengthIsClampedAtRuntime) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(1);
+  // Exercise the runtime clamp directly rather than relying on the config UI.
+  config.set_zenz_live_correction_left_context_length(1000);
+  config.set_zenz_live_correction_right_context_length(1000);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Context client_context;
+  std::string long_context;
+  for (int i = 0; i < 200; ++i) {
+    long_context.append("あ");
+  }
+  client_context.set_zenz_preceding_text(long_context);
+  client_context.set_zenz_following_text(long_context);
+
+  commands::Command command;
+  InsertCharacterCharsWithContext("aiueo", client_context, &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  SetAiueo(&segments);
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+  ASSERT_TRUE(command.output().zenz_live_correction_pending());
+  EXPECT_EQ(Util::CharsLen(session_peer.pending_zenz_live_().left_context),
+            128);
+  EXPECT_EQ(Util::CharsLen(session_peer.pending_zenz_live_().right_context),
+            128);
+}
+
+
+TEST_F(SessionTest, ExplicitSpaceRepairsSingleAsciiResidualAndSkipsZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(1);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .Times(6)
+      .WillRepeatedly(::testing::Invoke(
+          [this](const ConversionRequest& request, Segments* segments) {
+            segments->Clear();
+            const std::string key(request.key());
+            Segment* segment = segments->add_segment();
+            segment->set_key(key);
+            converter::Candidate* candidate = segment->add_candidate();
+            candidate->key = key;
+            candidate->content_key = key;
+            candidate->value = key;
+            candidate->content_value = key;
+            candidate->cost = key == "です" ? 100 : 500;
+            candidate->wcost = candidate->cost;
+            FillT13Ns(request, segments);
+            return true;
+          }));
+
+  commands::Command command;
+  InsertCharacterChars("des", &session, &command);
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
+  ASSERT_TRUE(command.output().has_preedit());
+  ASSERT_GT(command.output().preedit().segment_size(), 0);
+  EXPECT_EQ(command.output().preedit().segment(0).value(), "です");
+}
+
+TEST_F(SessionTest, ExplicitSpaceKeepsMozcReadingCorrectionAndSkipsZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Command command;
+  InsertCharacterChars("honya", &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("ほにゃ");
+  converter::Candidate* candidate = segment->add_candidate();
+  candidate->key = "ほにゃ";
+  candidate->content_key = candidate->key;
+  candidate->value = "本屋";
+  candidate->content_value = candidate->value;
+  candidate->attributes |= converter::Attribute::SPELLING_CORRECTION;
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
+  ASSERT_TRUE(command.output().has_preedit());
+  ASSERT_GT(command.output().preedit().segment_size(), 0);
+  EXPECT_EQ(command.output().preedit().segment(0).value(), "本屋");
+}
+
+TEST_F(SessionTest, ExplicitSpaceKeepsMozcTypingCorrectionAndSkipsZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Command command;
+  InsertCharacterChars("honyaniiku", &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("ほにゃにいく");
+  converter::Candidate* candidate = segment->add_candidate();
+  candidate->key = "ほにゃにいく";
+  candidate->content_key = candidate->key;
+  candidate->value = "本屋に行く";
+  candidate->content_value = candidate->value;
+  candidate->attributes |= converter::Attribute::TYPING_CORRECTION;
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
+  ASSERT_TRUE(command.output().has_preedit());
+  ASSERT_GT(command.output().preedit().segment_size(), 0);
+  EXPECT_EQ(command.output().preedit().segment(0).value(), "本屋に行く");
+}
+
+TEST_F(SessionTest, ExplicitSpaceKeepsKeyCorrectedMozcCandidateAndSkipsZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::MSIME);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Command command;
+  InsertCharacterChars("honyaniiku", &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("ほにゃにいく");
+  converter::Candidate* candidate = segment->add_candidate();
+  candidate->key = "ほにゃにいく";
+  candidate->content_key = candidate->key;
+  candidate->value = "本屋に行く";
+  candidate->content_value = candidate->value;
+  candidate->attributes |= converter::Attribute::KEY_EXPANDED_IN_DICTIONARY;
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
+  ASSERT_TRUE(command.output().has_preedit());
+  ASSERT_GT(command.output().preedit().segment_size(), 0);
+  EXPECT_EQ(command.output().preedit().segment(0).value(), "本屋に行く");
+}
+
+TEST_F(SessionTest, ZenzContinuationAuthoritativeNativeAlwaysWinsAndReanchors) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  peer.zenz_continuation_left_context_() = "歯の治療を行います。";
+  commands::Context context;
+  context.set_zenz_preceding_text("昨日は大学で会議がありました。");
+  context.set_zenz_following_text("右文脈");
+  peer.PrepareZenzContinuationPrecedingContext(&context);
+
+  EXPECT_EQ(context.zenz_preceding_text(), "昨日は大学で会議がありました。");
+  EXPECT_EQ(peer.zenz_continuation_left_context_(),
+            "昨日は大学で会議がありました。");
+  EXPECT_EQ(context.zenz_following_text(), "右文脈");
+}
+
+TEST_F(SessionTest, ZenzContinuationAuthoritativeEmptyClearsOldCache) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  peer.zenz_continuation_left_context_() = "古い文脈";
+  commands::Context context;
+  context.set_zenz_preceding_text("");
+  peer.PrepareZenzContinuationPrecedingContext(&context);
+  EXPECT_TRUE(context.zenz_preceding_text().empty());
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationFallsBackOnlyWhenNativeUnavailable) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  peer.zenz_continuation_left_context_() = "歯の治療を行います。";
+  commands::Context context;
+  context.add_experimental_features("mozkey_zenz_context_unavailable");
+  // A legacy platform may still carry generic text for ordinary Mozc.  The
+  // unavailable marker makes it non-authoritative for Zenz only.
+  context.set_preceding_text("います。");
+  context.set_zenz_preceding_text("");
+  context.set_zenz_following_text("");
+  peer.PrepareZenzContinuationPrecedingContext(&context);
+
+  EXPECT_EQ(context.preceding_text(), "います。");
+  EXPECT_EQ(context.zenz_preceding_text(), "歯の治療を行います。");
+  EXPECT_TRUE(context.zenz_following_text().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationUnavailableWithoutCacheStaysEmpty) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  commands::Context context;
+  context.add_experimental_features("mozkey_zenz_context_unavailable");
+  context.set_zenz_preceding_text("");
+  peer.PrepareZenzContinuationPrecedingContext(&context);
+  EXPECT_TRUE(context.zenz_preceding_text().empty());
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationRevisionChangeBreaksFallback) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  commands::Context authoritative;
+  authoritative.set_revision(10);
+  authoritative.set_preceding_text("現在の文脈");
+  peer.PrepareZenzContinuationPrecedingContext(&authoritative);
+  EXPECT_EQ(peer.zenz_continuation_left_context_(), "現在の文脈");
+
+  commands::Context unavailable;
+  unavailable.set_revision(11);
+  unavailable.add_experimental_features("mozkey_zenz_context_unavailable");
+  unavailable.set_zenz_preceding_text("");
+  peer.PrepareZenzContinuationPrecedingContext(&unavailable);
+  EXPECT_TRUE(unavailable.zenz_preceding_text().empty());
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationResetFeatureBreaksFallback) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  peer.zenz_continuation_left_context_() = "直前の文脈";
+  commands::Context context;
+  context.add_experimental_features("mozkey_zenz_context_unavailable");
+  context.add_experimental_features("mozkey_zenz_context_reset");
+  context.set_zenz_preceding_text("");
+  peer.PrepareZenzContinuationPrecedingContext(&context);
+  EXPECT_TRUE(context.zenz_preceding_text().empty());
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationTracksEveryCommittedResult) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_value("歯の治療を行います。");
+  peer.UpdateZenzContinuationContextCacheFromOutput(command);
+  EXPECT_EQ(peer.zenz_continuation_left_context_(), "歯の治療を行います。");
+
+  command.mutable_output()->mutable_result()->set_value("私は歯科医です。");
+  peer.UpdateZenzContinuationContextCacheFromOutput(command);
+  EXPECT_EQ(peer.zenz_continuation_left_context_(),
+            "歯の治療を行います。私は歯科医です。");
+
+  peer.InvalidateZenzContinuationContextCacheForSessionCommand(
+      commands::SessionCommand::MOVE_CURSOR);
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ExplicitCustomConvertCommandSchedulesZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_session_keymap(config::Config::CUSTOM);
+  config.set_custom_keymap_table(
+      "status\tkey\tcommand\n"
+      "Composition\tCtrl Enter\tConvert\n");
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  config.set_zenz_live_correction_delay_msec(321);
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+  commands::Command command;
+  InsertCharacterChars("aiueo", &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  SetAiueo(&segments);
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(SendKey("Ctrl Enter", &session, &command));
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+  ASSERT_TRUE(command.output().has_callback());
+  EXPECT_EQ(command.output().callback().delay_millisec(), 321);
+  EXPECT_EQ(command.output().callback().session_command().type(),
+            commands::SessionCommand::APPLY_ZENZ_LIVE_CORRECTION);
+}
+
+TEST_F(SessionTest, DirectConvertDoesNotImplicitlyScheduleNormalZenz) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+
+  commands::Command command;
+  InsertCharacterChars("aiueo", &session, &command);
+  const ConversionRequest request = CreateConversionRequest(session);
+  Segments segments;
+  SetAiueo(&segments);
+  FillT13Ns(request, &segments);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(session.Convert(&command));
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().has_callback());
 }
 
 TEST_F(SessionTest,

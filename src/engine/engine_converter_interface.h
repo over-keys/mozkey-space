@@ -65,6 +65,23 @@ struct ConversionPreferences {
   bool request_suggestion;
 };
 
+// A currently selected conversion span backed by Mozc's persistent,
+// context-independent user-segment history.  Zenz may use these spans as
+// authoritative user spelling preferences for the current Mozc result.
+struct UserHistoryConversionPreference {
+  std::string key;
+  std::string value;
+};
+
+// One uniquely proven reverse-reading alignment segment.  |reading_begin| and
+// |reading_end| are byte offsets in the original expected reading.
+struct ReadingSurfaceAlignmentSegment {
+  std::string reading;
+  std::string surface;
+  size_t reading_begin = 0;
+  size_t reading_end = 0;
+};
+
 // Class handling ConverterInterface with a session state.  This class
 // support stateful operations related with the converter.
 class EngineConverterInterface {
@@ -100,6 +117,45 @@ class EngineConverterInterface {
 
   // Get reading text (e.g. from "猫" to "ねこ").
   virtual bool GetReadingText(absl::string_view str, std::string* reading) = 0;
+
+  // Returns true when |source_text| can be reverse-converted to exactly
+  // |expected_reading|. Implementations may consider alternative readings
+  // returned by reverse conversion. The default keeps lightweight
+  // implementations source-compatible.
+  virtual bool IsReadingEquivalent(absl::string_view source_text,
+                                   absl::string_view expected_reading) {
+    std::string reading;
+    return GetReadingText(source_text, &reading) &&
+           reading == expected_reading;
+  }
+
+  // Returns the unique reverse-conversion segmentation whose concatenated
+  // reading equals |expected_reading| exactly.  False means no exact path or
+  // more than one legitimate path.  The default keeps lightweight/mock
+  // implementations source-compatible.
+  virtual bool GetUniqueReadingSurfaceAlignment(
+      absl::string_view source_text, absl::string_view expected_reading,
+      std::vector<ReadingSurfaceAlignmentSegment>* alignment) {
+    if (alignment != nullptr) {
+      alignment->clear();
+    }
+    return false;
+  }
+
+  // Explicit Space-only second pass for one unresolved lowercase consonant.
+  // Implementations must leave the current conversion untouched on failure.
+  virtual bool TryAsciiResidualCorrection(const composer::Composer& composer) {
+    return false;
+  }
+
+  // True when the currently selected Mozc conversion changes the reading.
+  // Session uses this single signal to avoid running ordinary Zenz over a
+  // reading-changing correction and accidentally restoring the mistyped key.
+  // Mozc can expose such corrections as SPELLING_CORRECTION,
+  // TYPING_CORRECTION, or KEY_EXPANDED_IN_DICTIONARY. The last one preserves
+  // invisible dictionary-key expansion provenance, including legacy
+  // KeyCorrector results that do not show <もしかして>.
+  virtual bool CurrentConversionHasReadingCorrection() const { return false; }
 
   // Send a transliteration request to the converter.
   virtual bool ConvertToTransliteration(
@@ -230,6 +286,17 @@ class EngineConverterInterface {
       segment_keys->clear();
     }
     return false;
+  }
+
+  // Returns spans in the current Mozc result that are backed by persistent,
+  // context-independent user-segment-history evidence.  The default
+  // implementation reports nothing so lightweight converter implementations
+  // remain source-compatible.
+  virtual void GetUserHistoryConversionPreferences(
+      std::vector<UserHistoryConversionPreference>* preferences) const {
+    if (preferences != nullptr) {
+      preferences->clear();
+    }
   }
 
   // Commit prefix of the preedit string represented by Composer.

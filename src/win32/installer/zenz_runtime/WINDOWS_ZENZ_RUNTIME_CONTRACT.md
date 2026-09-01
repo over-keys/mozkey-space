@@ -31,7 +31,7 @@
 - local cross-build structural gate: PASS
 - historical W1 candidate native GitHub ARM64 gate: PASS
   - this validated the exact ARM64 runtime candidate before MSI integration
-  - workflow run: https://github.com/koyasi777/mozkey/actions/runs/31893874478
+  - workflow run: https://github.com/over-keys/mozkey-space/actions/runs/31893874478
   - workflow commit: `daa13a4df3c4b2ce4da5a51dcb2a29aa3f7f248f`
 - exact final-MSI native validation: PASS
   - CI job: `Native ARM64 installed MSI Zenz audit`

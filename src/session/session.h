@@ -1,34 +1,5 @@
 // Copyright 2010-2021, Google Inc.
 // All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-// Session class of Mozc server.
-
 #ifndef MOZC_SESSION_SESSION_H_
 #define MOZC_SESSION_SESSION_H_
 
@@ -40,7 +11,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "composer/composer.h"
@@ -58,9 +28,7 @@
 #include "session/zenz_output_validator.h"
 #include "transliteration/transliteration.h"
 
-namespace mozc {
-namespace session {
-
+namespace mozc { namespace session {
 struct ZenzProjectedLearningSegment {
   std::string key;
   std::string value;
@@ -72,292 +40,134 @@ class Session {
   explicit Session(const EngineInterface& engine);
   Session(const Session&) = delete;
   Session& operator=(const Session&) = delete;
-
-  bool SendKey(mozc::commands::Command* command);
-
-  // Check if the input key event will be consumed by the session.
-  bool TestSendKey(mozc::commands::Command* command);
-
-  // Perform the SEND_COMMAND command defined commands.proto.
-  bool SendCommand(mozc::commands::Command* command);
-
-  // Turn on IME. Do nothing (but the keyevent is consumed) when IME is already
-  // turned on.
-  bool IMEOn(mozc::commands::Command* command);
-
-  // Turn off IME. Do nothing (but the keyevent is consumed) when IME is already
-  // turned off.
-  bool IMEOff(mozc::commands::Command* command);
-
-  // Unlike IMEOn/IMEOff, these commands 1) can update composition mode, and
-  // 2) are functional even when IME is already turned on/off.
-  // TODO(team): Merge these into IMEOn/Off once b/10250883 is fixed.
-  bool MakeSureIMEOn(mozc::commands::Command* command);
-  bool MakeSureIMEOff(mozc::commands::Command* command);
-
-  bool EchoBack(mozc::commands::Command* command);
-  bool EchoBackAndClearUndoContext(mozc::commands::Command* command);
-  bool DoNothing(mozc::commands::Command* command);
-
-  // Tries deleting the specified candidate from the user prediction history.
-  // The candidate is determined by command.input.command.id, or the current
-  // focused candidate if that ....command.id is not specified. If
-  // that candidate, as a key value pair, doesn't exist in the user history,
-  // nothing happens. Regardless of the result of internal history deletion,
-  // invoking this method has the same effect as ConvertCancel() from the
-  // viewpoint of session, meaning that the session state gets back to
-  // composition.
-  bool DeleteCandidateFromHistory(mozc::commands::Command* command);
-
-  // Resets the composer and clear conversion segments.
-  // History segments will not be cleared.
-  // Therefore if a user commits "風"(かぜ) and Revert method is called,
-  // preedit "ひいた"  will be converted into "邪引いた".
-  bool Revert(mozc::commands::Command* command);
-  // Reset the composer and clear all the segments (including history segments).
-  // Therefore preedit "ひいた"  will *not* be converted into "邪引いた"
-  // on the situation described above.
-  bool ResetContext(mozc::commands::Command* command);
-
-  // Returns the current status such as a composition string, input mode, etc.
-  bool GetStatus(mozc::commands::Command* command);
-
-  // Fills Output::Callback with the CONVERT_REVERSE SessionCommand to
-  // ask the client to send back the SessionCommand to the server.
-  // This function is called when the key event representing the
-  // ConvertReverse keybinding is called.
-  bool RequestConvertReverse(mozc::commands::Command* command);
-
-  // Generates the normal InsertSpace fallback output and attaches a callback
-  // asking the TSF client to reconvert selected application text, if any.
-  bool RequestReconvertSelectionOrInsertSpace(
-      mozc::commands::Command* command);
-
-  // Begins reverse conversion for the given session.  This function
-  // is called when the CONVERT_REVERSE SessionCommand is called.
-  bool ConvertReverse(mozc::commands::Command* command);
-
-  // Fills Output::Callback with the Undo SessionCommand to ask the
-  // client to send back the SessionCommand to the server.
-  // This function is called when the key event representing the
-  // Undo keybinding is called.
-  bool RequestUndo(mozc::commands::Command* command);
-
-  // Undos the commitment.  This function is called when the
-  // UNDO SessionCommand is called.
-  bool Undo(mozc::commands::Command* command);
-
-  bool InsertSpace(mozc::commands::Command* command);
-  bool InsertSpaceToggled(mozc::commands::Command* command);
-  bool InsertSpaceHalfWidth(mozc::commands::Command* command);
-  bool InsertSpaceFullWidth(mozc::commands::Command* command);
-  bool InsertCharacter(mozc::commands::Command* command);
-  bool UpdateComposition(mozc::commands::Command* command);
-  bool UpdateCompositionInternal(mozc::commands::Command* command);
-  bool Delete(mozc::commands::Command* command);
-  bool Backspace(mozc::commands::Command* command);
-  bool EditCancel(mozc::commands::Command* command);
-  bool EditCancelAndIMEOff(mozc::commands::Command* command);
-
-  bool MoveCursorRight(mozc::commands::Command* command);
-  bool MoveCursorLeft(mozc::commands::Command* command);
-  bool MoveCursorToEnd(mozc::commands::Command* command);
-  bool MoveCursorToBeginning(mozc::commands::Command* command);
-  bool MoveCursorTo(mozc::commands::Command* command);
-  bool Convert(mozc::commands::Command* command);
-  // Starts conversion not using user history.  This is used for debugging.
-  bool ConvertWithoutHistory(mozc::commands::Command* command);
-  bool ConvertNext(mozc::commands::Command* command);
-  bool ConvertPrev(mozc::commands::Command* command);
-  // Shows the next page of candidates.
-  bool ConvertNextPage(mozc::commands::Command* command);
-  // Shows the previous page of candidates.
-  bool ConvertPrevPage(mozc::commands::Command* command);
-  bool ConvertCancel(mozc::commands::Command* command);
-  bool PredictAndConvert(mozc::commands::Command* command);
-  // Note: Commit() also triggers zero query suggestion.
-  // TODO(team): Rename this method to CommitWithZeroQuerySuggest.
-  bool Commit(mozc::commands::Command* command);
-  bool CommitNotTriggeringZeroQuerySuggest(commands::Command* command);
-  bool CommitFirstSuggestion(mozc::commands::Command* command);
-  // Select a candidate located by input.command.id and commit.
-  bool CommitCandidate(mozc::commands::Command* command);
-
-  // Commits only the first segment.
-  bool CommitSegment(mozc::commands::Command* command);
-  // Commits some characters at the head of the preedit.
-  bool CommitHead(size_t count, mozc::commands::Command* command);
-  // Commits preedit if in password mode.
-  bool CommitIfPassword(mozc::commands::Command* command);
-
-  bool SegmentFocusRight(mozc::commands::Command* command);
-  bool SegmentFocusLeft(mozc::commands::Command* command);
-  bool SegmentFocusLast(mozc::commands::Command* command);
-  bool SegmentFocusLeftEdge(mozc::commands::Command* command);
-  bool SegmentWidthExpand(mozc::commands::Command* command);
-  bool SegmentWidthShrink(mozc::commands::Command* command);
-
-  // Selects the transliteration candidate.  If the current state is
-  // composition, candidates will be generated with only translitaration
-  // candidates.
-  bool ConvertToHiragana(mozc::commands::Command* command);
-  bool ConvertToFullKatakana(mozc::commands::Command* command);
-  bool ConvertToHalfKatakana(mozc::commands::Command* command);
-  bool ConvertToFullASCII(mozc::commands::Command* command);
-  bool ConvertToHalfASCII(mozc::commands::Command* command);
-  bool ConvertToHalfWidth(mozc::commands::Command* command);
-  // Switch the composition to Hiragana, full-width Katakana or
-  // half-width Katakana by rotation.
-  bool SwitchKanaType(mozc::commands::Command* command);
-
-  // Select the transliteration candidate if the current status is
-  // conversion.  This is same with the above ConvertTo functions.  If
-  // the current state is composition, the display mode is changed to the
-  // transliteration and the composition state still remains.
-  bool DisplayAsHiragana(mozc::commands::Command* command);
-  bool DisplayAsFullKatakana(mozc::commands::Command* command);
-  bool DisplayAsHalfKatakana(mozc::commands::Command* command);
-  bool TranslateFullASCII(mozc::commands::Command* command);
-  bool TranslateHalfASCII(mozc::commands::Command* command);
-  bool TranslateHalfWidth(mozc::commands::Command* command);
-  bool ToggleAlphanumericMode(mozc::commands::Command* command);
-
-  // Switch the composition mode.
-  bool CompositionModeHiragana(mozc::commands::Command* command);
-  bool CompositionModeFullKatakana(mozc::commands::Command* command);
-  bool CompositionModeHalfKatakana(mozc::commands::Command* command);
-  bool CompositionModeFullASCII(mozc::commands::Command* command);
-  bool CompositionModeHalfASCII(mozc::commands::Command* command);
-  bool CompositionModeSwitchKanaType(mozc::commands::Command* command);
-
-  // Specify the input field type.
-  bool SwitchInputFieldType(mozc::commands::Command* command);
-
-  // Let client launch config dialog
-  bool LaunchConfigDialog(mozc::commands::Command* command);
-
-  // Let client launch dictionary tool
-  bool LaunchDictionaryTool(mozc::commands::Command* command);
-
-  // Let client launch word register dialog
-  bool LaunchWordRegisterDialog(mozc::commands::Command* command);
-
-  // Undo if pre-composition is empty. Rewind KANA cycle otherwise.
-  bool UndoOrRewind(mozc::commands::Command* command);
-
-  // Stops key toggling in the composer.
-  bool StopKeyToggling(mozc::commands::Command* command);
-
-  // Special IME action key on mobile, such as Search, Send, Go, and Next
-  // keys.
-  bool ImeAction(mozc::commands::Command* command);
-
-  bool ReportBug(mozc::commands::Command* command);
-
-  void SetConfig(std::shared_ptr<const mozc::config::Config> config);
-
-  void SetKeyMapManager(
-      std::shared_ptr<const mozc::keymap::KeyMapManager> key_map_manager);
-
-  void SetRequest(std::shared_ptr<const mozc::commands::Request> request);
-
-  void SetConfig(mozc::config::Config config) {
+  bool SendKey(commands::Command*);
+  bool TestSendKey(commands::Command*);
+  bool SendCommand(commands::Command*);
+  bool IMEOn(commands::Command*);
+  bool IMEOff(commands::Command*);
+  bool MakeSureIMEOn(commands::Command*);
+  bool MakeSureIMEOff(commands::Command*);
+  bool EchoBack(commands::Command*);
+  bool EchoBackAndClearUndoContext(commands::Command*);
+  bool DoNothing(commands::Command*);
+  bool DeleteCandidateFromHistory(commands::Command*);
+  bool Revert(commands::Command*);
+  bool ResetContext(commands::Command*);
+  bool GetStatus(commands::Command*);
+  bool RequestConvertReverse(commands::Command*);
+  bool RequestReconvertSelectionOrInsertSpace(commands::Command*);
+  bool ConvertReverse(commands::Command*);
+  bool RequestUndo(commands::Command*);
+  bool Undo(commands::Command*);
+  bool InsertSpace(commands::Command*);
+  bool InsertSpaceToggled(commands::Command*);
+  bool InsertSpaceHalfWidth(commands::Command*);
+  bool InsertSpaceFullWidth(commands::Command*);
+  bool InsertCharacter(commands::Command*);
+  bool UpdateComposition(commands::Command*);
+  bool UpdateCompositionInternal(commands::Command*);
+  bool Delete(commands::Command*);
+  bool Backspace(commands::Command*);
+  bool EditCancel(commands::Command*);
+  bool EditCancelAndIMEOff(commands::Command*);
+  bool MoveCursorRight(commands::Command*);
+  bool MoveCursorLeft(commands::Command*);
+  bool MoveCursorToEnd(commands::Command*);
+  bool MoveCursorToBeginning(commands::Command*);
+  bool MoveCursorTo(commands::Command*);
+  bool Convert(commands::Command*);
+  bool ConvertWithoutHistory(commands::Command*);
+  bool ConvertNext(commands::Command*);
+  bool ConvertPrev(commands::Command*);
+  bool ConvertNextPage(commands::Command*);
+  bool ConvertPrevPage(commands::Command*);
+  bool ConvertCancel(commands::Command*);
+  bool PredictAndConvert(commands::Command*);
+  bool Commit(commands::Command*);
+  bool CommitNotTriggeringZeroQuerySuggest(commands::Command*);
+  bool CommitFirstSuggestion(commands::Command*);
+  bool CommitCandidate(commands::Command*);
+  bool CommitSegment(commands::Command*);
+  bool CommitHead(size_t, commands::Command*);
+  bool CommitIfPassword(commands::Command*);
+  bool SegmentFocusRight(commands::Command*);
+  bool SegmentFocusLeft(commands::Command*);
+  bool SegmentFocusLast(commands::Command*);
+  bool SegmentFocusLeftEdge(commands::Command*);
+  bool SegmentWidthExpand(commands::Command*);
+  bool SegmentWidthShrink(commands::Command*);
+  bool ConvertToHiragana(commands::Command*);
+  bool ConvertToFullKatakana(commands::Command*);
+  bool ConvertToHalfKatakana(commands::Command*);
+  bool ConvertToFullASCII(commands::Command*);
+  bool ConvertToHalfASCII(commands::Command*);
+  bool ConvertToHalfWidth(commands::Command*);
+  bool SwitchKanaType(commands::Command*);
+  bool DisplayAsHiragana(commands::Command*);
+  bool DisplayAsFullKatakana(commands::Command*);
+  bool DisplayAsHalfKatakana(commands::Command*);
+  bool TranslateFullASCII(commands::Command*);
+  bool TranslateHalfASCII(commands::Command*);
+  bool TranslateHalfWidth(commands::Command*);
+  bool ToggleAlphanumericMode(commands::Command*);
+  bool CompositionModeHiragana(commands::Command*);
+  bool CompositionModeFullKatakana(commands::Command*);
+  bool CompositionModeHalfKatakana(commands::Command*);
+  bool CompositionModeFullASCII(commands::Command*);
+  bool CompositionModeHalfASCII(commands::Command*);
+  bool CompositionModeSwitchKanaType(commands::Command*);
+  bool SwitchInputFieldType(commands::Command*);
+  bool LaunchConfigDialog(commands::Command*);
+  bool LaunchDictionaryTool(commands::Command*);
+  bool LaunchWordRegisterDialog(commands::Command*);
+  bool UndoOrRewind(commands::Command*);
+  bool StopKeyToggling(commands::Command*);
+  bool ImeAction(commands::Command*);
+  bool ReportBug(commands::Command*);
+  void SetConfig(std::shared_ptr<const config::Config>);
+  void SetKeyMapManager(std::shared_ptr<const keymap::KeyMapManager>);
+  void SetRequest(std::shared_ptr<const commands::Request>);
+  void SetConfig(config::Config config) {
     SetConfig(std::make_shared<const config::Config>(std::move(config)));
   }
-
-  void SetRequest(mozc::commands::Request request) {
-    SetRequest(
-        std::make_shared<const mozc::commands::Request>(std::move(request)));
+  void SetRequest(commands::Request request) {
+    SetRequest(std::make_shared<const commands::Request>(std::move(request)));
   }
-
-  void SetTable(std::shared_ptr<const mozc::composer::Table> table);
-
-  // Set client capability for this session.  Used by unittest.
-  void set_client_capability(mozc::commands::Capability capability);
-
-  // Set application information for this session.
-  void set_application_info(mozc::commands::ApplicationInfo application_info);
-
-  // Get application information
-  const mozc::commands::ApplicationInfo& application_info() const;
-
-  // Return the time when this instance was created.
+  void SetTable(std::shared_ptr<const composer::Table>);
+  void set_client_capability(commands::Capability);
+  void set_application_info(commands::ApplicationInfo);
+  const commands::ApplicationInfo& application_info() const;
   absl::Time create_session_time() const;
-
-  // return 0 (default value) if no command is executed in this session.
   absl::Time last_command_time() const;
-
-  // TODO(komatsu): delete this function.
-  // For unittest only
-  mozc::composer::Composer* get_internal_composer_only_for_unittest();
-
+  composer::Composer* get_internal_composer_only_for_unittest();
   const ImeContext& context() const;
 
  private:
   friend class SessionTestPeer;
-
   std::unique_ptr<ImeContext> context_;
 
-  // True while the current CONVERSION state was started by live conversion.
-  // In this mode, ordinary character input should keep editing the underlying
-  // composition instead of committing the conversion.
   bool live_conversion_active_ = false;
-
-  // True while a live conversion request has been scheduled but not applied yet.
   bool live_conversion_pending_ = false;
-
-  // Monotonically increasing generation used to ignore stale delayed callbacks.
   uint32_t live_conversion_generation_ = 0;
   uint32_t pending_live_conversion_generation_ = 0;
-
-  // Reading at the time when the current delayed live conversion was scheduled.
   std::string pending_live_conversion_key_;
-
-  // Original SEND_KEY input that scheduled the current delayed live conversion.
-  // Delayed APPLY_LIVE_CONVERSION callbacks are SEND_COMMAND inputs, so this is
-  // reused to keep passive suggestion generation consistent after the delay.
   commands::Input pending_live_conversion_input_;
-
-  // Passive suggestion window generated for the current delayed live conversion.
-  // It is reused if the delayed callback cannot regenerate suggestions, which
-  // prevents the visible suggestion window from disappearing at materialization.
   commands::CandidateWindow pending_live_conversion_suggestion_candidate_window_;
-
-  // Passive suggestion window currently associated with live conversion output.
-  // Some delayed callbacks re-render live conversion without regenerating
-  // suggestions; this cache keeps the passive suggestion window stable there.
   commands::CandidateWindow live_conversion_suggestion_candidate_window_;
-
-  // The reading used for the latest successful live conversion.
   std::string live_conversion_key_;
-
-  // The raw preedit string at the time of the latest successful live
-  // conversion. This is used to compute the pending raw suffix.
   std::string live_conversion_preedit_;
-
-  // The visible converted preedit generated by the latest live conversion.
-  // This is used as the stable converted prefix while a delayed live
-  // conversion is pending.
   std::string live_conversion_value_;
-
-  // The full preedit generated by the latest successful live conversion.
-  // Pending live conversion reuses its segment structure and annotations
-  // to avoid display-attribute flicker.
   commands::Preedit live_conversion_preedit_output_;
-
-  // User-dictionary surfaces selected by the latest normal live conversion.
-  // Zenz live correction may improve the surrounding sentence, but these
-  // surfaces must be preserved or safely repaired before adoption.
   std::vector<ProtectedConversionSpan> live_conversion_protected_spans_;
 
-  // Set only after an explicit conversion Cancel command, such as Esc or Ctrl+Z
-  // in the default keymap.  If the user commits the unchanged hiragana preedit
-  // immediately after that cancel, the raw preedit should be learned like an
-  // explicitly selected non-default candidate, matching F6 -> Enter behavior.
   bool pending_reranked_preedit_commit_after_convert_cancel_ = false;
   std::string pending_reranked_preedit_commit_key_;
   std::string pending_reranked_preedit_commit_value_;
   std::vector<std::string> pending_reranked_preedit_commit_segment_keys_;
+
+  // Explicit/Space conversion uses the same async Zenz pipeline as live
+  // conversion without changing the underlying Mozc conversion state.
+  bool normal_conversion_zenz_active_ = false;
 
   struct PendingZenzLiveCorrection {
     uint32_t generation = 0;
@@ -369,48 +179,33 @@ class Session {
     std::string symbol_style_source;
     std::string prompt;
     std::vector<ProtectedConversionSpan> protected_spans;
+    commands::Preedit mozc_preedit_output;
     absl::Time issued_at;
     bool pending = false;
     bool submitted = false;
+    bool from_live_conversion = true;
+    // Whether this conversion is allowed to consult persistent history.
+    // CONVERT_WITHOUT_HISTORY sets this false while still allowing the
+    // committed result to be learned afterward.
+    bool use_conversion_history = false;
     uint32_t poll_count = 0;
   };
-
   uint32_t zenz_live_generation_ = 0;
   PendingZenzLiveCorrection pending_zenz_live_;
 
   struct PendingZenzFeedback {
-    enum class Action {
-      kNone,
-      kAccepted,
-      kRejected,
-    };
-
+    enum class Action { kNone, kAccepted, kRejected };
     bool pending = false;
     Action action = Action::kNone;
     std::string key;
     std::string context_class;
     std::string value;
     std::string reason;
-
-    // Set when a rejected Zenz candidate is followed by a real commit.
-    // This lets ambiguous operations such as Space revert become neutral when
-    // the final committed text is identical to the Zenz value.
     bool has_final_committed_value = false;
     std::string final_committed_value;
-
-    // Snapshot of reverse-projected segment-local learning pairs derived from
-    // the Mozc live-conversion segments that were visible when the Zenz result
-    // was accepted.  These pairs are learned only through Mozc history; they
-    // are never written to ZenzFeedbackStore.
-    std::vector<std::pair<std::string, std::string>> reverse_learning_segments;
-
-    // Full projected Mozc live-conversion segment sequence after applying the
-    // accepted Zenz result.  This is learned as one external multi-segment
-    // conversion commit so Mozc history can observe phrase-boundary context.
-    std::vector<ZenzProjectedLearningSegment>
-        reverse_projected_learning_segments;
+    std::vector<std::pair<std::string,std::string>> reverse_learning_segments;
+    std::vector<ZenzProjectedLearningSegment> reverse_projected_learning_segments;
   };
-
   PendingZenzFeedback pending_zenz_feedback_;
 
   struct PendingDirectCommitLearning {
@@ -418,14 +213,8 @@ class Session {
     std::string key;
     std::string value;
     std::string reason;
-
-    // Snapshot immediately after normal CommitInternal().
-    // It preserves the converter's revert_id and committed Segments so that
-    // delayed cancellation can revert the original rich Mozc learning even
-    // after the current converter is reset by CommitStringDirectly().
     std::unique_ptr<ImeContext> revert_context;
   };
-
   PendingDirectCommitLearning pending_direct_commit_learning_;
 
   uint32_t zenz_live_visible_generation_ = 0;
@@ -436,6 +225,15 @@ class Session {
   std::string zenz_live_context_class_;
   std::string zenz_live_left_context_;
   commands::Preedit zenz_live_preedit_output_;
+  commands::Preedit zenz_live_mozc_preedit_output_;
+  bool zenz_live_from_live_conversion_ = true;
+
+  // Volatile Zenz-only snapshot of the immediate left context. Native
+  // authoritative context re-anchors it; committed result strings extend it;
+  // it is used only while native preceding context is unavailable and input
+  // continuity has not been broken. Never persisted or logged.
+  std::string zenz_continuation_left_context_;
+  std::optional<int32_t> zenz_continuation_revision_;
 
   ZenzContextAssembler zenz_context_assembler_;
   ZenzContextSanitizer zenz_context_sanitizer_;
@@ -454,300 +252,155 @@ class Session {
     std::string live_value;
     commands::Preedit live_preedit_output;
   };
-
   struct UndoEntry {
     std::unique_ptr<ImeContext> context;
     std::optional<PendingLiveConversionUndoState> pending_live_conversion;
     bool revert_converter_on_undo = true;
   };
-
-  // Undo stack. *begin is the oldest, and *back is the newest.
   std::deque<UndoEntry> undo_contexts_;
 
-  std::unique_ptr<ImeContext> CreateContext(
-      const EngineInterface& engine) const;
-
+  std::unique_ptr<ImeContext> CreateContext(const EngineInterface&) const;
   void PushUndoContext();
   void PushDirectCommitUndoContext();
   void PopUndoContext();
   bool ShouldRevertConverterOnUndo() const;
-  // Clear the undo context.
-  // This should be called when the composer's preedit or cursor position
-  // is updated by non-undo related operations. This achieves intuitive
-  // behavior, which clears the undo context on the user's edit operation.
   void ClearUndoContext();
   bool HasUndoContext() const;
-
-  // Returns true if |key| is assigned to Cancel in the current composition or
-  // conversion keymap.
-  bool IsCancelKeyForCompositionOrConversion(
-      const mozc::commands::KeyEvent& key) const;
-
-  // Set command.output.status.undo_available to true if HasUndoContext()==true.
-  // Otherwise no-op.
-  // Some code treats empty Status and default Status differently so
-  // we don't want to create a new Status instance if not required.
-  void MaybeSetUndoStatus(commands::Command* command) const;
-
-  // Return true if full width space is preferred in the given new input
-  // state than half width space. When |input| does not have new input mode,
-  // the current mode will be considered.
-  bool IsFullWidthInsertSpace(const mozc::commands::Input& input) const;
-
-  bool EditCancelOnPasswordField(mozc::commands::Command* command);
-
+  bool IsCancelKeyForCompositionOrConversion(const commands::KeyEvent&) const;
+  void MaybeSetUndoStatus(commands::Command*) const;
+  bool IsFullWidthInsertSpace(const commands::Input&) const;
+  bool EditCancelOnPasswordField(commands::Command*);
   void MaybeSetPendingRerankedPreeditCommitAfterConvertCancel();
   void ClearPendingRerankedPreeditCommitAfterConvertCancel();
   bool ShouldMarkPreeditCommitAsRerankedAfterConvertCancel() const;
   bool ShouldMarkPreeditCommitAsRerankedAfterConvertCancel(
-      const composer::Composer& composer) const;
+      const composer::Composer&) const;
   bool CommitPendingRerankedPreeditAfterConvertCancelForDirectCommit(
-      const composer::Composer& composer,
-      const commands::Context& context,
-      absl::string_view reason);
-
-  bool ConvertToTransliteration(
-      mozc::commands::Command* command,
-      mozc::transliteration::TransliterationType type);
-
-  // Select a candidate located by input.command.id.  This command
-  // would not be used from SendKey but used from SendCommand because
-  // it requires the argument id.
-  bool SelectCandidate(mozc::commands::Command* command);
-
-  // Calls EngineConverter::ConmmitHeadToFocusedSegments()
-  // and deletes characters from the composer.
-  void CommitHeadToFocusedSegmentsInternal(const commands::Context& context);
-
-  // Commits without EngineConverter.
-  void CommitCompositionDirectly(commands::Command* command);
-  std::pair<std::string, std::string>
+      const composer::Composer&, const commands::Context&, absl::string_view);
+  bool ConvertToTransliteration(commands::Command*,
+      transliteration::TransliterationType);
+  bool SelectCandidate(commands::Command*);
+  void CommitHeadToFocusedSegmentsInternal(const commands::Context&);
+  void CommitCompositionDirectly(commands::Command*);
+  std::pair<std::string,std::string>
   GetDirectCommitStringsWithDirectCommitSuffixFallback(
-      const composer::Composer& composer_before_insert,
-      const commands::KeyEvent& key) const;
-  void CommitSourceTextDirectly(commands::Command* command);
-  void CommitRawTextDirectly(commands::Command* command);
-  void CommitStringDirectly(absl::string_view key, absl::string_view preedit,
-                            commands::Command* command);
-  bool CommitInternal(commands::Command* command,
-                      bool trigger_zero_query_suggest);
+      const composer::Composer&, const commands::KeyEvent&) const;
+  void CommitSourceTextDirectly(commands::Command*);
+  void CommitRawTextDirectly(commands::Command*);
+  void CommitStringDirectly(absl::string_view,absl::string_view,commands::Command*);
+  bool CommitInternal(commands::Command*,bool);
+  bool Suggest(const commands::Input&);
+  bool TryCancelConvertReverse(commands::Command*);
+  bool HighlightCandidate(commands::Command*);
+  bool SelectCandidateInternal(commands::Command*);
+  bool MaybeSelectCandidate(commands::Command*);
 
-  // Calls EngineConverter::Suggest if the condition is applicable to
-  // call it.  True is returned when EngineConverter::Suggest is
-  // called and results exist.  False is returned when
-  // EngineConverter::Suggest is not called or no results exist.
-  bool Suggest(const mozc::commands::Input& input);
-
-  // Commands like EditCancel should restore the original string used for
-  // the reverse conversion without any modification.
-  // Returns true if the |source_text| is committed to cancel reconversion.
-  // Returns false if this function has nothing to do.
-  bool TryCancelConvertReverse(mozc::commands::Command* command);
-
-  // Set the focus to the candidate located by input.command.id.  This
-  // command would not be used from SendKey but used from SendCommand
-  // because it requires the argument id.  The difference from
-  // SelectCandidate is that HighlightCandidate does not close the
-  // candidate window while SelectCandidate closes the candidate
-  // window.
-  bool HighlightCandidate(mozc::commands::Command* command);
-
-  // The internal implementation of both SelectCandidate and HighlightCandidate.
-  bool SelectCandidateInternal(mozc::commands::Command* command);
-
-  // If the command is a shortcut to select a candidate from a list,
-  // Process it and return true, otherwise return false.
-  bool MaybeSelectCandidate(mozc::commands::Command* command);
-
-  // Live conversion.
-  bool MaybeStartLiveConversion(mozc::commands::Command* command);
-  bool MaybeScheduleLiveConversion(mozc::commands::Command* command);
-  bool ApplyDelayedLiveConversion(mozc::commands::Command* command);
-  bool IgnoreStaleDelayedLiveConversion(mozc::commands::Command* command);
+  bool MaybeStartLiveConversion(commands::Command*);
+  bool MaybeScheduleLiveConversion(commands::Command*);
+  bool ApplyDelayedLiveConversion(commands::Command*);
+  bool IgnoreStaleDelayedLiveConversion(commands::Command*);
   void CancelPendingLiveConversion();
   void ClearLiveConversionState();
   void CancelLiveConversionForEditing();
-  // Starts prediction candidate selection from a live-conversion-backed
-  // CONVERSION state.  Other conversion keys keep following their existing
-  // keymap-defined conversion path, while Tab-style prediction keys focus
-  // prediction candidates.
-  bool PredictAndConvertFromLiveConversion(mozc::commands::Command* command);
-  // Adds a non-focused suggestion candidate window to live-conversion output
-  // without mutating the real converter state.  This keeps live conversion as a
-  // CONVERSION state for normal conversion keys while still showing passive
-  // suggestions.
+  bool PredictAndConvertFromLiveConversion(commands::Command*);
   bool AttachLiveConversionSuggestionCandidateWindow(
-      const mozc::commands::Input& input,
-      mozc::commands::Output* output);
-  bool AttachCachedLiveConversionSuggestionCandidateWindow(
-      mozc::commands::Output* output);
-  bool CommitLiveConversionResult(mozc::commands::Command* command);
-  std::pair<std::string, std::string>
-  GetPendingLiveConversionDisplayCommitStrings() const;
-  bool CommitPendingLiveConversionDisplayDirectly(
-      mozc::commands::Command* command);
-  bool CommitPendingLiveConversionDisplayForSubmit(
-      mozc::commands::Command* command);
-  bool OutputPendingLiveConversion(mozc::commands::Command* command) const;
-  void AttachDelayedLiveConversionCallback(
-      mozc::commands::Command* command) const;
+      const commands::Input&,commands::Output*);
+  bool AttachCachedLiveConversionSuggestionCandidateWindow(commands::Output*);
+  bool CommitLiveConversionResult(commands::Command*);
+  std::pair<std::string,std::string> GetPendingLiveConversionDisplayCommitStrings() const;
+  bool CommitPendingLiveConversionDisplayDirectly(commands::Command*);
+  bool CommitPendingLiveConversionDisplayForSubmit(commands::Command*);
+  bool OutputPendingLiveConversion(commands::Command*) const;
+  void AttachDelayedLiveConversionCallback(commands::Command*) const;
 
-  // zenz live correction.
-  bool MaybeApplyZenzFeedbackLiveCorrection(
-      mozc::commands::Command* command);
-  bool MaybeScheduleZenzLiveCorrection(mozc::commands::Command* command);
+  // Zenz correction shared by live and explicit/Space conversion.
+  bool HasActiveZenzCorrectionSource() const;
+  bool MaybeStartZenzCorrectionForNormalConversion(
+      absl::string_view composition, absl::string_view preedit,
+      bool use_conversion_history, commands::Command* command);
+  bool CanUseZenzContinuationContextCache() const;
+  bool HasZenzContextFeature(const commands::Context&,
+                             absl::string_view) const;
+  void SetZenzContinuationLeftContext(absl::string_view);
+  void PrepareZenzContinuationPrecedingContext(commands::Context*);
+  void UpdateZenzContinuationContextCacheFromOutput(
+      const commands::Command&);
+  void InvalidateZenzContinuationContextCacheForSessionCommand(
+      commands::SessionCommand::CommandType);
+  bool MaybeScheduleZenzCorrection(commands::Command*,
+                                   bool use_conversion_history);
   void AttachZenzLiveCorrectionStartCallback(
-      mozc::commands::Command* command) const;
-  void AttachZenzLiveCorrectionPollCallback(
-      mozc::commands::Command* command) const;
-  bool ApplyZenzLiveCorrection(mozc::commands::Command* command);
-  bool AdvancePendingZenzLiveCorrection(
-      mozc::commands::Command* command,
-      bool refresh_output_on_submit);
-  bool IsCurrentZenzLiveCorrectionCallback(
-      const mozc::commands::Command& command) const;
-  bool OutputCurrentLiveConversionWithZenzPending(
-      mozc::commands::Command* command);
-  bool OutputCurrentLiveConversionAfterZenzStop(
-      mozc::commands::Command* command,
-      absl::string_view debug);
+      commands::Command* command, const uint32_t delay_msec) const;
+  void AttachZenzLiveCorrectionPollCallback(commands::Command*) const;
+  bool ApplyZenzLiveCorrection(commands::Command*);
+  bool AdvancePendingZenzLiveCorrection(commands::Command*,bool);
+  bool IsCurrentZenzLiveCorrectionCallback(const commands::Command&) const;
+  bool OutputCurrentLiveConversionWithZenzPending(commands::Command*);
+  bool OutputCurrentLiveConversionAfterZenzStop(commands::Command*,absl::string_view);
   ZenzLiveCorrector* EnsureZenzLiveCorrector();
-  bool ApplyZenzLiveCorrectionResult(
-      const ZenzLiveResponse& response,
-      mozc::commands::Command* command);
-  bool OutputZenzLiveCorrection(
-      absl::string_view value,
-      mozc::commands::Command* command);
-  bool RevertZenzLiveCorrectionToNormalConversion(
-      mozc::commands::Command* command);
-  bool CommitZenzLiveCorrectionResult(mozc::commands::Command* command);
+  bool ApplyZenzLiveCorrectionResult(const ZenzLiveResponse&,commands::Command*);
+  bool OutputZenzLiveCorrection(absl::string_view,commands::Command*);
+  bool RevertZenzLiveCorrectionToNormalConversion(commands::Command*);
+  bool CommitZenzLiveCorrectionResult(commands::Command*);
 
-  std::string BuildZenzFeedbackContextClass(
-      absl::string_view left_context) const;
-  void RecordZenzLiveCorrectionAccepted(
-      absl::string_view key,
-      absl::string_view left_context,
-      absl::string_view value);
-
-  bool MaybeLearnZenzCandidateToMozcHistory(
-      absl::string_view key,
-      absl::string_view value);
+  std::string BuildZenzFeedbackContextClass(absl::string_view) const;
+  bool MaybeLearnZenzCandidateToMozcHistory(absl::string_view,absl::string_view);
   int MaybeLearnZenzReverseSegmentsToMozcHistory(
-      const std::vector<std::pair<std::string, std::string>>& segments);
+      const std::vector<std::pair<std::string,std::string>>&);
   int MaybeLearnZenzProjectedSegmentsToMozcHistory(
-      const std::vector<ZenzProjectedLearningSegment>& segments);
+      const std::vector<ZenzProjectedLearningSegment>&);
 
-  bool SetPendingDirectCommitLearning(
-      absl::string_view key,
-      absl::string_view value,
-      absl::string_view reason);
+  bool SetPendingDirectCommitLearning(absl::string_view,absl::string_view,
+                                      absl::string_view);
   bool SetPendingDirectCommitLearningFromCommittedResult(
-      const mozc::commands::Command& command,
-      absl::string_view reason);
-  void ConfirmPendingDirectCommitLearning(absl::string_view reason);
-  void DiscardPendingDirectCommitLearning(absl::string_view reason);
-  void HandlePendingDirectCommitLearningForKeyEvent(
-      const mozc::commands::KeyEvent& key);
+      const commands::Command&,absl::string_view);
+  void ConfirmPendingDirectCommitLearning(absl::string_view);
+  void DiscardPendingDirectCommitLearning(absl::string_view);
+  void HandlePendingDirectCommitLearningForKeyEvent(const commands::KeyEvent&);
   void HandlePendingDirectCommitLearningForSessionCommand(
-      mozc::commands::SessionCommand::CommandType type);
+      commands::SessionCommand::CommandType);
 
   bool HasVisibleZenzLiveCorrection() const;
-  void SetPendingZenzFeedbackAccepted(
-      absl::string_view key,
-      absl::string_view context_class,
-      absl::string_view value);
-  void SetPendingZenzFeedbackRejected(absl::string_view reason);
-  void ObservePendingZenzFeedbackCommittedResult(
-      const mozc::commands::Command& command,
-      absl::string_view reason);
+  void SetPendingZenzFeedbackAccepted(absl::string_view,absl::string_view,
+                                      absl::string_view);
+  void SetPendingZenzFeedbackRejected(absl::string_view);
+  void ObservePendingZenzFeedbackCommittedResult(const commands::Command&,
+                                                  absl::string_view);
   void ConfirmPendingZenzFeedback();
-  void DiscardPendingZenzFeedback(absl::string_view reason);
-  void HandlePendingZenzFeedbackForKeyEvent(
-      const mozc::commands::KeyEvent& key);
+  void DiscardPendingZenzFeedback(absl::string_view);
+  void HandlePendingZenzFeedbackForKeyEvent(const commands::KeyEvent&);
   void HandlePendingZenzFeedbackForSessionCommand(
-      mozc::commands::SessionCommand::CommandType type);
-
+      commands::SessionCommand::CommandType);
   void CancelPendingZenzLiveCorrection();
   void ClearZenzLiveCorrectionState();
 
-  // Fill command's output according to the current state.
-  void OutputFromState(mozc::commands::Command* command);
-  void Output(mozc::commands::Command* command);
-  void OutputMode(mozc::commands::Command* command) const;
-  void OutputComposition(mozc::commands::Command* command) const;
-  void OutputKey(mozc::commands::Command* command) const;
-
-  bool ExecuteCommandSequence(
-      const mozc::keymap::CommandSequence& command_sequence,
-      mozc::commands::Command* command);
-
+  void OutputFromState(commands::Command*);
+  void Output(commands::Command*);
+  void OutputMode(commands::Command*) const;
+  void OutputComposition(commands::Command*) const;
+  void OutputKey(commands::Command*) const;
+  bool ExecuteCommandSequence(const keymap::CommandSequence&,commands::Command*);
   bool ExecuteCommandSequenceWithInitialOutput(
-      const mozc::keymap::CommandSequence& command_sequence,
-      const mozc::commands::Output* initial_output,
-      mozc::commands::Command* command);
-
-  bool ExecuteDirectInputCommand(
-      mozc::keymap::DirectInputState::Commands key_command,
-      mozc::commands::Command* command);
-
-  bool ExecutePrecompositionCommand(
-      mozc::keymap::PrecompositionState::Commands key_command,
-      mozc::commands::Command* command);
-
-  bool ExecuteCompositionCommand(
-      mozc::keymap::CompositionState::Commands key_command,
-      mozc::commands::Command* command);
-
-  bool ExecuteConversionCommand(
-      mozc::keymap::ConversionState::Commands key_command,
-      mozc::commands::Command* command);
-
-  bool ExecuteCommandName(const std::string& command_name,
-                          mozc::commands::Command* command);
-
-  bool SendKeyDirectInputState(mozc::commands::Command* command);
-  bool SendKeyPrecompositionState(mozc::commands::Command* command);
-  bool SendKeyCompositionState(mozc::commands::Command* command);
-  bool SendKeyConversionState(mozc::commands::Command* command);
-
-  bool MoveCursorToEndInternal(mozc::commands::Command* command,
-                               bool clear_undo);
-
-  // update last_command_time;
+      const keymap::CommandSequence&,const commands::Output*,commands::Command*);
+  bool ExecuteDirectInputCommand(keymap::DirectInputState::Commands,commands::Command*);
+  bool ExecutePrecompositionCommand(keymap::PrecompositionState::Commands,commands::Command*);
+  bool ExecuteCompositionCommand(keymap::CompositionState::Commands,commands::Command*);
+  bool ExecuteConversionCommand(keymap::ConversionState::Commands,commands::Command*);
+  bool ExecuteCommandName(const std::string&,commands::Command*);
+  bool SendKeyDirectInputState(commands::Command*);
+  bool SendKeyPrecompositionState(commands::Command*);
+  bool SendKeyCompositionState(commands::Command*);
+  bool SendKeyConversionState(commands::Command*);
+  bool MoveCursorToEndInternal(commands::Command*,bool);
   void UpdateTime();
-
-  // update preferences only affecting this session.
-  void UpdatePreferences(mozc::commands::Command* command);
-
-  // Modify input of SendKey, TestSendKey, and SendCommand.
-  void TransformInput(mozc::commands::Input* input);
-
-  // ensure session status is not DIRECT.
-  // if session status is DIRECT, set the status to PRECOMPOSITION.
+  void UpdatePreferences(commands::Command*);
+  void TransformInput(commands::Input*);
   void EnsureIMEIsOn();
-
-  // return true if |key_event| is a triggering key_event of
-  // AutoIMEConversion.
-  bool CanStartAutoConversion(const mozc::commands::KeyEvent& key_event) const;
-
-  // return true if the pending live conversion display should be committed
-  // directly after inserting the configured punctuation/symbol key.
-  bool CanDirectCommitPendingLiveConversionBeforeInsert(
-      const mozc::commands::KeyEvent& key_event) const;
-
-  // return true if the current composition should be committed directly
-  // after typing the configured punctuation/symbol key.
-  bool CanDirectCommitAfterPunctuation(
-      const mozc::commands::KeyEvent& key_event) const;
-
-  // Handles KeyEvent::activated to support indirect IME on/off.
-  bool HandleIndirectImeOnOff(mozc::commands::Command* command);
-
-  // Commits the raw text of the composition.
-  bool CommitRawText(commands::Command* command);
+  bool CanStartAutoConversion(const commands::KeyEvent&) const;
+  bool CanDirectCommitPendingLiveConversionBeforeInsert(const commands::KeyEvent&) const;
+  bool CanDirectCommitAfterPunctuation(const commands::KeyEvent&) const;
+  bool HandleIndirectImeOnOff(commands::Command*);
+  bool CommitRawText(commands::Command*);
 };
-
-}  // namespace session
-}  // namespace mozc
-
+} }  // namespace mozc::session
 #endif  // MOZC_SESSION_SESSION_H_

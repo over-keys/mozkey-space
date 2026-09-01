@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/koyasi777/mozkey/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/koyasi777/mozkey?include_prereleases&label=release"></a>
+  <a href="https://github.com/over-keys/mozkey-space/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/over-keys/mozkey-space?include_prereleases&label=release"></a>
   <img alt="Based on Mozc" src="https://img.shields.io/badge/based%20on-Mozc-88A2DD">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-Zenz-53D4C7">
   <img alt="Release build" src="https://img.shields.io/badge/release-Windows%20MSI-178B8B">
@@ -20,6 +20,8 @@
 <br>
 
 Mozkey（もずきー）は [google/mozc](https://github.com/google/mozc) をベースにした非公式フォークです。
+
+`mozkey-space` は、通常のライブ変換だけでなく、Spaceキーによる通常変換でもローカル Zenz 補正を利用できることを中心に整備しています。
 
 本 fork は、主に自分の Windows / macOS 環境で日常的に使うために、Mozc に入力補助・ライブ変換・文脈補正・ローカル Zenz 補正・オフライン配布向けの調整を加えたものです。
 
@@ -41,7 +43,7 @@ Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル
 
 Linux については、upstream Mozc 自体は対応していますが、この fork 固有の Zenz 構成や追加機能はまだ実機確認できていません。
 
-Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mozkey/releases) からダウンロードできます。
+Windows 用のビルド済み MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
 
 - 通常の x64 Windows では、Releases にある最新の `Mozkey_v*_x64.msi` を使用してください。
 - Windows on Arm（ARM64）では、その release に ARM64 と明記された MSI が含まれる場合は ARM64 版を使用してください。ARM64 MSI は Mozkey 本体、`mozc_zenz_scorer.exe`、`llama-server.exe` を native ARM64 payload として構成します。
@@ -105,6 +107,7 @@ Windows 用のビルド済み MSI は [Releases](https://github.com/koyasi777/mo
 - `には` や `してたの` のような自然な機能語かな列が、`二は` や `して他の` のような 1 文字漢字候補に過剰変換される挙動を抑制
 - `にじ` のような 2 文字ひらがな入力で、`に|じ` のような短すぎる文節分割が全体候補を隠す挙動を抑制
 - llama.cpp ベースのローカル Zenz live correction pipeline を追加
+- ライブ変換を OFF にしていても、Space キーによる通常変換の結果へローカル Zenz 補正を適用
 - Zenz 文脈処理を共通化し、通常 Mozc の `preceding_text` / `following_text` とは分離した `zenz_preceding_text` / `zenz_following_text` を使用
 - Zenz が必要とする preceding / following の長さを Server から Client へ通知し、Windows TSF / macOS IMK では要求された方向・長さだけ surrounding text を追加取得
 - Zenz の前方・後方文脈を用途に応じて独立して選択し、Unicode-aware な文字種判定と privacy filtering を共通処理として適用
@@ -664,7 +667,7 @@ In addition to Windows, the Zenz context / runtime path has been tested on real 
 
 Linux is supported by upstream Mozc itself, but this fork-specific Zenz configuration and added features have not yet been tested on a real Linux environment.
 
-Windows MSI packages are available from [Releases](https://github.com/koyasi777/mozkey/releases).
+Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
 
 - On x64 Windows, use the latest `Mozkey_v*_x64.msi` from Releases.
 - On Windows on Arm (ARM64), when a release contains an MSI explicitly labeled ARM64, use the ARM64 package. The ARM64 MSI packages Mozkey, `mozc_zenz_scorer.exe`, and `llama-server.exe` as native ARM64 payloads.
@@ -732,7 +735,7 @@ Main features added in this fork
 - Keeps large generated dictionary files out of Git and switches Bazel dictionary inputs to locally generated files
 - Reduces over-conversion of natural functional kana sequences such as `には` and `してたの`
 - Reduces cases where short two-character hiragana inputs such as `にじ` are split too aggressively
-- Adds a local Zenz live correction pipeline based on llama.cpp
+- Adds a local Zenz correction pipeline based on llama.cpp for live conversion and ordinary Space conversion
 - Uses dedicated `zenz_preceding_text` / `zenz_following_text` fields for Zenz context without changing the normal Mozc `preceding_text` / `following_text` semantics
 - Lets the Server request the required preceding / following lengths and lets Windows TSF / macOS IMK acquire only the requested directions and lengths
 - Selects preceding and following Zenz context independently and applies shared Unicode-aware script analysis and privacy filtering
@@ -818,9 +821,13 @@ The live conversion feature can be enabled or disabled from the config dialog. T
 
 ### Zenz live correction
 
-When both live conversion and Zenz live correction are enabled, this fork first
-shows the normal Mozc live conversion result and then asynchronously asks a local
-Zenz runtime to refine the visible preedit.
+When Zenz correction is enabled, this fork can refine both the normal live
+conversion result and an ordinary conversion started with Space or Convert.
+With live conversion enabled, Mozkey first shows the normal Mozc live conversion
+result and then asynchronously asks a local Zenz runtime to refine the visible
+preedit. With live conversion disabled, the same Zenz path is started after the
+ordinary Space conversion, while the normal Mozc candidate remains the safe
+fallback.
 
 On Windows, the Zenz request is sent from `mozc_server` to
 `mozc_zenz_scorer.exe` through a Windows named pipe. The scorer then calls the

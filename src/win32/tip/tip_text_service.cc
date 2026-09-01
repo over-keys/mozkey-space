@@ -186,7 +186,7 @@ constexpr GUID kTipFunctionProvider = {
 
 #else  // GOOGLE_JAPANESE_INPUT_BUILD
 
-constexpr char kHelpUrl[] = "https://github.com/koyasi777/mozkey";
+constexpr char kHelpUrl[] = "https://github.com/over-keys/mozkey-space";
 constexpr wchar_t kTaskWindowClassName[] =
     L"Mozc Immersive Task Message Window";
 

@@ -86,6 +86,14 @@ class EngineConverter : public EngineConverterInterface {
   // Gets reading text (e.g. from "猫" to "ねこ").
   bool GetReadingText(absl::string_view source_text,
                       std::string* reading) override;
+  bool IsReadingEquivalent(absl::string_view source_text,
+                           absl::string_view expected_reading) override;
+
+  bool GetUniqueReadingSurfaceAlignment(
+      absl::string_view source_text, absl::string_view expected_reading,
+      std::vector<ReadingSurfaceAlignmentSegment>* alignment) override;
+  bool TryAsciiResidualCorrection(const composer::Composer& composer) override;
+  bool CurrentConversionHasReadingCorrection() const override;
 
   // Sends a transliteration request to the converter.
   bool ConvertToTransliteration(
@@ -205,6 +213,8 @@ class EngineConverter : public EngineConverterInterface {
                      const std::vector<std::string>& segment_keys) override;
   bool GetConversionSegmentKeys(
       std::vector<std::string>* segment_keys) const override;
+  void GetUserHistoryConversionPreferences(
+      std::vector<UserHistoryConversionPreference>* preferences) const override;
 
   // Commits the specified number of characters at the head of the preedit
   // string represented by Composer.
@@ -422,6 +432,15 @@ class EngineConverter : public EngineConverterInterface {
 
   // Default conversion preferences.
   ConversionPreferences conversion_preferences_;
+
+  // Whether the currently visible CONVERSION state was produced with Mozc
+  // user history enabled.  Zenz must not re-introduce user-history preferences
+  // after an explicit CONVERT_WITHOUT_HISTORY conversion.
+  bool current_conversion_uses_user_history_ = true;
+
+  // Non-empty only while an explicit residual-romaji repair is visible.
+  // FinishConversion must use the same corrected key that produced segments_.
+  std::string conversion_key_override_;
 
   config::Config::SelectionShortcut selection_shortcut_;
 

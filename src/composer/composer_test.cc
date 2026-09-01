@@ -1799,6 +1799,57 @@ TEST_F(ComposerTest, TransformCharactersForNumbers) {
   EXPECT_EQ(query, "１００．");
 }
 
+TEST_F(ComposerTest, NumericMiddleDotBecomesSlashAfterNumberOnly) {
+  std::string query;
+
+  query = "８・";
+  EXPECT_TRUE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "８／");
+
+  query = "８・２９";
+  EXPECT_TRUE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "８／２９");
+
+  query = "２０２６・８・２９";
+  EXPECT_TRUE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "２０２６／８／２９");
+
+  query = "８・東京";
+  EXPECT_TRUE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "８／東京");
+
+  query = "東京・２９";
+  EXPECT_FALSE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "東京・２９");
+
+  query = "Ａ・Ｂ";
+  EXPECT_FALSE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "Ａ・Ｂ");
+
+  query = "東京・大阪";
+  EXPECT_FALSE(Composer::TransformCharactersForNumbers(&query));
+  EXPECT_EQ(query, "東京・大阪");
+}
+
+TEST_F(ComposerTest, SlashKeyUsesSlashImmediatelyAfterNumber) {
+  table_->AddRule("8", "８", "");
+  table_->AddRule("2", "２", "");
+  table_->AddRule("9", "９", "");
+  table_->AddRule("/", "・", "");
+
+  composer_->InsertCharacter("8/");
+  EXPECT_EQ(composer_->GetStringForPreedit(), "８／");
+  EXPECT_EQ(composer_->GetStringForSubmission(), "８／");
+  EXPECT_EQ(composer_->GetQueryForConversion(), "8/");
+  EXPECT_EQ(composer_->GetQueryForPrediction(), "8/");
+
+  composer_->InsertCharacter("29");
+  EXPECT_EQ(composer_->GetStringForPreedit(), "８／２９");
+  EXPECT_EQ(composer_->GetStringForSubmission(), "８／２９");
+  EXPECT_EQ(composer_->GetQueryForConversion(), "8/29");
+  EXPECT_EQ(composer_->GetQueryForPrediction(), "8/29");
+}
+
 TEST_F(ComposerTest, PreeditFormAfterCharacterTransform) {
   CharacterFormManager* manager =
       CharacterFormManager::GetCharacterFormManager();
