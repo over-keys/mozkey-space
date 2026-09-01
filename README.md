@@ -19,7 +19,7 @@
 
 <br>
 
-このリポジトリは、[google/mozc](https://github.com/google/mozc) をベースにした [Mozkey](https://github.com/koyasi777/mozkey) から派生した `mozkey-space` です。
+このリポジトリは、[google/mozc](https://github.com/google/mozc) をベースにした [koyasi777/mozkey](https://github.com/koyasi777/mozkey) から派生した `mozkey-space` です。
 
 本プロジェクトは Google 日本語入力ではありません。
 Google または google/mozc の公式配布物ではありません。
@@ -617,7 +617,7 @@ upstream 提案向けの変更は `pr/*` branches に整理しています。
 
 # English
 
-This repository is the `mozkey-space` fork derived from [Mozkey](https://github.com/koyasi777/mozkey), which is based on [google/mozc](https://github.com/google/mozc).
+This repository is the `mozkey-space` fork derived from [koyasi777/mozkey](https://github.com/koyasi777/mozkey), which is based on [google/mozc](https://github.com/google/mozc).
 
 This build is not an official google/mozc distribution.
 
