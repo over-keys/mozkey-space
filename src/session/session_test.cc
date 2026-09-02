@@ -831,6 +831,7 @@ class SessionTest : public testing::TestWithTempUserProfile {
     config::Config config;
     config::ConfigHandler::GetDefaultConfig(&config);
     config.set_use_zenz_feedback_learning(true);
+    config.set_use_zenz_local_preference_learning(true);
     session->SetConfig(config);
   }
 
@@ -1064,11 +1065,15 @@ class SessionTest : public testing::TestWithTempUserProfile {
 // FYI, each TEST_F will be eventually expanded into a global variable
 // and global variables in a single translation unit (source file) are
 // always initialized in the order in which they are defined.
-TEST(ZenzLocalPreferenceConfigTest, ThresholdIsIndependentFromFullAutoBlock) {
+TEST(ZenzLocalPreferenceConfigTest, ControlsAreIndependentFromFullAutoBlock) {
   config::Config config;
+  EXPECT_FALSE(config.use_zenz_local_preference_learning());
   EXPECT_EQ(config.zenz_local_preference_threshold(), 2);
+  EXPECT_EQ(config.zenz_auto_block_reject_threshold(), 2);
 
+  config.set_use_zenz_local_preference_learning(true);
   config.set_zenz_auto_block_reject_threshold(7);
+  EXPECT_TRUE(config.use_zenz_local_preference_learning());
   EXPECT_EQ(config.zenz_local_preference_threshold(), 2);
 
   config.set_zenz_local_preference_threshold(4);
@@ -2190,6 +2195,46 @@ TEST_F(SessionTest, PendingZenzFeedbackPasswordDoesNotWrite) {
   EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
 #else
   GTEST_SKIP() << "This feedback-persistence test currently has Windows-only test isolation.";
+#endif
+}
+
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackLocalPreferenceDisabledKeepsFullFeedback) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_feedback_learning(true);
+  config.set_use_zenz_local_preference_learning(false);
+  session.SetConfig(config);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+
+  commands::Command command;
+  command.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  command.mutable_output()->mutable_result()->set_key("かれはてんてきです");
+  command.mutable_output()->mutable_result()->set_value("彼は点滴です");
+  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+
+  const std::vector<ZenzFeedbackEntry> entries =
+      session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].value, "彼は天敵です");
+  EXPECT_EQ(entries[0].rejected_count, 1);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListLocalPreferenceEntries()
+                  .empty());
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
 #endif
 }
 

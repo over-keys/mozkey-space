@@ -2830,6 +2830,11 @@ bool UseZenzFeedbackLearning(const config::Config& config) {
   return config.use_zenz_feedback_learning();
 }
 
+bool UseZenzLocalPreferenceLearning(const config::Config& config) {
+  return UseZenzFeedbackLearning(config) &&
+         config.use_zenz_local_preference_learning();
+}
+
 // Common read-side policy for history-backed Zenz behavior.  READ_ONLY and
 // incognito may reuse existing history for accuracy.  NO_HISTORY, password
 // fields, and one-shot CONVERT_WITHOUT_HISTORY conversions do not consult it.
@@ -2845,9 +2850,10 @@ bool CanUseHistoryForZenzCorrection(const ImeContext& context,
              commands::Context::PASSWORD;
 }
 
-// One policy governs every persistent Zenz-learning layer, both full-sequence
-// feedback and Local Zenz Preference.  This is the context-level policy; a
-// specific conversion may still opt out of reads via use_conversion_history.
+// Base policy for persistent full-sequence Zenz feedback.  Local Zenz
+// Preference has its own subordinate enable switch and is gated separately at
+// its read/write call sites.  A specific conversion may still opt out of reads
+// via use_conversion_history.
 bool CanUsePersistentZenzFeedback(const ImeContext& context) {
   return UseZenzFeedbackLearning(context.GetConfig()) &&
          CanUseHistoryForZenzCorrection(context, true);
@@ -6155,7 +6161,7 @@ void Session::ConfirmPendingZenzFeedback() {
       // The ordinary rejected record remains full-sequence scoped.  Local
       // preference is separate evidence and is created only after the user's
       // actual final commit is known.  Rejection itself never synthesizes Mozc
-      // user history in this fork.
+      // user history in REV10.
       zenz_feedback_store_.RecordRejected(
           pending_zenz_feedback_.key,
           pending_zenz_feedback_.context_class,
@@ -6167,7 +6173,8 @@ void Session::ConfirmPendingZenzFeedback() {
           pending_zenz_feedback_.has_final_committed_value &&
           pending_zenz_feedback_.final_committed_value !=
               pending_zenz_feedback_.value &&
-          CanRecordPersistentZenzFeedback(*context_)) {
+          CanRecordPersistentZenzFeedback(*context_) &&
+          UseZenzLocalPreferenceLearning(context_->GetConfig())) {
         const std::vector<ZenzLocalPreferenceLearningPair> local_pairs =
             BuildLocalPreferenceLearningPairsFromUniqueAlignment(
                 *context_->mutable_converter(), pending_zenz_feedback_.key,
@@ -6706,6 +6713,8 @@ bool Session::MaybeScheduleZenzCorrection(
       CanUseHistoryForZenzCorrection(*context_, use_conversion_history);
   const bool can_use_persistent_feedback =
       can_use_history && UseZenzFeedbackLearning(config);
+  const bool can_use_local_preferences =
+      can_use_history && UseZenzLocalPreferenceLearning(config);
 
   // Before inference there is no current Zenz surface to compare against exact
   // full-sequence feedback.  Do not let an unrelated previously accepted full
@@ -6713,7 +6722,7 @@ bool Session::MaybeScheduleZenzCorrection(
   // when the current Mozc result independently corroborates its preferred side;
   // exact full feedback for the actual Zenz output is applied after inference.
   const std::vector<ZenzResolvedLocalPreference> local_prompt_preferences =
-      can_use_persistent_feedback
+      can_use_local_preferences
           ? ResolveLocalPreferences(
                 *context_->mutable_converter(), zenz_feedback_store_, key,
                 assembled_context.left.context_class, mozc_value,
@@ -7161,6 +7170,8 @@ bool Session::ApplyZenzLiveCorrectionResult(
       *context_, pending_zenz_live_.use_conversion_history);
   const bool can_use_persistent_feedback =
       can_use_history && UseZenzFeedbackLearning(config);
+  const bool can_use_local_preferences =
+      can_use_history && UseZenzLocalPreferenceLearning(config);
   const bool from_live_conversion = pending_zenz_live_.from_live_conversion;
   const auto cancel_pending_zenz = [this, from_live_conversion]() {
     CancelPendingZenzLiveCorrection();
@@ -7370,7 +7381,7 @@ bool Session::ApplyZenzLiveCorrectionResult(
   // local preference.  Otherwise, resolve local evidence against the current
   // Mozc result and repair only the proven reading interval.  The entire repaired
   // value is reverse-reading checked again later in this function.
-  if (can_use_persistent_feedback &&
+  if (can_use_local_preferences &&
       !has_authoritative_full_feedback) {
     const ZenzLocalRepairResult local_repair = ApplyLocalPreferenceRepairs(
         *context_->mutable_converter(), zenz_feedback_store_,

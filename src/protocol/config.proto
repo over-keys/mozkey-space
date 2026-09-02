@@ -265,8 +265,8 @@ message Config {
     DIRECT_COMMIT_CLOSE_BRACKET = 128;
     DIRECT_COMMIT_MIDDLE_DOT = 256;
   }
-  // Mozkey enables direct commit by default in ConfigHandler and initially
-  // selects `、。？！「」`.
+  // Mozkey keeps direct commit disabled by default in ConfigHandler, while
+  // preserving `、。？！「」` as the initial selection if the user enables it.
   optional bool use_direct_commit = 1001 [default = false];
 
   // can't use DirectCommitKey as a type since
@@ -319,7 +319,8 @@ message Config {
   // Use live conversion.
   // If this is true, the current composition is converted on every character
   // input without committing the previous live conversion result.
-  // Mozkey enables this by default in ConfigHandler.
+  // Mozkey keeps this disabled by default so explicit Space conversion remains
+  // the primary conversion path.
   optional bool use_live_conversion = 69 [default = false];
 
   // Delay in milliseconds before applying live conversion after character input.
@@ -337,13 +338,15 @@ message Config {
   optional bool show_candidate_window_on_initial_conversion = 72
       [default = false];
 
-  // Use asynchronous zenz live correction after normal live conversion.
-  // Mozkey enables this by default in ConfigHandler.
+  // Use asynchronous Zenz correction after Mozc conversion, including explicit
+  // Space/Convert and optional live conversion. Mozkey enables this by default
+  // in ConfigHandler.
   optional bool use_zenz_live_correction = 1003 [default = false];
 
-  // Debounce in milliseconds before submitting a zenz live correction request
-  // after normal live conversion has become visible.
-  optional uint32 zenz_live_correction_delay_msec = 1004 [default = 1000];
+  // Delay in milliseconds before submitting a Zenz correction request after
+  // the Mozc conversion result has become visible.  This is shared by live and
+  // explicit normal conversion; Mozkey defaults to a short 200 ms delay.
+  optional uint32 zenz_live_correction_delay_msec = 1004 [default = 200];
 
   // Timeout in milliseconds for one zenz live correction request.
   optional uint32 zenz_live_correction_timeout_msec = 1005 [default = 180];
@@ -367,7 +370,7 @@ message Config {
   // Debug logging for zenz live correction.
   optional bool zenz_live_correction_debug = 1010 [default = false];
 
-  // Record and reuse local feedback for zenz live correction.
+  // Record and reuse local feedback for Zenz correction.
   // This stores only local TSV data and never sends feedback outside the machine.
   // Raw left context is not stored. Mozkey enables this by default in
   // ConfigHandler.
@@ -382,7 +385,13 @@ message Config {
 
   // Number of ordinary rejected observations required before the auto-block
   // policy suppresses the same key/context/value correction.
-  optional uint32 zenz_auto_block_reject_threshold = 1019 [default = 3];
+  optional uint32 zenz_auto_block_reject_threshold = 1019 [default = 2];
+
+  // Record and reuse safely localized preferred-vs-disfavored surface pairs.
+  // This is subordinate to use_zenz_feedback_learning: turning the parent
+  // feedback switch off disables both full-sequence and local learning.
+  // Mozkey enables this local layer by default in ConfigHandler.
+  optional bool use_zenz_local_preference_learning = 1027 [default = false];
 
   // Number of same-direction, safely localized manual corrections required
   // before a Local Zenz Preference may influence the Zenz prompt or perform
@@ -456,9 +465,9 @@ message Config {
   // you haven't typed before.
   optional bool use_dictionary_suggest = 101 [default = true];
 
-  // Use realtime conversion feature. Mozkey disables this by default in
-  // ConfigHandler because normal live conversion already provides inline
-  // conversion results.
+  // Use realtime conversion feature. Mozkey keeps this disabled by default in
+  // ConfigHandler so suggestions stay conservative and explicit Space conversion
+  // remains the primary full-conversion path.
   optional bool use_realtime_conversion = 102 [default = true];
 
   // Size of suggestions.

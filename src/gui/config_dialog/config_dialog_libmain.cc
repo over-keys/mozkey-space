@@ -601,6 +601,14 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   zenz->setToolTip(QString::fromUtf8(
       "ライブ変換と Space/通常変換の結果に対して、ローカルの Zenz モデルで文脈補正を行います。"));
 
+  feedback->setText(QString::fromUtf8("Zenzの選択結果を学習する"));
+  feedback->setToolTip(QString::fromUtf8(
+      "確定したZenz補正の採用・却下をローカルに記録し、今後の候補順位や補正に利用します。"));
+  auto_block->setText(
+      QString::fromUtf8("繰り返し却下した全文候補を自動ブロック"));
+  auto_block->setToolTip(QString::fromUtf8(
+      "同じ全文Zenz候補の通常却下が設定回数に達したとき、その候補を動的に抑制します。"));
+
   // The proto/runtime already supports a bounded 0-128 character left-context
   // length.  Expose it here without forking the upstream .ui file.
   QWidget* zenz_parent = delay_label->parentWidget();
@@ -664,10 +672,21 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
       "同じ全文 Zenz 候補を動的に自動ブロックするまでの通常却下回数です。"));
   full_threshold->setToolTip(full_threshold_label->toolTip());
 
-  // Local Preference has a deliberately independent threshold.  Keep it as a
-  // dynamic row so the current-main .ui file and generated uic header do not
-  // need to be forked just for this one setting.
+  // Local Preference has a deliberately independent enable switch and threshold.
+  // Keep both as dynamic controls so current-main's .ui file and generated uic
+  // header do not need to be forked just for REV10 learning policy.
   QWidget* threshold_parent = full_threshold_label->parentWidget();
+  auto* local_learning = new QCheckBox(
+      QString::fromUtf8("局所表記の選好を学習する"), threshold_parent);
+  local_learning->setObjectName(
+      QStringLiteral("zenzLocalPreferenceLearningCheckBox"));
+  local_learning->setChecked(
+      dialog->use_zenz_local_preference_learning_for_ui());
+  local_learning->setToolTip(QString::fromUtf8(
+      "Zenz補正を別の表記で確定したとき、安全に局所化できた表記の選好を保存し、"
+      "同じ読みの今後のZenz補正に利用します。OFFにすると新規記録と保存済み選好の"
+      "利用を停止しますが、保存済みデータ自体は削除しません。"));
+
   auto* local_threshold_label = new QLabel(
       QString::fromUtf8("局所表記を一般化するまでの修正回数"), threshold_parent);
   local_threshold_label->setObjectName(
@@ -689,35 +708,29 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
     if (auto* grid = qobject_cast<QGridLayout*>(threshold_parent->layout())) {
       int local_row = grid->rowCount();
 
-      // In current main the management row immediately follows the full
-      // threshold.  Move that existing row down by one so the two threshold
-      // controls stay adjacent and the management button remains last.
-      auto* management_label = dialog->findChild<QLabel*>(
-          QStringLiteral("zenzFeedbackDataLabel"));
-      if (management_label != nullptr && manage != nullptr &&
-          management_label->parentWidget() == threshold_parent &&
-          manage->parentWidget() == threshold_parent) {
-        const int label_index = grid->indexOf(management_label);
-        int row = -1;
-        int column = -1;
-        int row_span = 1;
-        int column_span = 1;
-        if (label_index >= 0) {
-          grid->getItemPosition(label_index, &row, &column, &row_span,
-                                &column_span);
-        }
-        if (row >= 0) {
-          local_row = row;
-          grid->removeWidget(management_label);
-          grid->removeWidget(manage);
-          grid->addWidget(management_label, local_row + 1, 0, 1, 3);
-          grid->addWidget(manage, local_row + 1, 3, 1, 5);
+      // Place the local controls immediately after the existing full-sequence
+      // threshold.  Shift every row below it, rather than assuming the feedback
+      // management row is the only following row.
+      const int full_index = grid->indexOf(full_threshold_label);
+      if (full_index >= 0) {
+        int full_row = -1;
+        int full_column = -1;
+        int full_row_span = 1;
+        int full_column_span = 1;
+        grid->getItemPosition(full_index, &full_row, &full_column,
+                              &full_row_span, &full_column_span);
+        if (full_row >= 0) {
+          local_row = full_row + full_row_span;
+          InsertGridRow(grid, local_row);
+          InsertGridRow(grid, local_row + 1);
         }
       }
 
-      grid->addWidget(local_threshold_label, local_row, 0, 1, 3);
-      grid->addWidget(local_threshold, local_row, 3, 1, 5);
+      grid->addWidget(local_learning, local_row, 0, 1, 8);
+      grid->addWidget(local_threshold_label, local_row + 1, 0, 1, 3);
+      grid->addWidget(local_threshold, local_row + 1, 3, 1, 5);
     } else if (QLayout* layout = threshold_parent->layout()) {
+      layout->addWidget(local_learning);
       auto* row_widget = new QWidget(threshold_parent);
       auto* row_layout = new QHBoxLayout(row_widget);
       row_layout->setContentsMargins(0, 0, 0, 0);
@@ -729,13 +742,21 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   }
 
   QObject::connect(
+      local_learning, &QCheckBox::stateChanged, dialog,
+      [dialog](int state) {
+        dialog->set_use_zenz_local_preference_learning_for_ui(
+            state == Qt::Checked);
+      });
+  QObject::connect(local_learning, SIGNAL(stateChanged(int)), dialog,
+                   SLOT(EnableApplyButton()));
+  QObject::connect(
       local_threshold, qOverload<int>(&QSpinBox::valueChanged), dialog,
       [dialog](int value) {
         dialog->set_zenz_local_preference_threshold_for_ui(
             static_cast<uint32_t>(std::clamp(value, 1, 999)));
       });
   // Reuse ConfigDialog's existing modified-state machinery rather than
-  // maintaining a second Apply/OK path for the dynamic control.
+  // maintaining a second Apply/OK path for the dynamic controls.
   QObject::connect(local_threshold, SIGNAL(valueChanged(int)), dialog,
                    SLOT(EnableApplyButton()));
 
@@ -746,7 +767,7 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
       "Mozc の変換結果が表示された後、Zenz 補正を開始するまでの待ち時間です。0 ms は即時です。"));
 
   auto update = [dialog, live, zenz, feedback, auto_block, full_threshold,
-                 full_threshold_label, local_threshold,
+                 full_threshold_label, local_learning, local_threshold,
                  local_threshold_label, left_context_label,
                  left_context_spin, right_context]() {
     (void)live;  // Live conversion intentionally does not gate Zenz anymore.
@@ -790,13 +811,18 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
     const bool feedback_enabled = zenz_enabled && feedback->isChecked();
     auto_block->setEnabled(feedback_enabled);
 
-    // Full-sequence auto-block and local generalization are independent.
+    // Full-sequence auto-block and Local Preference are independent children
+    // of the parent feedback switch.  Preserve each child setting while its
+    // controls are disabled so toggling the parent never destroys user choices.
     const bool full_block_controls_enabled =
         feedback_enabled && auto_block->isChecked();
     full_threshold_label->setEnabled(full_block_controls_enabled);
     full_threshold->setEnabled(full_block_controls_enabled);
-    local_threshold_label->setEnabled(feedback_enabled);
-    local_threshold->setEnabled(feedback_enabled);
+    local_learning->setEnabled(feedback_enabled);
+    const bool local_controls_enabled =
+        feedback_enabled && local_learning->isChecked();
+    local_threshold_label->setEnabled(local_controls_enabled);
+    local_threshold->setEnabled(local_controls_enabled);
   };
 
   // ResetToDefaults() updates base_config_ through ConvertFromProto(), but this
@@ -806,22 +832,26 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   // restored without special-case state.
   if (auto* reset = dialog->findChild<QPushButton*>(
           QStringLiteral("resetToDefaultsButton"))) {
-    QObject::connect(reset, &QPushButton::clicked, dialog,
-                     [dialog, local_threshold, left_context_spin, update]() {
-                       QTimer::singleShot(
-                           0, dialog,
-                           [dialog, local_threshold, left_context_spin, update]() {
-                             local_threshold->setValue(static_cast<int>(
-                                 std::clamp<uint32_t>(
-                                     dialog->zenz_local_preference_threshold_for_ui(),
-                                     1, 999)));
-                             left_context_spin->setValue(static_cast<int>(
-                                 std::clamp<uint32_t>(
-                                     dialog->zenz_live_correction_left_context_length_for_ui(),
-                                     0, 128)));
-                             update();
-                           });
-                     });
+    QObject::connect(
+        reset, &QPushButton::clicked, dialog,
+        [dialog, local_learning, local_threshold, left_context_spin, update]() {
+          QTimer::singleShot(
+              0, dialog,
+              [dialog, local_learning, local_threshold, left_context_spin,
+               update]() {
+                local_learning->setChecked(
+                    dialog->use_zenz_local_preference_learning_for_ui());
+                local_threshold->setValue(static_cast<int>(
+                    std::clamp<uint32_t>(
+                        dialog->zenz_local_preference_threshold_for_ui(), 1,
+                        999)));
+                left_context_spin->setValue(static_cast<int>(
+                    std::clamp<uint32_t>(
+                        dialog->zenz_live_correction_left_context_length_for_ui(),
+                        0, 128)));
+                update();
+              });
+        });
   }
 
   if (live != nullptr) {
@@ -833,6 +863,8 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   QObject::connect(feedback, &QCheckBox::stateChanged, dialog,
                    [update](int) { update(); });
   QObject::connect(auto_block, &QCheckBox::stateChanged, dialog,
+                   [update](int) { update(); });
+  QObject::connect(local_learning, &QCheckBox::stateChanged, dialog,
                    [update](int) { update(); });
   QObject::connect(right_context, &QCheckBox::stateChanged, dialog,
                    [update](int) { update(); });

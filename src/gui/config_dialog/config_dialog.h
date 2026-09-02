@@ -52,11 +52,17 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
  public:
   ConfigDialog();
 
-  // Local-preference threshold control is injected at runtime so the
-  // existing .ui file does not need to be forked.  Keep the pending value in
-  // base_config_: ConvertToProto() starts from base_config_, which gives the
-  // dynamic control normal Apply/OK/Cancel semantics without a second config
-  // write path.
+  // REV10's local-preference controls are injected at runtime so the existing
+  // .ui file does not need to be forked.  Keep pending values in base_config_:
+  // ConvertToProto() starts from base_config_, which gives the dynamic controls
+  // normal Apply/OK/Cancel semantics without a second config write path.
+  bool use_zenz_local_preference_learning_for_ui() const {
+    return base_config_.use_zenz_local_preference_learning();
+  }
+  void set_use_zenz_local_preference_learning_for_ui(bool value) {
+    base_config_.set_use_zenz_local_preference_learning(value);
+  }
+
   uint32_t zenz_local_preference_threshold_for_ui() const {
     return base_config_.zenz_local_preference_threshold();
   }

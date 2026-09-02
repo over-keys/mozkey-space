@@ -79,34 +79,41 @@ constexpr uint32_t kExpectedMozkeyDirectCommitKey =
     Config::DIRECT_COMMIT_CLOSE_BRACKET;
 
 void SetMozkeyProductDefaultsForTesting(Config* config) {
-  config->set_use_live_conversion(true);
+  config->set_use_live_conversion(false);
   config->set_show_candidate_window_on_initial_conversion(true);
-  config->set_use_direct_commit(true);
+  config->set_use_direct_commit(false);
   config->set_direct_commit_key(kExpectedMozkeyDirectCommitKey);
   config->set_use_zenz_live_correction(true);
+  config->set_zenz_live_correction_delay_msec(200);
   config->set_use_zenz_feedback_learning(true);
+  config->set_use_zenz_auto_block_rejected_correction(false);
+  config->set_zenz_auto_block_reject_threshold(2);
+  config->set_use_zenz_local_preference_learning(true);
+  config->set_zenz_local_preference_threshold(2);
   config->set_use_zenz_live_correction_right_context(true);
   config->set_use_realtime_conversion(false);
 }
 
 void ExpectMozkeyProductDefaults(const Config& config) {
-  EXPECT_TRUE(config.use_live_conversion());
+  EXPECT_FALSE(config.use_live_conversion());
   EXPECT_EQ(config.live_conversion_delay_msec(), 228);
   EXPECT_EQ(config.live_conversion_min_key_length(), 2);
   EXPECT_TRUE(config.show_candidate_window_on_initial_conversion());
 
-  EXPECT_TRUE(config.use_direct_commit());
+  EXPECT_FALSE(config.use_direct_commit());
   EXPECT_EQ(config.direct_commit_key(), kExpectedMozkeyDirectCommitKey);
 
   EXPECT_TRUE(config.use_zenz_live_correction());
-  EXPECT_EQ(config.zenz_live_correction_delay_msec(), 1000);
+  EXPECT_EQ(config.zenz_live_correction_delay_msec(), 200);
   EXPECT_EQ(config.zenz_live_correction_timeout_msec(), 180);
   EXPECT_EQ(config.zenz_live_correction_min_key_length(), 2);
   EXPECT_EQ(config.zenz_live_correction_left_context_length(), 24);
   EXPECT_TRUE(config.use_zenz_synthetic_candidate());
   EXPECT_TRUE(config.use_zenz_feedback_learning());
   EXPECT_FALSE(config.use_zenz_auto_block_rejected_correction());
-  EXPECT_EQ(config.zenz_auto_block_reject_threshold(), 3);
+  EXPECT_EQ(config.zenz_auto_block_reject_threshold(), 2);
+  EXPECT_TRUE(config.use_zenz_local_preference_learning());
+  EXPECT_EQ(config.zenz_local_preference_threshold(), 2);
   EXPECT_TRUE(config.use_zenz_live_correction_right_context());
   EXPECT_EQ(config.zenz_live_correction_right_context_length(), 24);
 
@@ -185,24 +192,34 @@ TEST_F(ConfigHandlerTest, MozkeyProductDefaultsPreserveExplicitSettings) {
   ConfigHandler::Reload();
 
   Config input;
-  input.set_use_live_conversion(false);
+  input.set_use_live_conversion(true);
   input.set_show_candidate_window_on_initial_conversion(false);
-  input.set_use_direct_commit(false);
+  input.set_use_direct_commit(true);
   input.set_direct_commit_key(0);
   input.set_use_zenz_live_correction(false);
+  input.set_zenz_live_correction_delay_msec(777);
   input.set_use_zenz_feedback_learning(false);
+  input.set_use_zenz_auto_block_rejected_correction(true);
+  input.set_zenz_auto_block_reject_threshold(9);
+  input.set_use_zenz_local_preference_learning(false);
+  input.set_zenz_local_preference_threshold(8);
   input.set_use_zenz_live_correction_right_context(false);
   input.set_use_realtime_conversion(true);
 
   ConfigHandler::SetConfig(input);
   const Config output = ConfigHandler::GetCopiedConfig();
 
-  EXPECT_FALSE(output.use_live_conversion());
+  EXPECT_TRUE(output.use_live_conversion());
   EXPECT_FALSE(output.show_candidate_window_on_initial_conversion());
-  EXPECT_FALSE(output.use_direct_commit());
+  EXPECT_TRUE(output.use_direct_commit());
   EXPECT_EQ(output.direct_commit_key(), 0);
   EXPECT_FALSE(output.use_zenz_live_correction());
+  EXPECT_EQ(output.zenz_live_correction_delay_msec(), 777);
   EXPECT_FALSE(output.use_zenz_feedback_learning());
+  EXPECT_TRUE(output.use_zenz_auto_block_rejected_correction());
+  EXPECT_EQ(output.zenz_auto_block_reject_threshold(), 9);
+  EXPECT_FALSE(output.use_zenz_local_preference_learning());
+  EXPECT_EQ(output.zenz_local_preference_threshold(), 8);
   EXPECT_FALSE(output.use_zenz_live_correction_right_context());
   EXPECT_TRUE(output.use_realtime_conversion());
 }

@@ -81,13 +81,13 @@ constexpr uint32_t kMozkeyDefaultDirectCommitKey =
 // overwriting explicit user choices.
 void ApplyMozkeyProductDefaults(Config* config) {
   if (!config->has_use_live_conversion()) {
-    config->set_use_live_conversion(true);
+    config->set_use_live_conversion(false);
   }
   if (!config->has_show_candidate_window_on_initial_conversion()) {
     config->set_show_candidate_window_on_initial_conversion(true);
   }
   if (!config->has_use_direct_commit()) {
-    config->set_use_direct_commit(true);
+    config->set_use_direct_commit(false);
   }
   if (!config->has_direct_commit_key()) {
     config->set_direct_commit_key(kMozkeyDefaultDirectCommitKey);
@@ -95,8 +95,23 @@ void ApplyMozkeyProductDefaults(Config* config) {
   if (!config->has_use_zenz_live_correction()) {
     config->set_use_zenz_live_correction(true);
   }
+  if (!config->has_zenz_live_correction_delay_msec()) {
+    config->set_zenz_live_correction_delay_msec(200);
+  }
   if (!config->has_use_zenz_feedback_learning()) {
     config->set_use_zenz_feedback_learning(true);
+  }
+  if (!config->has_use_zenz_auto_block_rejected_correction()) {
+    config->set_use_zenz_auto_block_rejected_correction(false);
+  }
+  if (!config->has_zenz_auto_block_reject_threshold()) {
+    config->set_zenz_auto_block_reject_threshold(2);
+  }
+  if (!config->has_use_zenz_local_preference_learning()) {
+    config->set_use_zenz_local_preference_learning(true);
+  }
+  if (!config->has_zenz_local_preference_threshold()) {
+    config->set_zenz_local_preference_threshold(2);
   }
   if (!config->has_use_zenz_live_correction_right_context()) {
     config->set_use_zenz_live_correction_right_context(true);
