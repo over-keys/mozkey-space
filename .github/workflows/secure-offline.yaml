@@ -1,14 +1,6 @@
 name: Secure Offline Checks
 
 on:
-  push:
-    branches:
-      - main
-      - "feature/**"
-      - "fix/**"
-      - "harden/**"
-      - "chore/**"
-  pull_request:
   workflow_dispatch:
 
 permissions:

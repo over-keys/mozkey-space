@@ -1,8 +1,9 @@
 name: CI for macOS
 # https://github.com/google/mozc/blob/master/docs/build_mozc_in_osx.md
 
-# Run on push.
-on: push
+# Run manually when needed. Release packages use the formal release workflow.
+on:
+  workflow_dispatch:
 
 permissions:
   contents: read

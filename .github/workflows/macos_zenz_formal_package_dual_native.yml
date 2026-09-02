@@ -1,13 +1,6 @@
 name: macOS Zenz formal package dual-native validation
 
 on:
-  push:
-    branches:
-      - main
-      - codex/space-zenz-conversion
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
   release:
     types:
