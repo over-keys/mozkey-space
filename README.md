@@ -48,13 +48,13 @@ mozkey-space 固有の変更点は、元の Mozkey に対する次の差分で�
 ダウンロード / インストール
 --------------------------
 
-Windows 用の MSI と macOS 用の Universal Zenz PKG を、ビルド済みパッケージとして Releases から公開しています。GitHub Release を公開すると、macOS 用の PKG は CI で生成・検証したうえで、同じ Release に自動添付されます。
+Windows 用の MSI と macOS 用の Universal Zenz PKG を、ビルド済みパッケージとして Releases から公開しています。GitHub Release を公開すると、Windows 用の x64 MSI と macOS 用の PKG は CI で生成・検証したうえで、同じ Release に自動添付されます。Release の表示名は `mozkey-space <major.minor>`、配布 Asset は `mozkey-space_<major.minor>_...` 形式です。
 
 ### Windows
 
 Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。
 
-- 通常の x64 Windows では、Releases にある最新の `Mozkey_v*_x64.msi` を使用してください。
+- 通常の x64 Windows では、Releases にある最新の `mozkey-space_<major.minor>_windows_x64.msi` を使用してください。
 - 現在の Windows 向け CI / リリースは x64 版のみを対象としています。Windows on Arm（ARM64）向け MSI と `universal` MSI は提供していません。
 - 本 fork のリリースは個人用の experimental build として公開しています。
 - Zenz 同梱版は、ローカル推論 runtime と GGUF model を含むため、従来の offline MSI よりファイルサイズが大きくなります。
@@ -71,7 +71,7 @@ Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/rele
 
 Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
 
-macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。Universal Zenz PKG は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。GitHub Release には `Mozkey_<tag>_macos_universal_zenz.pkg` と SHA-256 checksum が添付されます。PKG は、Apple Silicon と native Intel の両方で同一成果物を検証した後に公開されますが、macOS の PKG は実機検証用の experimental build として扱ってください。
+macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。Universal Zenz PKG は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。GitHub Release の表示名は `mozkey-space <major.minor>`、Asset は `mozkey-space_<major.minor>_macos_universal_zenz.pkg` と SHA-256 checksum になります。PKG は、Apple Silicon と native Intel の両方で同一成果物を検証した後に公開されますが、macOS の PKG は実機検証用の experimental build として扱ってください。
 
 - Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
 - 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
@@ -688,13 +688,13 @@ See also:
 Download / Install
 ------------------
 
-Prebuilt packages for both Windows and macOS are available from Releases. Windows releases provide MSI packages; when a GitHub Release is published, CI builds and verifies a Universal Zenz macOS PKG on native Apple Silicon and Intel, then attaches it to the same Release.
+Prebuilt packages for both Windows and macOS are available from Releases. Windows releases provide MSI packages; when a GitHub Release is published, CI builds and verifies the Windows x64 MSI and the Universal Zenz macOS PKG, then attaches both to the same Release. Release display names use `mozkey-space <major.minor>`, and distribution assets use `mozkey-space_<major.minor>_...`.
 
 ### Windows
 
 Windows MSI packages are available from [Releases](https://github.com/over-keys/mozkey-space/releases).
 
-- On x64 Windows, use the latest `Mozkey_v*_x64.msi` from Releases.
+- On x64 Windows, use the latest `mozkey-space_<major.minor>_windows_x64.msi` from Releases.
 - The current Windows CI and releases target x64 only. MSI packages for Windows on Arm (ARM64) and `universal` MSI packages are not provided.
 - For the Zenz-bundled build, choose an MSI whose file name contains `zenz` or `zenz_offline`.
 - Releases from this fork are published as personal experimental builds.
@@ -712,7 +712,7 @@ Windows MSI packages are available from [Releases](https://github.com/over-keys/
 
 In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
 
-The macOS Universal Zenz PKG is available from [Releases](https://github.com/over-keys/mozkey-space/releases). The asset is named `Mozkey_<tag>_macos_universal_zenz.pkg` and includes a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
+The macOS Universal Zenz PKG is available from [Releases](https://github.com/over-keys/mozkey-space/releases). The Release display name is `mozkey-space <major.minor>`, and the asset is named `mozkey-space_<major.minor>_macos_universal_zenz.pkg` with a SHA-256 checksum. It is an experimental ad-hoc-signed package and is not Developer ID signed or notarized; Gatekeeper may warn or refuse installation.
 
 ### Linux
 

@@ -372,7 +372,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          asset="Mozkey_${RELEASE_TAG}_macos_universal_zenz.pkg"
+          if [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+)(\.|$) ]]; then
+            PUBLIC_VERSION="${BASH_REMATCH[1]}"
+          else
+            echo "Release tag does not contain a public major.minor version: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          gh release edit \
+            "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "mozkey-space ${PUBLIC_VERSION}"
+
+          asset="mozkey-space_${PUBLIC_VERSION}_macos_universal_zenz.pkg"
           checksum="${asset}.sha256"
 
           install \
