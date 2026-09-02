@@ -17,7 +17,9 @@ jobs:
   publish_windows_release:
     name: Publish Windows MSI to GitHub Release
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The artifact may be delayed by the full Windows build. Allow the
+    # publisher to poll for up to 60 minutes, plus time for download/upload.
+    timeout-minutes: 90
 
     steps:
       - name: Resolve public release version
@@ -48,7 +50,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          for attempt in $(seq 1 60); do
+          # Poll every 30 seconds for up to 60 minutes.
+          for attempt in $(seq 1 120); do
             runs="$(
               gh run list \
                 --repo "$GITHUB_REPOSITORY" \
@@ -97,7 +100,7 @@ jobs:
               echo "Waiting for Windows CI push run for $RELEASE_TAG at $SOURCE_SHA"
             fi
 
-            if (( attempt == 60 )); then
+            if (( attempt == 120 )); then
               echo "Timed out waiting for the matching Windows CI artifact." >&2
               exit 1
             fi

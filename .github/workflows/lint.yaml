@@ -1,8 +1,11 @@
 name: CI for Lint checks
 # https://github.com/google/mozc/blob/master/docs/build_mozc_in_docker.md
 
-# Run manually when needed.
+# Run on normal commits and pull requests. Keep this workflow lightweight so
+# source-level regressions are caught without starting a full platform build.
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -38,3 +41,18 @@ jobs:
         run: |
           go install github.com/bazelbuild/buildtools/buildifier@latest
           $(go env GOPATH)/bin/buildifier --mode=diff -r .
+
+  source_security:
+    name: Source security guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: Check prohibited network symbols
+        run: python3 tools/check_no_network_symbols.py
