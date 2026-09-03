@@ -90,6 +90,7 @@ void SetMozkeyProductDefaultsForTesting(Config* config) {
   config->set_zenz_auto_block_reject_threshold(2);
   config->set_use_zenz_local_preference_learning(true);
   config->set_zenz_local_preference_threshold(2);
+  config->set_zenz_feedback_max_entries(1000);
   config->set_use_zenz_live_correction_right_context(true);
   config->set_use_realtime_conversion(false);
 }
@@ -114,6 +115,7 @@ void ExpectMozkeyProductDefaults(const Config& config) {
   EXPECT_EQ(config.zenz_auto_block_reject_threshold(), 2);
   EXPECT_TRUE(config.use_zenz_local_preference_learning());
   EXPECT_EQ(config.zenz_local_preference_threshold(), 2);
+  EXPECT_EQ(config.zenz_feedback_max_entries(), 1000);
   EXPECT_TRUE(config.use_zenz_live_correction_right_context());
   EXPECT_EQ(config.zenz_live_correction_right_context_length(), 24);
 
@@ -203,6 +205,7 @@ TEST_F(ConfigHandlerTest, MozkeyProductDefaultsPreserveExplicitSettings) {
   input.set_zenz_auto_block_reject_threshold(9);
   input.set_use_zenz_local_preference_learning(false);
   input.set_zenz_local_preference_threshold(8);
+  input.set_zenz_feedback_max_entries(5432);
   input.set_use_zenz_live_correction_right_context(false);
   input.set_use_realtime_conversion(true);
 
@@ -220,6 +223,7 @@ TEST_F(ConfigHandlerTest, MozkeyProductDefaultsPreserveExplicitSettings) {
   EXPECT_EQ(output.zenz_auto_block_reject_threshold(), 9);
   EXPECT_FALSE(output.use_zenz_local_preference_learning());
   EXPECT_EQ(output.zenz_local_preference_threshold(), 8);
+  EXPECT_EQ(output.zenz_feedback_max_entries(), 5432);
   EXPECT_FALSE(output.use_zenz_live_correction_right_context());
   EXPECT_TRUE(output.use_realtime_conversion());
 }

@@ -200,6 +200,8 @@ class Session {
     std::string key;
     std::string context_class;
     std::string value;
+    std::string raw_value;
+    std::vector<ZenzLocalPreference> applied_local_preferences;
     std::string reason;
     bool has_final_committed_value = false;
     std::string final_committed_value;
@@ -221,6 +223,8 @@ class Session {
   std::string zenz_live_key_;
   std::string zenz_live_display_key_;
   std::string zenz_live_value_;
+  std::string zenz_live_raw_value_;
+  std::vector<ZenzLocalPreference> zenz_live_applied_local_preferences_;
   std::string zenz_live_mozc_value_;
   std::string zenz_live_context_class_;
   std::string zenz_live_left_context_;

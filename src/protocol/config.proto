@@ -393,11 +393,14 @@ message Config {
   // Mozkey enables this local layer by default in ConfigHandler.
   optional bool use_zenz_local_preference_learning = 1027 [default = false];
 
-  // Number of same-direction, safely localized manual corrections required
-  // before a Local Zenz Preference may influence the Zenz prompt or perform
-  // output-side local repair.  Observations below this threshold are stored
-  // but remain behaviorally dormant.
+  // Number of explicit same-direction, safely localized corrections required
+  // before a Local v4 rule may perform deterministic output-side repair.
+  // Auto-applied unchanged commits do not increase this evidence count.
   optional uint32 zenz_local_preference_threshold = 1026 [default = 2];
+
+  // Maximum number of logical Zenz-learning entries retained independently
+  // for Full feedback and Local correction rules.
+  optional uint32 zenz_feedback_max_entries = 1028 [default = 1000];
 
   // Zenzai v3/v3.2 condition fields. Empty values are omitted from the prompt.
   // These are not chat prompts; they are mapped to zenz special-token fields:

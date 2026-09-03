@@ -136,6 +136,8 @@ class SessionTestPeer : testing::TestPeer<Session> {
   PEER_VARIABLE(zenz_live_display_key_);
   PEER_VARIABLE(zenz_live_key_);
   PEER_VARIABLE(zenz_live_value_);
+  PEER_VARIABLE(zenz_live_raw_value_);
+  PEER_VARIABLE(zenz_live_applied_local_preferences_);
   PEER_VARIABLE(zenz_live_mozc_value_);
   PEER_VARIABLE(zenz_live_context_class_);
   PEER_VARIABLE(zenz_live_mozc_preedit_output_);
@@ -250,7 +252,7 @@ class ScopedUserProfileForZenzFeedbackSessionTest {
     const std::wstring mozc_dir =
         JoinPathForZenzFeedbackSessionTest(local_low_dir, L"Mozc");
     const std::wstring feedback_path =
-        JoinPathForZenzFeedbackSessionTest(mozc_dir, L"zenz_feedback.tsv");
+        JoinPathForZenzFeedbackSessionTest(mozc_dir, L"zenz_feedback_v4.tsv");
 
     ::DeleteFileW(feedback_path.c_str());
     ::RemoveDirectoryW(mozc_dir.c_str());
@@ -2066,6 +2068,95 @@ void SetPendingRejectedZenzFeedbackForTest(SessionTestPeer* session_peer) {
   session_peer->context_()->set_state(ImeContext::PRECOMPOSITION);
 }
 #endif  // defined(_WIN32)
+
+TEST_F(SessionTest, LocalV4AutoAppliedSuccessIsNeutralAndRawRevertRejectsRule) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<RecordingExternalLearningConverter> converter =
+      CreateRecordingExternalLearningConverter(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  ZenzLocalPreference applied;
+  applied.key = "しかい";
+  applied.context_class = "empty";
+  applied.disfavored_value = "歯科医";
+  applied.preferred_value = "視界";
+
+  // Explicit corrections establish the rule at T=2.
+  session_peer.zenz_feedback_store_().RecordLocalAccepted(
+      "しかい", "empty", "歯科医", "視界");
+  session_peer.zenz_feedback_store_().RecordLocalAccepted(
+      "しかい", "empty", "歯科医", "視界");
+
+  // Local intervenes and the displayed correction is accepted. Full learns the
+  // displayed whole candidate, while Local receives no self-reinforcing +1.
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "しかい";
+  session_peer.live_conversion_value_() = "司会";
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "しかい";
+  session_peer.zenz_live_value_() = "視界";
+  session_peer.zenz_live_raw_value_() = "歯科医";
+  session_peer.zenz_live_applied_local_preferences_() = {applied};
+  session_peer.zenz_live_mozc_value_() = "司会";
+  session_peer.zenz_live_context_class_() = "empty";
+  session_peer.SetPendingZenzFeedbackAccepted("しかい", "empty", "視界");
+  session_peer.ConfirmPendingZenzFeedback();
+
+  auto active = session_peer.zenz_feedback_store_().GetLocalPreferences(
+      "しかい", "empty", 12, 2);
+  ASSERT_EQ(active.size(), 1);
+  EXPECT_EQ(active[0].observation_count, 2);
+  EXPECT_EQ(session_peer.zenz_feedback_store_()
+                .Decide("しかい", "empty", "視界")
+                .action,
+            ZenzFeedbackAction::kPrefer);
+
+  // The same Local rule intervenes, but the user explicitly returns to the raw
+  // Zenz surface. This is direct positive Full evidence for raw and one Local
+  // rejection. No alignment inference is required because final == raw exactly.
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "しかい";
+  session_peer.live_conversion_value_() = "司会";
+  session_peer.zenz_live_visible_generation_() = 2;
+  session_peer.zenz_live_key_() = "しかい";
+  session_peer.zenz_live_value_() = "視界";
+  session_peer.zenz_live_raw_value_() = "歯科医";
+  session_peer.zenz_live_applied_local_preferences_() = {applied};
+  session_peer.zenz_live_mozc_value_() = "司会";
+  session_peer.zenz_live_context_class_() = "empty";
+  session_peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  session_peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+  commands::Command rejected_command;
+  rejected_command.mutable_output()->mutable_result()->set_type(
+      commands::Result::STRING);
+  rejected_command.mutable_output()->mutable_result()->set_key("しかい");
+  rejected_command.mutable_output()->mutable_result()->set_value("歯科医");
+  session_peer.ObservePendingZenzFeedbackCommittedResult(
+      rejected_command, "test");
+
+  EXPECT_TRUE(session_peer.zenz_feedback_store_()
+                  .GetLocalPreferences("しかい", "empty", 12, 2)
+                  .empty());
+  EXPECT_EQ(session_peer.zenz_feedback_store_()
+                .Decide("しかい", "empty", "歯科医")
+                .action,
+            ZenzFeedbackAction::kPrefer);
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
 
 TEST_F(SessionTest, PendingZenzFeedbackNoHistoryDoesNotWrite) {
 #if defined(_WIN32)

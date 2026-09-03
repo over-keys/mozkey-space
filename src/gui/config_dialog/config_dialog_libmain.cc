@@ -162,7 +162,7 @@ QString LocalPreferenceStateLabel(
     }
     return state;
   }
-  QString state = QString::fromUtf8("一般化有効");
+  QString state = QString::fromUtf8("局所補正有効");
   if (opposite > 0) {
     state += QString::fromUtf8(" / 競合あり");
   }
@@ -189,7 +189,8 @@ void ShowError(QWidget* parent, const QString& title, const QString& text) {
 
 void ShowRev10ZenzFeedbackManagementDialog(
     QWidget* parent, QCheckBox* auto_block_checkbox,
-    QSpinBox* full_threshold_spinbox, QSpinBox* local_threshold_spinbox) {
+    QSpinBox* full_threshold_spinbox, QSpinBox* local_threshold_spinbox,
+    QSpinBox* max_entries_spinbox) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QString::fromUtf8("Zenz 学習データの管理"));
   dialog.resize(920, 650);
@@ -204,6 +205,12 @@ void ShowRev10ZenzFeedbackManagementDialog(
       1, local_threshold_spinbox == nullptr
              ? static_cast<int>(default_config.zenz_local_preference_threshold())
              : local_threshold_spinbox->value());
+  const int max_entries = std::clamp(
+      max_entries_spinbox == nullptr
+          ? static_cast<int>(default_config.zenz_feedback_max_entries())
+          : max_entries_spinbox->value(),
+      100, 20000);
+  (void)store.Maintenance(static_cast<size_t>(max_entries));
   mozc::session::ZenzFeedbackAutoBlockPolicy auto_block_policy;
   auto_block_policy.enabled =
       auto_block_checkbox != nullptr && auto_block_checkbox->isChecked();
@@ -214,7 +221,7 @@ void ShowRev10ZenzFeedbackManagementDialog(
       QString::fromUtf8(
           "Zenz 学習を、全文フィードバックと局所表記に分けて表示します。"
           "局所表記は1回目から記録されますが、設定した修正回数に達するまでは"
-          "Zenzへのhintにも出力側の局所補正にも使われません。"),
+          "決定論的な出力側局所補正には使われません。"),
       &dialog);
   intro->setWordWrap(true);
   root->addWidget(intro);
@@ -226,8 +233,8 @@ void ShowRev10ZenzFeedbackManagementDialog(
   auto* search_layout = new QHBoxLayout;
   search_layout->addWidget(new QLabel(QString::fromUtf8("検索:"), &dialog));
   auto* search = new QLineEdit(&dialog);
-  search->setPlaceholderText(QString::fromUtf8(
-      "読み、候補、優先/非優先表記、文脈クラスで絞り込み"));
+    search->setPlaceholderText(QString::fromUtf8(
+      "読み、raw Zenz/修正後表記で絞り込み"));
   search_layout->addWidget(search);
   root->addLayout(search_layout);
 
@@ -264,12 +271,11 @@ void ShowRev10ZenzFeedbackManagementDialog(
       new QGroupBox(QString::fromUtf8("局所表記"), &dialog);
   auto* local_layout = new QVBoxLayout(local_group);
   auto* local_table = new QTableWidget(local_group);
-  local_table->setColumnCount(6);
+  local_table->setColumnCount(5);
   local_table->setHorizontalHeaderLabels(
       QStringList() << QString::fromUtf8("読み")
-                    << QString::fromUtf8("優先表記")
-                    << QString::fromUtf8("非優先表記")
-                    << QString::fromUtf8("文脈クラス")
+                    << QString::fromUtf8("修正後表記")
+                    << QString::fromUtf8("raw Zenz表記")
                     << QString::fromUtf8("回数")
                     << QString::fromUtf8("状態"));
   local_table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -367,11 +373,9 @@ void ShowRev10ZenzFeedbackManagementDialog(
       const QString key = ToQString(entry.key);
       const QString preferred = ToQString(entry.preferred_value);
       const QString disfavored = ToQString(entry.disfavored_value);
-      const QString context = ToQString(entry.context_class);
       if (!filter.isEmpty() && !key.contains(filter, Qt::CaseInsensitive) &&
           !preferred.contains(filter, Qt::CaseInsensitive) &&
-          !disfavored.contains(filter, Qt::CaseInsensitive) &&
-          !context.contains(filter, Qt::CaseInsensitive)) {
+          !disfavored.contains(filter, Qt::CaseInsensitive)) {
         continue;
       }
       const int row = local_table->rowCount();
@@ -379,19 +383,13 @@ void ShowRev10ZenzFeedbackManagementDialog(
       SetReadOnlyTableItem(local_table, row, 0, key);
       SetReadOnlyTableItem(local_table, row, 1, preferred);
       SetReadOnlyTableItem(local_table, row, 2, disfavored);
-      SetReadOnlyTableItem(local_table, row, 3, context);
-      QString count = QString::number(entry.observation_count);
-      if (entry.effective_observation_count != entry.observation_count) {
-        count += QString::fromUtf8(" (有効%1)")
-                     .arg(entry.effective_observation_count);
-      }
-      SetReadOnlyTableItem(local_table, row, 4, count);
-      SetReadOnlyTableItem(local_table, row, 5,
+      SetReadOnlyTableItem(local_table, row, 3,
+                           QString::number(entry.observation_count));
+      SetReadOnlyTableItem(local_table, row, 4,
                            LocalPreferenceStateLabel(entry, local_threshold));
       local_table->item(row, 0)->setData(Qt::UserRole, key);
       local_table->item(row, 1)->setData(Qt::UserRole, preferred);
       local_table->item(row, 2)->setData(Qt::UserRole, disfavored);
-      local_table->item(row, 3)->setData(Qt::UserRole, context);
       ++visible_local;
     }
 
@@ -400,7 +398,7 @@ void ShowRev10ZenzFeedbackManagementDialog(
     status->setText(
         QString::fromUtf8(
             "全文 %1/%2 件 / 局所 %3/%4 件 / 全文ブロック %5 回 / "
-            "局所一般化 %6 回%7")
+            "局所成立 %6 回%7")
             .arg(visible_full)
             .arg(static_cast<int>(full_entries.size()))
             .arg(visible_local)
@@ -427,11 +425,16 @@ void ShowRev10ZenzFeedbackManagementDialog(
             "通常の粗い文脈クラス間では実行時と同じ有効回数を合算し、保存行の回数と"
             "異なる場合は「有効N」と併記します。\n\n"
             "【局所表記】\n"
-            "却下Zenzと実際の最終確定値を同じ局所readingへ一意に対応できた場合だけ、"
-            "優先表記 > 非優先表記をatomic v3として記録します。設定した局所一般化回数に"
-            "達するまでは記録だけを保持し、Zenzへのhintにも出力側の局所補正にも使いません。"
-            "到達後も、現在Mozcが非優先側を選んでいる場合やalignmentが曖昧な場合は"
-            "強制しません。\n\n"
+            "raw Zenzと実際の最終確定値を同じ局所readingへ一意に対応できた場合だけ、"
+            "raw Zenz表記 > 修正後表記の方向をv4 acceptedとして記録します。"
+            "成立済みruleが自動適用され、そのまま確定した場合は自己強化を避けるためcountを増やしません。"
+            "介入したruleの表記をユーザーが変更した場合だけ、そのspanをrejectedとして1段弱め、"
+            "第三表記ならraw Zenzから新しい最終表記へのacceptedも記録します。"
+            "設定した局所成立回数に達するまでは記録だけを保持し、出力には使いません。"
+            "到達後もreading/surface alignmentを一意に証明できない場合は補正しません。"
+            "Localの成立countは文脈クラスをまたいで同じminimal ruleへ集約します。"
+            "適用時には現在Mozcが修正後表記を同じreading intervalで一意に選んでいることを必須とし、"
+            "raw Zenz側も同じintervalでraw表記に一致した場合だけ補正します。\n\n"
             "【競合】\n"
             "同じreadingの逆方向観測は消さずに共存します。同数競合なら局所一般化だけで"
             "方向を決めません。\n\n"
@@ -494,9 +497,7 @@ void ShowRev10ZenzFeedbackManagementDialog(
     const QString key = local_table->item(row, 0)->data(Qt::UserRole).toString();
     const QString preferred = local_table->item(row, 1)->data(Qt::UserRole).toString();
     const QString disfavored = local_table->item(row, 2)->data(Qt::UserRole).toString();
-    const QString context = local_table->item(row, 3)->data(Qt::UserRole).toString();
-    if (!store.DeleteLocalPreference(key.toUtf8().constData(),
-                                     context.toUtf8().constData(),
+    if (!store.DeleteLocalPreference(key.toUtf8().constData(), "",
                                      preferred.toUtf8().constData(),
                                      disfavored.toUtf8().constData())) {
       ShowError(&dialog, dialog.windowTitle(),
@@ -508,9 +509,10 @@ void ShowRev10ZenzFeedbackManagementDialog(
   QObject::connect(export_button, &QPushButton::clicked, &dialog, [&]() {
     const QString path = QFileDialog::getSaveFileName(
         &dialog, QString::fromUtf8("Zenz 学習データをエクスポート"),
-        QStringLiteral("zenz_feedback.tsv"),
+        QStringLiteral("zenz_feedback_v4.tsv"),
         QString::fromUtf8("TSV ファイル (*.tsv);;すべてのファイル (*)"));
     if (path.isEmpty()) return;
+    (void)store.Maintenance(static_cast<size_t>(max_entries));
     if (!store.ExportToFile(path.toStdWString())) {
       ShowError(&dialog, dialog.windowTitle(),
                 QString::fromUtf8("Zenz 学習データをエクスポートできませんでした。"));
@@ -543,6 +545,7 @@ void ShowRev10ZenzFeedbackManagementDialog(
                 QString::fromUtf8("Zenz 学習データをインポートできませんでした。"));
       return;
     }
+    (void)store.Maintenance(static_cast<size_t>(max_entries));
     reload();
   });
 
@@ -688,12 +691,13 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
       "利用を停止しますが、保存済みデータ自体は削除しません。"));
 
   auto* local_threshold_label = new QLabel(
-      QString::fromUtf8("局所表記を一般化するまでの修正回数"), threshold_parent);
+      QString::fromUtf8("局所補正を有効にするまでの修正回数"), threshold_parent);
   local_threshold_label->setObjectName(
       QStringLiteral("zenzLocalPreferenceThresholdLabel"));
   local_threshold_label->setToolTip(QString::fromUtf8(
-      "同じ方向の安全な局所修正を何回確認したら、Zenzへのhintと安全な局所補正に使うかを指定します。"
-      "回数未満の記録は保存されますが、変換結果には影響しません。"));
+      "同じminimal reading + raw Zenz + 修正後表記の明示修正を何回確認したら、決定論的な局所補正に使うかを指定します。"
+      "文脈クラスをまたいで同じruleへ合算します。自動補正をそのまま確定してもcountは増えません。"
+      "適用時には現在Mozcが修正後表記を一意に支持することを必須とします。"));
 
   auto* local_threshold = new QSpinBox(threshold_parent);
   local_threshold->setObjectName(
@@ -702,7 +706,21 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   local_threshold->setSuffix(QString::fromUtf8(" 回"));
   local_threshold->setValue(static_cast<int>(std::clamp<uint32_t>(
       dialog->zenz_local_preference_threshold_for_ui(), 1, 999)));
+  local_threshold->setRange(1, 255);
   local_threshold->setToolTip(local_threshold_label->toolTip());
+
+  auto* max_entries_label = new QLabel(
+      QString::fromUtf8("Zenz学習の最大保持件数"), threshold_parent);
+  max_entries_label->setToolTip(QString::fromUtf8(
+      "全文フィードバックと局所表記に、それぞれ独立して適用する最大logical entry数です。"));
+  auto* max_entries = new QSpinBox(threshold_parent);
+  max_entries->setObjectName(QStringLiteral("zenzFeedbackMaxEntriesSpinBox"));
+  max_entries->setRange(100, 20000);
+  max_entries->setSingleStep(100);
+  max_entries->setSuffix(QString::fromUtf8(" 件"));
+  max_entries->setValue(static_cast<int>(std::clamp<uint32_t>(
+      dialog->zenz_feedback_max_entries_for_ui(), 100, 20000)));
+  max_entries->setToolTip(max_entries_label->toolTip());
 
   if (threshold_parent != nullptr) {
     if (auto* grid = qobject_cast<QGridLayout*>(threshold_parent->layout())) {
@@ -723,12 +741,15 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
           local_row = full_row + full_row_span;
           InsertGridRow(grid, local_row);
           InsertGridRow(grid, local_row + 1);
+          InsertGridRow(grid, local_row + 2);
         }
       }
 
       grid->addWidget(local_learning, local_row, 0, 1, 8);
       grid->addWidget(local_threshold_label, local_row + 1, 0, 1, 3);
       grid->addWidget(local_threshold, local_row + 1, 3, 1, 5);
+      grid->addWidget(max_entries_label, local_row + 2, 0, 1, 3);
+      grid->addWidget(max_entries, local_row + 2, 3, 1, 5);
     } else if (QLayout* layout = threshold_parent->layout()) {
       layout->addWidget(local_learning);
       auto* row_widget = new QWidget(threshold_parent);
@@ -738,6 +759,13 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
       row_layout->addStretch();
       row_layout->addWidget(local_threshold);
       layout->addWidget(row_widget);
+      auto* max_row_widget = new QWidget(threshold_parent);
+      auto* max_row_layout = new QHBoxLayout(max_row_widget);
+      max_row_layout->setContentsMargins(0, 0, 0, 0);
+      max_row_layout->addWidget(max_entries_label);
+      max_row_layout->addStretch();
+      max_row_layout->addWidget(max_entries);
+      layout->addWidget(max_row_widget);
     }
   }
 
@@ -759,6 +787,14 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   // maintaining a second Apply/OK path for the dynamic controls.
   QObject::connect(local_threshold, SIGNAL(valueChanged(int)), dialog,
                    SLOT(EnableApplyButton()));
+  QObject::connect(
+      max_entries, qOverload<int>(&QSpinBox::valueChanged), dialog,
+      [dialog](int value) {
+        dialog->set_zenz_feedback_max_entries_for_ui(
+            static_cast<uint32_t>(std::clamp(value, 100, 20000)));
+      });
+  QObject::connect(max_entries, SIGNAL(valueChanged(int)), dialog,
+                   SLOT(EnableApplyButton()));
 
   delay_label->setText(QString::fromUtf8("Zenz 補正開始の遅延"));
   delay_label->setToolTip(QString::fromUtf8(
@@ -768,7 +804,8 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
 
   auto update = [dialog, live, zenz, feedback, auto_block, full_threshold,
                  full_threshold_label, local_learning, local_threshold,
-                 local_threshold_label, left_context_label,
+                 local_threshold_label, max_entries_label, max_entries,
+                 left_context_label,
                  left_context_spin, right_context]() {
     (void)live;  // Live conversion intentionally does not gate Zenz anymore.
     zenz->setEnabled(true);
@@ -823,6 +860,8 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
         feedback_enabled && local_learning->isChecked();
     local_threshold_label->setEnabled(local_controls_enabled);
     local_threshold->setEnabled(local_controls_enabled);
+    max_entries_label->setEnabled(feedback_enabled);
+    max_entries->setEnabled(feedback_enabled);
   };
 
   // ResetToDefaults() updates base_config_ through ConvertFromProto(), but this
@@ -834,17 +873,22 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
           QStringLiteral("resetToDefaultsButton"))) {
     QObject::connect(
         reset, &QPushButton::clicked, dialog,
-        [dialog, local_learning, local_threshold, left_context_spin, update]() {
+        [dialog, local_learning, local_threshold, max_entries,
+         left_context_spin, update]() {
           QTimer::singleShot(
               0, dialog,
-              [dialog, local_learning, local_threshold, left_context_spin,
-               update]() {
+              [dialog, local_learning, local_threshold, max_entries,
+               left_context_spin, update]() {
                 local_learning->setChecked(
                     dialog->use_zenz_local_preference_learning_for_ui());
                 local_threshold->setValue(static_cast<int>(
                     std::clamp<uint32_t>(
                         dialog->zenz_local_preference_threshold_for_ui(), 1,
-                        999)));
+                        255)));
+                max_entries->setValue(static_cast<int>(
+                    std::clamp<uint32_t>(
+                        dialog->zenz_feedback_max_entries_for_ui(), 100,
+                        20000)));
                 left_context_spin->setValue(static_cast<int>(
                     std::clamp<uint32_t>(
                         dialog->zenz_live_correction_left_context_length_for_ui(),
@@ -873,9 +917,9 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
     manage->disconnect(dialog);
     QObject::connect(
         manage, &QPushButton::clicked, dialog,
-        [dialog, auto_block, full_threshold, local_threshold]() {
+        [dialog, auto_block, full_threshold, local_threshold, max_entries]() {
           ShowRev10ZenzFeedbackManagementDialog(
-              dialog, auto_block, full_threshold, local_threshold);
+              dialog, auto_block, full_threshold, local_threshold, max_entries);
         });
   }
 

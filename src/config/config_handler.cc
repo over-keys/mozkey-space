@@ -113,6 +113,9 @@ void ApplyMozkeyProductDefaults(Config* config) {
   if (!config->has_zenz_local_preference_threshold()) {
     config->set_zenz_local_preference_threshold(2);
   }
+  if (!config->has_zenz_feedback_max_entries()) {
+    config->set_zenz_feedback_max_entries(1000);
+  }
   if (!config->has_use_zenz_live_correction_right_context()) {
     config->set_use_zenz_live_correction_right_context(true);
   }

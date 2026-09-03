@@ -70,6 +70,13 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
     base_config_.set_zenz_local_preference_threshold(value);
   }
 
+  uint32_t zenz_feedback_max_entries_for_ui() const {
+    return base_config_.zenz_feedback_max_entries();
+  }
+  void set_zenz_feedback_max_entries_for_ui(uint32_t value) {
+    base_config_.set_zenz_feedback_max_entries(value);
+  }
+
   // The upstream proto already owns this setting, but current-main's .ui does
   // not expose it.  Keep the dynamic control in base_config_ so it follows the
   // same Apply/OK/Cancel/Reset semantics as the Local Preference threshold.

@@ -1,17 +1,17 @@
 #include "session/zenz_feedback_store.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <istream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <ostream>
 #include <set>
 #include <sstream>
 #include <string>
@@ -34,7 +34,6 @@
 #elif defined(__APPLE__) && TARGET_OS_OSX
 #include <fcntl.h>
 #include <sys/file.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -43,17 +42,6 @@ namespace session {
 namespace {
 
 constexpr int kAcceptThreshold = 1;
-
-// Ordinary v2 records are full-sequence observations for one Zenz
-// request/response pair. REV10 stores conservative Local Zenz Preference
-// observations as atomic v3 records in the same file.  Legacy REV9
-// "local_revert" v2 pairs remain parseable for import compatibility, but REV10
-// never writes them and they never participate in ordinary feedback ranking.
-//
-// Feedback is interpreted as a ranking signal.  Accepted feedback is a strong
-// positive observation.  Rejected feedback is usually a weak or medium negative
-// observation: Space after a visible Zenz result often means "show me the
-// normal candidates now", not "never show this candidate again".
 constexpr int kAcceptedFeedbackWeight = 1000;
 constexpr int kSpaceRevertRejectWeight = 150;
 constexpr int kPredictAfterZenzRejectWeight = 200;
@@ -61,320 +49,69 @@ constexpr int kExplicitConversionRejectWeight = 400;
 constexpr int kLegacyRejectWeight = 400;
 constexpr int kHardRejectWeight = 2000;
 
-#if defined(_WIN32)
+constexpr size_t kMinMaintenanceEntries = 100;
+constexpr size_t kMaxMaintenanceEntries = 20000;
+constexpr int kMinLocalThreshold = 1;
+constexpr int kMaxLocalThreshold = 255;
+constexpr int kMaxLocalEvidenceCount = 255;
 
-std::wstring Utf8ToWide(absl::string_view s) {
-  if (s.empty()) {
-    return std::wstring();
-  }
+using FeedbackKey = std::tuple<std::string, std::string, std::string>;
+using LocalKey =
+    std::tuple<std::string, std::string, std::string>;
 
-  const int input_size = static_cast<int>(s.size());
-  const int wide_size =
-      ::MultiByteToWideChar(CP_UTF8, 0, s.data(), input_size, nullptr, 0);
-  if (wide_size <= 0) {
-    return L"<invalid utf8>";
-  }
-
-  std::wstring w(wide_size, L'\0');
-  ::MultiByteToWideChar(CP_UTF8, 0, s.data(), input_size, w.data(), wide_size);
-  return w;
-}
-
-std::string WideToUtf8(const std::wstring& w) {
-  if (w.empty()) {
-    return "";
-  }
-
-  const int utf8_size = ::WideCharToMultiByte(
-      CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr,
-      nullptr);
-  if (utf8_size <= 0) {
-    return "";
-  }
-
-  std::string s(utf8_size, '\0');
-  ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
-                        s.data(), utf8_size, nullptr, nullptr);
-  return s;
-}
-
-void StoreDebugOutputWide(const std::wstring& message) {
-  std::wstring line = L"[zenz-feedback-store] ";
-  line.append(message);
-  line.push_back(L'\n');
-  ::OutputDebugStringW(line.c_str());
-}
-
-void StoreDebugOutput(absl::string_view message) {
-  StoreDebugOutputWide(Utf8ToWide(message));
-}
-
-std::wstring RedactedWidePathStats(const wchar_t* label,
-                                   const std::wstring& path) {
-  std::wstring output(label);
-  output.append(L"_chars=");
-  output.append(std::to_wstring(path.size()));
-  return output;
-}
-
-bool EnsureDirectoryExists(const std::wstring& dir);
-
-std::wstring GetUserProfileDir() {
-  wchar_t buffer[MAX_PATH] = {};
-  const DWORD n = ::GetEnvironmentVariableW(L"USERPROFILE", buffer, MAX_PATH);
-  if (n == 0 || n >= MAX_PATH) {
-    return L"";
-  }
-  return std::wstring(buffer, n);
-}
-
-std::wstring GetLocalLowAppDataDir() {
-  const std::wstring user_profile = GetUserProfileDir();
-  if (user_profile.empty()) {
-    return L"";
-  }
-  return user_profile + L"\\AppData\\LocalLow";
-}
-
-std::wstring GetFeedbackDirWideForRead() {
-  const std::wstring local_low = GetLocalLowAppDataDir();
-  if (local_low.empty()) {
-    return L"";
-  }
-  return local_low + L"\\Mozc";
-}
-
-std::wstring GetFeedbackDirWideForWrite() {
-  const std::wstring dir = GetFeedbackDirWideForRead();
-  if (dir.empty()) {
-    StoreDebugOutputWide(L"LocalLow path unavailable");
-    return L"";
-  }
-
-  if (!EnsureDirectoryExists(dir)) {
-    StoreDebugOutputWide(
-      std::wstring(L"LocalLow Mozc dir cannot be created ")
-          .append(RedactedWidePathStats(L"dir", dir)));
-    return L"";
-  }
-
-  return dir;
-}
-
-std::wstring GetFeedbackPathWideFromDir(const std::wstring& dir) {
-  if (dir.empty()) {
-    return L"";
-  }
-
-  return dir + L"\\zenz_feedback.tsv";
-}
-
-std::wstring GetFeedbackPathWide() {
-  return GetFeedbackPathWideFromDir(GetFeedbackDirWideForRead());
-}
-
-bool EnsureDirectoryExists(const std::wstring& dir) {
-  if (dir.empty()) {
-    StoreDebugOutputWide(L"directory path is empty");
-    return false;
-  }
-
-  const DWORD attr = ::GetFileAttributesW(dir.c_str());
-  if (attr != INVALID_FILE_ATTRIBUTES) {
-    if (attr & FILE_ATTRIBUTE_DIRECTORY) {
-      StoreDebugOutputWide(
-        std::wstring(L"directory already exists ")
-            .append(RedactedWidePathStats(L"dir", dir)));
-      return true;
-    }
-    StoreDebugOutputWide(
-      std::wstring(L"path exists but is not directory ")
-          .append(RedactedWidePathStats(L"dir", dir)));
-    return false;
-  }
-
-  if (::CreateDirectoryW(dir.c_str(), nullptr)) {
-    StoreDebugOutputWide(
-      std::wstring(L"CreateDirectoryW ok ")
-          .append(RedactedWidePathStats(L"dir", dir)));
-    return true;
-  }
-
-  const DWORD error = ::GetLastError();
-  if (error == ERROR_ALREADY_EXISTS) {
-    StoreDebugOutputWide(
-      std::wstring(L"CreateDirectoryW already exists ")
-          .append(RedactedWidePathStats(L"dir", dir)));
-    return true;
-  }
-
-  StoreDebugOutputWide(
-    std::wstring(L"CreateDirectoryW failed error=")
-        .append(std::to_wstring(error))
-        .append(L" ")
-        .append(RedactedWidePathStats(L"dir", dir)));
-  return false;
-}
-
-#elif defined(__APPLE__) && TARGET_OS_OSX
-
-void StoreDebugOutput(absl::string_view) {}
-
-std::string GetFeedbackDirectoryUtf8() {
-  const char* home = std::getenv("HOME");
-  if (home == nullptr || *home == '\0') {
-    return std::string();
-  }
-  return (std::filesystem::path(home) / ".mozc").string();
-}
-
-std::string GetFeedbackPathUtf8() {
-  const std::string profile_dir = GetFeedbackDirectoryUtf8();
-  if (profile_dir.empty()) {
-    return std::string();
-  }
-  return (std::filesystem::path(profile_dir) / "zenz_feedback.tsv").string();
-}
-
-std::string GetFeedbackPathUtf8ForWrite() {
-  const std::string profile_dir = GetFeedbackDirectoryUtf8();
-  if (profile_dir.empty()) {
-    return std::string();
-  }
-  std::error_code ec;
-  std::filesystem::create_directories(profile_dir, ec);
-  if (ec) {
-    return std::string();
-  }
-  return (std::filesystem::path(profile_dir) / "zenz_feedback.tsv").string();
-}
-
-void AppendUtf8CodePoint(uint32_t c, std::string* output) {
-  if (c <= 0x7F) {
-    output->push_back(static_cast<char>(c));
-  } else if (c <= 0x7FF) {
-    output->push_back(static_cast<char>(0xC0 | (c >> 6)));
-    output->push_back(static_cast<char>(0x80 | (c & 0x3F)));
-  } else if (c <= 0xFFFF) {
-    output->push_back(static_cast<char>(0xE0 | (c >> 12)));
-    output->push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
-    output->push_back(static_cast<char>(0x80 | (c & 0x3F)));
-  } else if (c <= 0x10FFFF) {
-    output->push_back(static_cast<char>(0xF0 | (c >> 18)));
-    output->push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
-    output->push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
-    output->push_back(static_cast<char>(0x80 | (c & 0x3F)));
-  }
-}
-
-std::string WidePathToUtf8(const std::wstring& path) {
-  std::string output;
-  output.reserve(path.size());
-  for (const wchar_t c : path) {
-    const uint32_t codepoint = static_cast<uint32_t>(c);
-    if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
-      return std::string();
-    }
-    AppendUtf8CodePoint(codepoint, &output);
-  }
-  return output;
-}
-
-#else
-
-void StoreDebugOutput(absl::string_view) {}
-
-#endif
-
-// Configuration UI and IME run in separate processes.  Every mutation uses
-// this OS-level lock in addition to the in-process mutex below so a management
-// read-modify-rewrite cannot race with an IME append and silently lose the
-// newest feedback row.  The lock contains no input text and is automatically
-// released by the OS if a process exits unexpectedly.
-class ScopedFeedbackInterprocessLock {
- private:
-  static constexpr int kLockWaitMsec = 1000;
-
- public:
-  ScopedFeedbackInterprocessLock() {
-#if defined(_WIN32)
-    handle_ = ::CreateMutexW(
-        nullptr, FALSE, L"Local\\MozcZenzFeedbackStoreMutationV1");
-    if (handle_ == nullptr) {
-      StoreDebugOutput("cross-process lock create failed");
-      return;
-    }
-    const DWORD wait = ::WaitForSingleObject(handle_, kLockWaitMsec);
-    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
-      locked_ = true;
-      return;
-    }
-    StoreDebugOutput("cross-process lock wait failed");
-#elif defined(__APPLE__) && TARGET_OS_OSX
-    const std::string feedback_path = GetFeedbackPathUtf8ForWrite();
-    if (feedback_path.empty()) {
-      return;
-    }
-    const std::string lock_path = feedback_path + ".lock";
-    fd_ = ::open(lock_path.c_str(), O_CREAT | O_RDWR, 0600);
-    if (fd_ < 0) {
-      return;
-    }
-    const int flags = ::fcntl(fd_, F_GETFD, 0);
-    if (flags >= 0) {
-      (void)::fcntl(fd_, F_SETFD, flags | FD_CLOEXEC);
-    }
-    constexpr int kRetryStepMsec = 10;
-    const int attempts = kLockWaitMsec / kRetryStepMsec;
-    for (int attempt = 0; attempt < attempts; ++attempt) {
-      if (::flock(fd_, LOCK_EX | LOCK_NB) == 0) {
-        locked_ = true;
-        return;
-      }
-      if (errno != EWOULDBLOCK && errno != EAGAIN) {
-        return;
-      }
-      std::this_thread::sleep_for(
-          std::chrono::milliseconds(kRetryStepMsec));
-    }
-#else
-    return;
-#endif
-  }
-
-  ~ScopedFeedbackInterprocessLock() {
-#if defined(_WIN32)
-    if (locked_ && handle_ != nullptr) {
-      ::ReleaseMutex(handle_);
-    }
-    if (handle_ != nullptr) {
-      ::CloseHandle(handle_);
-    }
-#elif defined(__APPLE__) && TARGET_OS_OSX
-    if (fd_ >= 0) {
-      if (locked_) {
-        (void)::flock(fd_, LOCK_UN);
-      }
-      ::close(fd_);
-    }
-#endif
-  }
-
-  ScopedFeedbackInterprocessLock(const ScopedFeedbackInterprocessLock&) =
-      delete;
-  ScopedFeedbackInterprocessLock& operator=(
-      const ScopedFeedbackInterprocessLock&) = delete;
-
-  bool ok() const { return locked_; }
-
- private:
-  bool locked_ = false;
-#if defined(_WIN32)
-  HANDLE handle_ = nullptr;
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  int fd_ = -1;
-#endif
+enum class RecordKind {
+  kFull,
+  kLocal,
 };
+
+struct Record {
+  RecordKind kind = RecordKind::kFull;
+  std::string action;
+  std::string key;
+  std::string context_class;
+  // Full: complete Zenz value.
+  // Local: raw Zenz surface.
+  std::string value;
+  // Full: reject reason.
+  // Local: corrected surface.
+  std::string extra;
+  int count = 1;
+  size_t sequence = 0;
+};
+
+struct Counts {
+  int accepted = 0;
+  int rejected = 0;
+  int auto_block_rejected = 0;
+  int positive_score = 0;
+  int negative_score = 0;
+  bool hard_rejected = false;
+};
+
+struct LocalEvent {
+  std::string context_class;
+  std::string raw_zenz_surface;
+  std::string corrected_surface;
+  bool accepted = true;
+  int count = 1;
+  size_t sequence = 0;
+};
+
+using FeedbackCounts = std::map<FeedbackKey, Counts>;
+using LocalEventsByReading =
+    std::map<std::string, std::vector<LocalEvent>>;
+
+struct FeedbackData {
+  FeedbackCounts counts;
+  LocalEventsByReading local_events_by_reading;
+};
+
+std::mutex g_feedback_data_cache_mutex;
+std::mutex g_feedback_mutation_mutex;
+std::mutex g_lifecycle_maintenance_mutex;
+bool g_lifecycle_maintenance_done = false;
+std::filesystem::path g_lifecycle_maintenance_path;
+size_t g_lifecycle_maintenance_max_entries = 0;
 
 std::string EscapeTsv(absl::string_view s) {
   std::string out;
@@ -401,43 +138,9 @@ std::string EscapeTsv(absl::string_view s) {
   return out;
 }
 
-std::vector<std::string> SplitTab(const std::string& line) {
-  std::vector<std::string> fields;
-  std::string current;
-
-  for (char c : line) {
-    if (c == '\t') {
-      fields.push_back(current);
-      current.clear();
-    } else {
-      current.push_back(c);
-    }
-  }
-
-  fields.push_back(current);
-  return fields;
-}
-
-void StripUtf8BomFromFirstField(std::vector<std::string>* fields) {
-  if (fields == nullptr || fields->empty()) {
-    return;
-  }
-
-  std::string& first = (*fields)[0];
-  constexpr absl::string_view kUtf8Bom = "\xEF\xBB\xBF";
-  if (absl::StartsWith(first, kUtf8Bom)) {
-    first.erase(0, kUtf8Bom.size());
-  }
-}
-
-std::string RedactedStats(absl::string_view label, absl::string_view text) {
-  return absl::StrCat(label, "_bytes=", text.size());
-}
-
 std::string UnescapeTsv(absl::string_view s) {
   std::string out;
   out.reserve(s.size());
-
   bool escaping = false;
   for (const char c : s) {
     if (!escaping) {
@@ -448,7 +151,6 @@ std::string UnescapeTsv(absl::string_view s) {
       }
       continue;
     }
-
     switch (c) {
       case 't':
         out.push_back('\t');
@@ -463,30 +165,56 @@ std::string UnescapeTsv(absl::string_view s) {
         out.push_back('\\');
         break;
       default:
+        out.push_back('\\');
         out.push_back(c);
         break;
     }
     escaping = false;
   }
-
   if (escaping) {
     out.push_back('\\');
   }
-
   return out;
 }
 
-bool ContainsUnsafeTsvTextChar(absl::string_view s) {
-  for (const char c : s) {
-    if (c == '\t' || c == '\r' || c == '\n') {
-      return true;
+std::vector<std::string> SplitTab(const std::string& line) {
+  std::vector<std::string> fields;
+  std::string current;
+  for (const char c : line) {
+    if (c == '\t') {
+      fields.push_back(std::move(current));
+      current.clear();
+    } else {
+      current.push_back(c);
     }
   }
-  return false;
+  fields.push_back(std::move(current));
+  return fields;
 }
 
-bool IsValidUtf8ForFeedback(absl::string_view s) {
-  return Util::IsValidUtf8(s);
+void StripUtf8Bom(std::vector<std::string>* fields) {
+  if (fields == nullptr || fields->empty()) {
+    return;
+  }
+  constexpr absl::string_view kBom = "\xEF\xBB\xBF";
+  if (absl::StartsWith((*fields)[0], kBom)) {
+    (*fields)[0].erase(0, kBom.size());
+  }
+}
+
+bool ParsePositiveCount(absl::string_view text, int* value) {
+  if (value == nullptr || text.empty()) {
+    return false;
+  }
+  int parsed = 0;
+  const char* begin = text.data();
+  const char* end = text.data() + text.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end || parsed <= 0) {
+    return false;
+  }
+  *value = parsed;
+  return true;
 }
 
 bool IsKnownContextClass(absl::string_view context_class) {
@@ -496,9 +224,7 @@ bool IsKnownContextClass(absl::string_view context_class) {
          context_class == "mixed_japanese_ascii" ||
          context_class == "symbol_or_other" ||
          context_class == "ascii_or_digit" ||
-         context_class == "sensitive_like" ||
-         context_class == "legacy" ||
-         context_class == "local_revert";
+         context_class == "sensitive_like";
 }
 
 std::string NormalizeContextClass(absl::string_view context_class) {
@@ -506,54 +232,25 @@ std::string NormalizeContextClass(absl::string_view context_class) {
                                : std::string(context_class);
 }
 
-enum class ParsedFeedbackRecordKind {
-  kFullSequence,
-  kLocalPreference,
-};
+bool ContainsUnsafePersistedChar(absl::string_view s) {
+  for (const unsigned char c : s) {
+    if (c == 0 || c < 0x20 || c == 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
 
-struct ParsedFeedbackRecord {
-  ParsedFeedbackRecordKind kind = ParsedFeedbackRecordKind::kFullSequence;
-  std::string action;
-  std::string key;
-  std::string context_class;
-  std::string value;
-  std::string disfavored_value;
-  std::string reason;
-};
-
-bool IsSafeFeedbackRecord(const ParsedFeedbackRecord& record) {
-  if (record.key.empty() || record.value.empty()) {
+bool IsSafeRecord(const Record& record) {
+  if ((record.action != "accepted" && record.action != "rejected") ||
+      record.key.empty() || record.value.empty() || record.count <= 0 ||
+      !IsKnownContextClass(record.context_class)) {
     return false;
   }
 
-  if (!IsKnownContextClass(record.context_class)) {
-    return false;
-  }
-
-  if (record.kind == ParsedFeedbackRecordKind::kLocalPreference) {
-    if (record.context_class == "local_revert" ||
-        record.disfavored_value.empty() ||
-        record.value == record.disfavored_value ||
-        record.reason != "rejected_zenz_final_commit") {
+  if (record.kind == RecordKind::kLocal) {
+    if (record.extra.empty() || record.value == record.extra) {
       return false;
-    }
-  } else {
-    if (record.action != "accepted" && record.action != "rejected") {
-      return false;
-    }
-
-    // Legacy REV9 local_revert is a dedicated paired-evidence namespace.
-    // Accept only the two canonical row shapes so imported or hand-edited TSV
-    // cannot silently turn arbitrary local rows into runtime preferences.
-    if (record.context_class == "local_revert") {
-      const bool valid_local_preferred =
-          record.action == "accepted" &&
-          record.reason == "local_revert_preferred";
-      const bool valid_local_rejected =
-          record.action == "rejected" && record.reason == "local_revert";
-      if (!valid_local_preferred && !valid_local_rejected) {
-        return false;
-      }
     }
   }
 
@@ -561,124 +258,112 @@ bool IsSafeFeedbackRecord(const ParsedFeedbackRecord& record) {
   constexpr size_t kMaxContextClassBytes = 64;
   constexpr size_t kMaxValueBytes = 512;
   constexpr size_t kMaxReasonBytes = 128;
-
   if (record.key.size() > kMaxKeyBytes ||
       record.context_class.size() > kMaxContextClassBytes ||
       record.value.size() > kMaxValueBytes ||
-      record.disfavored_value.size() > kMaxValueBytes ||
-      record.reason.size() > kMaxReasonBytes) {
+      record.extra.size() >
+          (record.kind == RecordKind::kLocal ? kMaxValueBytes
+                                             : kMaxReasonBytes)) {
     return false;
   }
 
-  if (ContainsUnsafeTsvTextChar(record.action) ||
-      ContainsUnsafeTsvTextChar(record.key) ||
-      ContainsUnsafeTsvTextChar(record.context_class) ||
-      ContainsUnsafeTsvTextChar(record.value) ||
-      ContainsUnsafeTsvTextChar(record.disfavored_value) ||
-      ContainsUnsafeTsvTextChar(record.reason)) {
+  if (ContainsUnsafePersistedChar(record.key) ||
+      ContainsUnsafePersistedChar(record.context_class) ||
+      ContainsUnsafePersistedChar(record.value) ||
+      ContainsUnsafePersistedChar(record.extra)) {
     return false;
   }
 
-  return IsValidUtf8ForFeedback(record.key) &&
-         IsValidUtf8ForFeedback(record.context_class) &&
-         IsValidUtf8ForFeedback(record.value) &&
-         IsValidUtf8ForFeedback(record.disfavored_value) &&
-         IsValidUtf8ForFeedback(record.reason);
+  return Util::IsValidUtf8(record.key) &&
+         Util::IsValidUtf8(record.context_class) &&
+         Util::IsValidUtf8(record.value) &&
+         Util::IsValidUtf8(record.extra);
 }
 
-bool ParseFeedbackRecord(const std::vector<std::string>& fields,
-                         ParsedFeedbackRecord* record) {
-  if (record == nullptr) {
+bool ParseRecord(const std::vector<std::string>& fields, Record* record) {
+  if (record == nullptr || fields.size() != 8 || fields[0] != "v4") {
     return false;
   }
 
-  // v3 Local Zenz Preference:
-  //   v3  local_preference  key  source_context_class
-  //       preferred  disfavored  reason
-  //
-  // One line is one observation; preferred/disfavored can never be split by
-  // concurrent append or import/export.
-  if (fields.size() == 7 && fields[0] == "v3" &&
-      fields[1] == "local_preference") {
-    ParsedFeedbackRecord parsed;
-    parsed.kind = ParsedFeedbackRecordKind::kLocalPreference;
-    parsed.key = UnescapeTsv(fields[2]);
-    parsed.context_class =
-        NormalizeContextClass(UnescapeTsv(fields[3]));
-    parsed.value = UnescapeTsv(fields[4]);
-    parsed.disfavored_value = UnescapeTsv(fields[5]);
-    parsed.reason = UnescapeTsv(fields[6]);
-
-    if (!IsSafeFeedbackRecord(parsed)) {
-      return false;
-    }
-
-    *record = std::move(parsed);
-    return true;
+  Record parsed;
+  if (fields[1] == "full") {
+    parsed.kind = RecordKind::kFull;
+  } else if (fields[1] == "local") {
+    parsed.kind = RecordKind::kLocal;
+  } else {
+    return false;
   }
 
-  // v2:
-  //   v2  accepted|rejected  key  context_class  value  reason
-  //
-  // Ordinary key/value fields are full-sequence reading/correction pairs.
-  // The dedicated local_revert class is the only local exception and stores
-  // already-proven local reading/surface evidence using the same v2 columns.
-  // Raw left/right context is never persisted.
-  if (fields.size() >= 5 && fields[0] == "v2") {
-    ParsedFeedbackRecord parsed;
-    parsed.action = UnescapeTsv(fields[1]);
-    parsed.key = UnescapeTsv(fields[2]);
-    parsed.context_class =
-        NormalizeContextClass(UnescapeTsv(fields[3]));
-    parsed.value = UnescapeTsv(fields[4]);
-    parsed.reason = fields.size() >= 6 ? UnescapeTsv(fields[5]) : "";
-
-    if (!IsSafeFeedbackRecord(parsed)) {
-      return false;
-    }
-
-    *record = std::move(parsed);
-    return true;
+  parsed.action = UnescapeTsv(fields[2]);
+  parsed.key = UnescapeTsv(fields[3]);
+  parsed.context_class =
+      NormalizeContextClass(UnescapeTsv(fields[4]));
+  parsed.value = UnescapeTsv(fields[5]);
+  parsed.extra = UnescapeTsv(fields[6]);
+  if (!ParsePositiveCount(fields[7], &parsed.count)) {
+    return false;
+  }
+  if (!IsSafeRecord(parsed)) {
+    return false;
   }
 
-  // v1 legacy:
-  //   accepted|rejected  key  context  value  reason
-  //
-  // The v1 context field may contain raw or reversible left context.  Never use
-  // it as a lookup key after the privacy migration.  Keep only a coarse legacy
-  // bucket so old feedback can still influence non-contextual decisions without
-  // preserving or comparing raw context.
-  if (fields.size() >= 4 &&
-      (fields[0] == "accepted" || fields[0] == "rejected")) {
-    ParsedFeedbackRecord parsed;
-    parsed.action = UnescapeTsv(fields[0]);
-    parsed.key = UnescapeTsv(fields[1]);
-    parsed.context_class = "legacy";
-    parsed.value = UnescapeTsv(fields[3]);
-    parsed.reason = fields.size() >= 5 ? UnescapeTsv(fields[4]) : "";
-
-    if (!IsSafeFeedbackRecord(parsed)) {
-      return false;
-    }
-
-    *record = std::move(parsed);
-    return true;
-  }
-
-  return false;
+  *record = std::move(parsed);
+  return true;
 }
 
-struct Counts {
-  int accepted = 0;
-  int rejected = 0;
-  int auto_block_rejected = 0;
-  int positive_score = 0;
-  int negative_score = 0;
-  bool hard_rejected = false;
-};
+void WriteRecordToStream(const Record& record, std::ostream* output) {
+  *output << "v4" << '\t'
+          << (record.kind == RecordKind::kFull ? "full" : "local") << '\t'
+          << EscapeTsv(record.action) << '\t'
+          << EscapeTsv(record.key) << '\t'
+          << EscapeTsv(NormalizeContextClass(record.context_class)) << '\t'
+          << EscapeTsv(record.value) << '\t'
+          << EscapeTsv(record.extra) << '\t'
+          << record.count << '\n';
+}
 
-int TotalScore(const Counts& c) {
-  return c.positive_score - c.negative_score;
+bool WriteRecordsToStream(const std::vector<Record>& records,
+                          std::ostream* output) {
+  if (output == nullptr) {
+    return false;
+  }
+  for (const Record& record : records) {
+    if (!IsSafeRecord(record)) {
+      return false;
+    }
+    WriteRecordToStream(record, output);
+  }
+  output->flush();
+  return static_cast<bool>(*output);
+}
+
+bool LoadRecordsFromStream(std::istream* input, bool strict,
+                           std::vector<Record>* records) {
+  if (input == nullptr || records == nullptr) {
+    return false;
+  }
+  records->clear();
+  bool all_valid = true;
+  std::string line;
+  size_t sequence = 0;
+  while (std::getline(*input, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    std::vector<std::string> fields = SplitTab(line);
+    StripUtf8Bom(&fields);
+    Record record;
+    if (!ParseRecord(fields, &record)) {
+      all_valid = false;
+      if (strict) {
+        return false;
+      }
+      continue;
+    }
+    record.sequence = sequence++;
+    records->push_back(std::move(record));
+  }
+  return all_valid || !strict;
 }
 
 bool IsHardRejectReason(absl::string_view reason) {
@@ -701,33 +386,92 @@ int RejectWeightForReason(absl::string_view reason) {
   if (reason == "explicit_conversion_after_zenz") {
     return kExplicitConversionRejectWeight;
   }
-  if (reason == "local_revert") {
-    return kAcceptedFeedbackWeight;
-  }
   return kLegacyRejectWeight;
 }
 
-void AddAccepted(Counts* c) {
-  ++c->accepted;
-  c->positive_score += kAcceptedFeedbackWeight;
+int SaturatingAddNonNegative(int lhs, int rhs) {
+  if (rhs <= 0) {
+    return lhs;
+  }
+  if (lhs >= std::numeric_limits<int>::max() - rhs) {
+    return std::numeric_limits<int>::max();
+  }
+  return lhs + rhs;
 }
 
-void AddRejected(absl::string_view reason, Counts* c) {
-  ++c->rejected;
-  c->negative_score += RejectWeightForReason(reason);
-  if (!IsHardRejectReason(reason) && reason != "local_revert") {
-    ++c->auto_block_rejected;
+int SaturatingWeightedAdd(int current, int count, int weight) {
+  if (count <= 0 || weight <= 0) {
+    return current;
   }
-  c->hard_rejected |= IsHardRejectReason(reason);
+  const int64_t value = static_cast<int64_t>(current) +
+                        static_cast<int64_t>(count) * weight;
+  return static_cast<int>(std::min<int64_t>(
+      value, std::numeric_limits<int>::max()));
+}
+
+void AddAccepted(int count, Counts* c) {
+  c->accepted = SaturatingAddNonNegative(c->accepted, count);
+  c->positive_score = SaturatingWeightedAdd(
+      c->positive_score, count, kAcceptedFeedbackWeight);
+}
+
+void AddRejected(absl::string_view reason, int count, Counts* c) {
+  c->rejected = SaturatingAddNonNegative(c->rejected, count);
+  c->negative_score = SaturatingWeightedAdd(
+      c->negative_score, count, RejectWeightForReason(reason));
+  if (!IsHardRejectReason(reason)) {
+    c->auto_block_rejected =
+        SaturatingAddNonNegative(c->auto_block_rejected, count);
+  }
+  if (count > 0 && IsHardRejectReason(reason)) {
+    c->hard_rejected = true;
+  }
 }
 
 void MergeCounts(const Counts& src, Counts* dest) {
-  dest->accepted += src.accepted;
-  dest->rejected += src.rejected;
-  dest->auto_block_rejected += src.auto_block_rejected;
-  dest->positive_score += src.positive_score;
-  dest->negative_score += src.negative_score;
+  dest->accepted = SaturatingAddNonNegative(dest->accepted, src.accepted);
+  dest->rejected = SaturatingAddNonNegative(dest->rejected, src.rejected);
+  dest->auto_block_rejected = SaturatingAddNonNegative(
+      dest->auto_block_rejected, src.auto_block_rejected);
+  dest->positive_score = SaturatingAddNonNegative(
+      dest->positive_score, src.positive_score);
+  dest->negative_score = SaturatingAddNonNegative(
+      dest->negative_score, src.negative_score);
   dest->hard_rejected |= src.hard_rejected;
+}
+
+int TotalScore(const Counts& counts) {
+  const int64_t score = static_cast<int64_t>(counts.positive_score) -
+                        static_cast<int64_t>(counts.negative_score);
+  return static_cast<int>(std::clamp<int64_t>(
+      score, std::numeric_limits<int>::min(),
+      std::numeric_limits<int>::max()));
+}
+
+bool IsSensitiveFeedbackContextClass(absl::string_view context_class) {
+  return context_class == "sensitive_like";
+}
+
+bool IsSharedFeedbackContextClass(absl::string_view context_class) {
+  return context_class == "empty" ||
+         context_class == "japanese_only" ||
+         context_class == "japanese_with_punctuation" ||
+         context_class == "mixed_japanese_ascii" ||
+         context_class == "symbol_or_other" ||
+         context_class == "ascii_or_digit";
+}
+
+bool IsFeedbackContextCompatible(absl::string_view requested_context_class,
+                                 absl::string_view record_context_class) {
+  if (requested_context_class == record_context_class) {
+    return true;
+  }
+  if (IsSensitiveFeedbackContextClass(requested_context_class) ||
+      IsSensitiveFeedbackContextClass(record_context_class)) {
+    return false;
+  }
+  return IsSharedFeedbackContextClass(requested_context_class) &&
+         IsSharedFeedbackContextClass(record_context_class);
 }
 
 ZenzFeedbackAutoBlockPolicy NormalizeAutoBlockPolicy(
@@ -739,16 +483,42 @@ ZenzFeedbackAutoBlockPolicy NormalizeAutoBlockPolicy(
 }
 
 bool IsAutoBlockedByPolicy(
-    const Counts& c,
-    const ZenzFeedbackAutoBlockPolicy& auto_block_policy) {
-  const ZenzFeedbackAutoBlockPolicy policy =
-      NormalizeAutoBlockPolicy(auto_block_policy);
-  return policy.enabled &&
-         c.auto_block_rejected >= policy.reject_threshold;
+    const Counts& counts,
+    const ZenzFeedbackAutoBlockPolicy& policy) {
+  const ZenzFeedbackAutoBlockPolicy normalized =
+      NormalizeAutoBlockPolicy(policy);
+  return normalized.enabled &&
+         counts.auto_block_rejected >= normalized.reject_threshold;
 }
 
-bool IsRejectCountDominant(const Counts& c) {
-  return c.auto_block_rejected > c.accepted;
+bool IsRejectCountDominant(const Counts& counts) {
+  return counts.auto_block_rejected > counts.accepted;
+}
+
+ZenzFeedbackDecision BuildDecisionFromCounts(const Counts& counts) {
+  ZenzFeedbackDecision decision;
+  decision.accepted_count = counts.accepted;
+  decision.rejected_count = counts.rejected;
+  decision.auto_block_reject_count = counts.auto_block_rejected;
+  decision.positive_score = counts.positive_score;
+  decision.negative_score = counts.negative_score;
+  decision.total_score = TotalScore(counts);
+  decision.hard_rejected = counts.hard_rejected;
+
+  if (counts.hard_rejected) {
+    decision.action = ZenzFeedbackAction::kReject;
+    decision.reason = "feedback_hard_rejected";
+    return decision;
+  }
+  if (counts.accepted >= kAcceptThreshold && decision.total_score > 0) {
+    decision.action = ZenzFeedbackAction::kPrefer;
+    decision.reason = "feedback_preferred";
+    return decision;
+  }
+  decision.action = ZenzFeedbackAction::kNeutral;
+  decision.reason =
+      counts.rejected > 0 ? "feedback_downgraded" : "feedback_neutral";
+  return decision;
 }
 
 void ApplyRejectDominanceDecision(const Counts& counts,
@@ -758,113 +528,144 @@ void ApplyRejectDominanceDecision(const Counts& counts,
       decision->action != ZenzFeedbackAction::kPrefer) {
     return;
   }
-
   decision->auto_block_reject_count = counts.auto_block_rejected;
   if (!IsRejectCountDominant(counts)) {
     return;
   }
-
   decision->action = ZenzFeedbackAction::kNeutral;
   decision->reason = "feedback_reject_count_dominant";
 }
 
 void ApplyAutoBlockDecision(
     const Counts& counts,
-    const ZenzFeedbackAutoBlockPolicy& auto_block_policy,
+    const ZenzFeedbackAutoBlockPolicy& policy,
     ZenzFeedbackDecision* decision) {
   if (decision == nullptr || decision->hard_rejected) {
     return;
   }
-
   decision->auto_block_reject_count = counts.auto_block_rejected;
-  if (!IsAutoBlockedByPolicy(counts, auto_block_policy)) {
+  if (!IsAutoBlockedByPolicy(counts, policy)) {
     return;
   }
-
   decision->action = ZenzFeedbackAction::kReject;
   decision->reason = "feedback_auto_blocked";
   decision->auto_blocked = true;
 }
 
-using FeedbackKey = std::tuple<std::string, std::string, std::string>;
-
-#if defined(_WIN32)
-struct FeedbackFileStamp {
-  bool exists = false;
-  FILETIME last_write_time = {};
-  uint64_t file_size = 0;
+struct CanonicalLocalIdentity {
+  std::string key;
+  std::string raw_zenz_surface;
+  std::string corrected_surface;
 };
 
-bool SameFileTime(const FILETIME& lhs, const FILETIME& rhs) {
-  return ::CompareFileTime(&lhs, &rhs) == 0;
+std::vector<absl::string_view> LocalUtf8Chars(absl::string_view text) {
+  std::vector<absl::string_view> chars;
+  for (size_t i = 0; i < text.size();) {
+    const unsigned char lead = static_cast<unsigned char>(text[i]);
+    size_t n = 1;
+    if ((lead & 0x80) == 0) {
+      n = 1;
+    } else if ((lead & 0xe0) == 0xc0) {
+      n = 2;
+    } else if ((lead & 0xf0) == 0xe0) {
+      n = 3;
+    } else if ((lead & 0xf8) == 0xf0) {
+      n = 4;
+    } else {
+      return {};
+    }
+    if (i + n > text.size()) {
+      return {};
+    }
+    chars.push_back(text.substr(i, n));
+    i += n;
+  }
+  return chars;
 }
 
-bool SameFeedbackFileStamp(const FeedbackFileStamp& lhs,
-                           const FeedbackFileStamp& rhs) {
-  return lhs.exists == rhs.exists &&
-         lhs.file_size == rhs.file_size &&
-         SameFileTime(lhs.last_write_time, rhs.last_write_time);
+std::string JoinLocalUtf8Chars(const std::vector<absl::string_view>& chars,
+                               size_t begin, size_t end) {
+  std::string out;
+  for (size_t i = begin; i < end; ++i) {
+    out.append(chars[i]);
+  }
+  return out;
 }
 
-FeedbackFileStamp GetFeedbackFileStamp(const std::wstring& path) {
-  FeedbackFileStamp stamp;
-
-  if (path.empty()) {
-    return stamp;
+CanonicalLocalIdentity CanonicalizeLocalIdentity(
+    absl::string_view key, absl::string_view raw_zenz_surface,
+    absl::string_view corrected_surface) {
+  CanonicalLocalIdentity original{std::string(key),
+                                  std::string(raw_zenz_surface),
+                                  std::string(corrected_surface)};
+  if (key.empty() || raw_zenz_surface.empty() || corrected_surface.empty() ||
+      raw_zenz_surface == corrected_surface || !Util::IsValidUtf8(key) ||
+      !Util::IsValidUtf8(raw_zenz_surface) ||
+      !Util::IsValidUtf8(corrected_surface)) {
+    return original;
   }
 
-  WIN32_FILE_ATTRIBUTE_DATA data = {};
-  if (!::GetFileAttributesExW(
-          path.c_str(), GetFileExInfoStandard, &data)) {
-    return stamp;
+  const std::vector<absl::string_view> key_chars = LocalUtf8Chars(key);
+  const std::vector<absl::string_view> raw_chars =
+      LocalUtf8Chars(raw_zenz_surface);
+  const std::vector<absl::string_view> corrected_chars =
+      LocalUtf8Chars(corrected_surface);
+  if (key_chars.empty() || raw_chars.empty() || corrected_chars.empty()) {
+    return original;
   }
 
-  stamp.exists = true;
-  stamp.last_write_time = data.ftLastWriteTime;
-  stamp.file_size =
-      (static_cast<uint64_t>(data.nFileSizeHigh) << 32) |
-      static_cast<uint64_t>(data.nFileSizeLow);
-  return stamp;
-}
-#elif defined(__APPLE__) && TARGET_OS_OSX
-struct FeedbackFileStamp {
-  bool exists = false;
-  timespec last_write_time = {};
-  uint64_t file_size = 0;
-};
-
-bool SameFeedbackFileStamp(const FeedbackFileStamp& lhs,
-                           const FeedbackFileStamp& rhs) {
-  return lhs.exists == rhs.exists &&
-         lhs.file_size == rhs.file_size &&
-         lhs.last_write_time.tv_sec == rhs.last_write_time.tv_sec &&
-         lhs.last_write_time.tv_nsec == rhs.last_write_time.tv_nsec;
-}
-
-FeedbackFileStamp GetFeedbackFileStamp(const std::string& path) {
-  FeedbackFileStamp stamp;
-  if (path.empty()) {
-    return stamp;
+  // Strip only outer characters that are literally identical in the reading,
+  // raw Zenz surface and corrected surface. This is safe without a converter
+  // and lets existing rows such as
+  //   りせきします / 離籍します -> 離席します
+  // migrate in-memory to the same minimal りせき / 離籍 -> 離席 rule.
+  size_t prefix = 0;
+  while (prefix < key_chars.size() && prefix < raw_chars.size() &&
+         prefix < corrected_chars.size() &&
+         key_chars[prefix] == raw_chars[prefix] &&
+         key_chars[prefix] == corrected_chars[prefix]) {
+    ++prefix;
   }
 
-  struct stat data = {};
-  if (::stat(path.c_str(), &data) != 0) {
-    return stamp;
+  size_t suffix = 0;
+  while (suffix + prefix < key_chars.size() &&
+         suffix + prefix < raw_chars.size() &&
+         suffix + prefix < corrected_chars.size() &&
+         key_chars[key_chars.size() - 1 - suffix] ==
+             raw_chars[raw_chars.size() - 1 - suffix] &&
+         key_chars[key_chars.size() - 1 - suffix] ==
+             corrected_chars[corrected_chars.size() - 1 - suffix]) {
+    ++suffix;
   }
 
-  stamp.exists = true;
-  stamp.last_write_time = data.st_mtimespec;
-  stamp.file_size = static_cast<uint64_t>(data.st_size);
-  return stamp;
+  constexpr size_t kMinCanonicalLocalKeyChars = 2;
+  const size_t key_remaining = key_chars.size() - prefix - suffix;
+  const size_t raw_remaining = raw_chars.size() - prefix - suffix;
+  const size_t corrected_remaining = corrected_chars.size() - prefix - suffix;
+  if (key_remaining < kMinCanonicalLocalKeyChars || raw_remaining == 0 ||
+      corrected_remaining == 0 || (prefix == 0 && suffix == 0)) {
+    return original;
+  }
+
+  CanonicalLocalIdentity canonical;
+  canonical.key = JoinLocalUtf8Chars(
+      key_chars, prefix, key_chars.size() - suffix);
+  canonical.raw_zenz_surface = JoinLocalUtf8Chars(
+      raw_chars, prefix, raw_chars.size() - suffix);
+  canonical.corrected_surface = JoinLocalUtf8Chars(
+      corrected_chars, prefix, corrected_chars.size() - suffix);
+  if (canonical.raw_zenz_surface.empty() || canonical.corrected_surface.empty() ||
+      canonical.raw_zenz_surface == canonical.corrected_surface) {
+    return original;
+  }
+  return canonical;
 }
-#endif
 
 size_t CountOccurrencesUpToTwo(absl::string_view text,
-                              absl::string_view needle) {
+                               absl::string_view needle) {
   if (text.empty() || needle.empty()) {
     return 0;
   }
-
   size_t count = 0;
   size_t pos = 0;
   while (pos <= text.size()) {
@@ -875,315 +676,259 @@ size_t CountOccurrencesUpToTwo(absl::string_view text,
     if (++count >= 2) {
       return count;
     }
-    // Advance by one byte so overlapping occurrences are also considered.
-    // UTF-8 continuation bytes cannot spuriously match the first byte of a
-    // valid UTF-8 |needle|, so this remains safe for Japanese text.
     pos = found + 1;
   }
   return count;
 }
 
-bool IsSensitiveFeedbackContextClass(absl::string_view context_class) {
-  return context_class == "sensitive_like";
-}
-
-bool IsSharedFeedbackContextClass(absl::string_view context_class) {
-  // These buckets do not contain raw left context. They are coarse classes
-  // only, so feedback learned in one safe text context can be reused in normal
-  // conversion. ascii_or_digit belongs here because the sanitizer does not pass
-  // a pure ASCII/digit left context to Zenz; from the model's perspective that
-  // is the same empty prompt context as native-context-unavailable fallback.
-  // This is important for cases such as:
-  //
-  //   learned: key + japanese_only
-  //   lookup:  key + empty / symbol_or_other
-  //
-  // The correction itself is key/value feedback and should not be lost merely
-  // because the later conversion has no preceding text or because the preceding
-  // text was rejected as non-Japanese context.
-  return context_class == "empty" ||
-         context_class == "japanese_only" ||
-         context_class == "japanese_with_punctuation" ||
-         context_class == "mixed_japanese_ascii" ||
-         context_class == "symbol_or_other" ||
-         context_class == "ascii_or_digit" ||
-         context_class == "legacy";
-}
-
-bool IsFeedbackContextCompatible(
-    absl::string_view requested_context_class,
-    absl::string_view record_context_class) {
-  // Exact bucket reuse is allowed even for sensitive_like.
-  //
-  // This does not expose or compare raw left context.  It only reuses the
-  // non-reversible context class already stored in feedback TSV.
-  //
-  // Important:
-  //   sensitive_like -> sensitive_like is allowed for exact feedback lookup.
-  //   sensitive_like -> normal context is still forbidden.
-  //   normal context -> sensitive_like is still forbidden.
-  if (requested_context_class == record_context_class) {
-    return true;
-  }
-
-  if (IsSensitiveFeedbackContextClass(requested_context_class) ||
-      IsSensitiveFeedbackContextClass(record_context_class)) {
-    return false;
-  }
-
-  if (IsSharedFeedbackContextClass(requested_context_class) &&
-      IsSharedFeedbackContextClass(record_context_class)) {
-    return true;
-  }
-
-  return false;
-}
-
-ZenzFeedbackDecision BuildDecisionFromCounts(const Counts& c) {
-  ZenzFeedbackDecision decision;
-  decision.accepted_count = c.accepted;
-  decision.rejected_count = c.rejected;
-  decision.auto_block_reject_count = c.auto_block_rejected;
-  decision.positive_score = c.positive_score;
-  decision.negative_score = c.negative_score;
-  decision.total_score = TotalScore(c);
-  decision.hard_rejected = c.hard_rejected;
-
-  if (c.hard_rejected) {
-    decision.action = ZenzFeedbackAction::kReject;
-    decision.reason = "feedback_hard_rejected";
-    return decision;
-  }
-
-  if (c.accepted >= kAcceptThreshold && decision.total_score > 0) {
-    decision.action = ZenzFeedbackAction::kPrefer;
-    decision.reason = "feedback_preferred";
-    return decision;
-  }
-
-  decision.action = ZenzFeedbackAction::kNeutral;
-  decision.reason = c.rejected > 0 ? "feedback_downgraded"
-                                   : "feedback_neutral";
-  return decision;
-}
-
-void WriteRecordToStream(const ParsedFeedbackRecord& record,
-                         std::ostream* output) {
-  if (record.kind == ParsedFeedbackRecordKind::kLocalPreference) {
-    *output << "v3" << '\t'
-            << "local_preference" << '\t'
-            << EscapeTsv(record.key) << '\t'
-            << EscapeTsv(NormalizeContextClass(record.context_class)) << '\t'
-            << EscapeTsv(record.value) << '\t'
-            << EscapeTsv(record.disfavored_value) << '\t'
-            << EscapeTsv(record.reason) << '\n';
-    return;
-  }
-
-  *output << "v2" << '\t'
-          << EscapeTsv(record.action) << '\t'
-          << EscapeTsv(record.key) << '\t'
-          << EscapeTsv(NormalizeContextClass(record.context_class)) << '\t'
-          << EscapeTsv(record.value) << '\t'
-          << EscapeTsv(record.reason) << '\n';
-}
-
-bool WriteRecordsToStream(const std::vector<ParsedFeedbackRecord>& records,
-                          std::ostream* output) {
-  if (output == nullptr) {
-    return false;
-  }
-
-  for (const ParsedFeedbackRecord& record : records) {
-    if (!IsSafeFeedbackRecord(record)) {
-      return false;
-    }
-    WriteRecordToStream(record, output);
-  }
-
-  output->flush();
-  return static_cast<bool>(*output);
-}
-
-bool LoadRecordsFromStream(std::istream* input,
-                           bool strict,
-                           std::vector<ParsedFeedbackRecord>* records) {
-  if (input == nullptr || records == nullptr) {
-    return false;
-  }
-
-  records->clear();
-
-  bool ok = true;
-  std::string line;
-  while (std::getline(*input, line)) {
-    if (line.empty()) {
+int ReplayLocalCount(const std::vector<LocalEvent>& events,
+                     absl::string_view raw_zenz_surface,
+                     absl::string_view corrected_surface,
+                     size_t* last_sequence = nullptr) {
+  int count = 0;
+  size_t last = 0;
+  bool seen = false;
+  for (const LocalEvent& event : events) {
+    if (event.raw_zenz_surface != raw_zenz_surface ||
+        event.corrected_surface != corrected_surface) {
       continue;
     }
-
-    std::vector<std::string> fields = SplitTab(line);
-    StripUtf8BomFromFirstField(&fields);
-
-    ParsedFeedbackRecord record;
-    if (!ParseFeedbackRecord(fields, &record)) {
-      ok = false;
-      if (strict) {
-        return false;
-      }
-      continue;
+    seen = true;
+    last = event.sequence;
+    if (event.accepted) {
+      const int remaining = kMaxLocalEvidenceCount - count;
+      count = event.count >= remaining
+                  ? kMaxLocalEvidenceCount
+                  : count + event.count;
+    } else {
+      count = event.count >= count ? 0 : count - event.count;
     }
-
-    records->push_back(std::move(record));
   }
-
-  return ok || !strict;
+  if (last_sequence != nullptr) {
+    *last_sequence = seen ? last : 0;
+  }
+  return count;
 }
-
-bool LoadFeedbackRecordsFromDisk(
-    std::vector<ParsedFeedbackRecord>* records) {
-  if (records == nullptr) {
-    return false;
-  }
-  records->clear();
-
-#if defined(_WIN32)
-  const std::wstring path = GetFeedbackPathWide();
-  if (path.empty()) {
-    return false;
-  }
-  const FeedbackFileStamp stamp = GetFeedbackFileStamp(path);
-  if (!stamp.exists) {
-    return true;
-  }
-  std::ifstream file(path, std::ios::binary);
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  const std::string path = GetFeedbackPathUtf8();
-  if (path.empty()) {
-    return false;
-  }
-  const FeedbackFileStamp stamp = GetFeedbackFileStamp(path);
-  if (!stamp.exists) {
-    return true;
-  }
-  std::ifstream file(path, std::ios::binary);
-#else
-  return true;
-#endif
-
-#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
-  if (!file) {
-    return false;
-  }
-  return LoadRecordsFromStream(&file, false, records);
-#endif
-}
-
-using FeedbackCounts = std::map<FeedbackKey, Counts>;
-
-struct LocalPreferenceAggregate {
-  std::string context_class;
-  std::string preferred_value;
-  std::string disfavored_value;
-  int observation_count = 0;
-};
-
-using LocalPreferencesByReading =
-    std::map<std::string, std::vector<LocalPreferenceAggregate>>;
-
-struct FeedbackData {
-  FeedbackCounts counts;
-  LocalPreferencesByReading local_preferences_by_reading;
-};
 
 std::shared_ptr<const FeedbackData> BuildFeedbackData(
-    std::vector<ParsedFeedbackRecord> records) {
+    const std::vector<Record>& records) {
   auto data = std::make_shared<FeedbackData>();
-
-  using LocalKey =
-      std::tuple<std::string, std::string, std::string, std::string>;
-  std::map<LocalKey, int> local_counts;
-
-  for (size_t i = 0; i < records.size(); ++i) {
-    const ParsedFeedbackRecord& record = records[i];
-    if (record.kind == ParsedFeedbackRecordKind::kLocalPreference) {
-      ++local_counts[LocalKey(record.key, record.context_class, record.value,
-                             record.disfavored_value)];
-      continue;
-    }
-
-    // Preserve REV9 local_revert import compatibility.  Those v2 rows did not
-    // retain their original coarse source context, so treat a canonical pair as
-    // legacy non-sensitive evidence. REV10 never writes this form.
-    if (record.context_class == "local_revert") {
-      if (i + 1 < records.size()) {
-        const ParsedFeedbackRecord& rejected = records[i + 1];
-        if (record.action == "accepted" &&
-            record.reason == "local_revert_preferred" &&
-            rejected.kind == ParsedFeedbackRecordKind::kFullSequence &&
-            rejected.action == "rejected" &&
-            rejected.context_class == "local_revert" &&
-            rejected.reason == "local_revert" &&
-            record.key == rejected.key &&
-            record.value != rejected.value) {
-          ++local_counts[LocalKey(record.key, "legacy", record.value,
-                                 rejected.value)];
-          ++i;
-        }
+  for (const Record& record : records) {
+    if (record.kind == RecordKind::kFull) {
+      Counts& counts =
+          data->counts[FeedbackKey(record.key, record.context_class,
+                                   record.value)];
+      if (record.action == "accepted") {
+        AddAccepted(record.count, &counts);
+      } else {
+        AddRejected(record.extra, record.count, &counts);
       }
       continue;
     }
 
-    Counts& c = data->counts[FeedbackKey(
-        record.key, record.context_class, record.value)];
-    if (record.action == "accepted") {
-      AddAccepted(&c);
-    } else if (record.action == "rejected") {
-      AddRejected(record.reason, &c);
-    }
+    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+        record.key, record.value, record.extra);
+    LocalEvent event;
+    event.context_class = record.context_class;
+    event.raw_zenz_surface = local.raw_zenz_surface;
+    event.corrected_surface = local.corrected_surface;
+    event.accepted = record.action == "accepted";
+    event.count = record.count;
+    event.sequence = record.sequence;
+    data->local_events_by_reading[local.key].push_back(std::move(event));
   }
-
-  for (const auto& [local_key, count] : local_counts) {
-    const auto& [key, context_class, preferred, disfavored] = local_key;
-    data->local_preferences_by_reading[key].push_back(
-        {context_class, preferred, disfavored, count});
-  }
-
   return data;
+}
+
+std::filesystem::path FeedbackDirectory() {
+#if defined(_WIN32)
+  // Read the process environment through Win32 rather than the CRT copy. Mozc
+  // tests and some host processes update USERPROFILE with SetEnvironmentVariableW,
+  // which is not guaranteed to refresh the CRT environment block.
+  const DWORD required =
+      ::GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
+  if (required <= 1) {
+    return {};
+  }
+  std::wstring profile(required, L'\0');
+  const DWORD copied = ::GetEnvironmentVariableW(
+      L"USERPROFILE", profile.data(), required);
+  if (copied == 0 || copied >= required) {
+    return {};
+  }
+  profile.resize(copied);
+  return std::filesystem::path(profile) / L"AppData" / L"LocalLow" / L"Mozc";
+#elif defined(__APPLE__) && TARGET_OS_OSX
+  const char* home = std::getenv("HOME");
+  if (home == nullptr || *home == '\0') {
+    return {};
+  }
+  return std::filesystem::path(home) / ".mozc";
+#else
+  return {};
+#endif
+}
+
+std::filesystem::path FeedbackPathForRead() {
+  const std::filesystem::path dir = FeedbackDirectory();
+  if (dir.empty()) {
+    return {};
+  }
+  return dir / "zenz_feedback_v4.tsv";
+}
+
+std::filesystem::path FeedbackPathForWrite() {
+  const std::filesystem::path dir = FeedbackDirectory();
+  if (dir.empty()) {
+    return {};
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec) {
+    return {};
+  }
+  return dir / "zenz_feedback_v4.tsv";
+}
+
+class ScopedFeedbackInterprocessLock {
+ public:
+  ScopedFeedbackInterprocessLock() {
+#if defined(_WIN32)
+    handle_ =
+        ::CreateMutexW(nullptr, FALSE, L"Local\\MozcZenzFeedbackStoreMutationV4");
+    if (handle_ == nullptr) {
+      return;
+    }
+    const DWORD wait = ::WaitForSingleObject(handle_, 1000);
+    locked_ = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    const std::filesystem::path path = FeedbackPathForWrite();
+    if (path.empty()) {
+      return;
+    }
+    const std::string lock_path = path.string() + ".lock";
+    fd_ = ::open(lock_path.c_str(), O_CREAT | O_RDWR, 0600);
+    if (fd_ < 0) {
+      return;
+    }
+    const int flags = ::fcntl(fd_, F_GETFD, 0);
+    if (flags >= 0) {
+      (void)::fcntl(fd_, F_SETFD, flags | FD_CLOEXEC);
+    }
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      if (::flock(fd_, LOCK_EX | LOCK_NB) == 0) {
+        locked_ = true;
+        return;
+      }
+      if (errno != EWOULDBLOCK && errno != EAGAIN) {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+#endif
+  }
+
+  ~ScopedFeedbackInterprocessLock() {
+#if defined(_WIN32)
+    if (locked_ && handle_ != nullptr) {
+      ::ReleaseMutex(handle_);
+    }
+    if (handle_ != nullptr) {
+      ::CloseHandle(handle_);
+    }
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    if (fd_ >= 0) {
+      if (locked_) {
+        (void)::flock(fd_, LOCK_UN);
+      }
+      ::close(fd_);
+    }
+#endif
+  }
+
+  bool ok() const { return locked_; }
+
+ private:
+  bool locked_ = false;
+#if defined(_WIN32)
+  HANDLE handle_ = nullptr;
+#elif defined(__APPLE__) && TARGET_OS_OSX
+  int fd_ = -1;
+#endif
+};
+
+struct FileStamp {
+  bool exists = false;
+  uintmax_t size = 0;
+  std::filesystem::file_time_type write_time = {};
+};
+
+FileStamp GetFileStamp(const std::filesystem::path& path) {
+  FileStamp stamp;
+  if (path.empty()) {
+    return stamp;
+  }
+  std::error_code ec;
+  stamp.exists = std::filesystem::exists(path, ec);
+  if (ec || !stamp.exists) {
+    return FileStamp();
+  }
+  stamp.size = std::filesystem::file_size(path, ec);
+  if (ec) {
+    return FileStamp();
+  }
+  stamp.write_time = std::filesystem::last_write_time(path, ec);
+  if (ec) {
+    return FileStamp();
+  }
+  return stamp;
+}
+
+[[maybe_unused]] bool SameStamp(const FileStamp& lhs, const FileStamp& rhs) {
+  return lhs.exists == rhs.exists &&
+         lhs.size == rhs.size &&
+         lhs.write_time == rhs.write_time;
 }
 
 struct FeedbackDataCache {
   bool valid = false;
-#if defined(_WIN32)
-  std::wstring path;
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  std::string path;
-#endif
-#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
-  FeedbackFileStamp stamp;
+  std::filesystem::path path;
+  FileStamp stamp;
   std::chrono::steady_clock::time_point next_stamp_check;
-#endif
   std::shared_ptr<const FeedbackData> data;
 };
 
-std::mutex g_feedback_data_cache_mutex;
 FeedbackDataCache g_feedback_data_cache;
 
-// Serializes every mutation within one process.  The OS-level lock above then
-// extends the same critical section across the IME and configuration process.
-std::mutex g_feedback_mutation_mutex;
-
-void InvalidateFeedbackRecordsCache() {
+void InvalidateCache() {
   std::lock_guard<std::mutex> lock(g_feedback_data_cache_mutex);
   g_feedback_data_cache = FeedbackDataCache();
 }
 
+bool LoadRecordsFromDisk(std::vector<Record>* records) {
+  if (records == nullptr) {
+    return false;
+  }
+  records->clear();
+  const std::filesystem::path path = FeedbackPathForRead();
+  if (path.empty()) {
+    return true;
+  }
+  const FileStamp stamp = GetFileStamp(path);
+  if (!stamp.exists) {
+    return true;
+  }
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  return LoadRecordsFromStream(&file, false, records);
+}
+
 std::shared_ptr<const FeedbackData> LoadFeedbackData() {
-#if defined(_WIN32)
-  // The feedback file can be changed by the separate configuration process.
-  // Check metadata at most once per second; cache hits in between are memory-only.
-  // Directory creation and writability checks stay on the write path only.
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
   constexpr auto kStampCheckInterval = std::chrono::seconds(1);
-  const std::wstring path = GetFeedbackPathWide();
+  const std::filesystem::path path = FeedbackPathForRead();
   const auto now = std::chrono::steady_clock::now();
 
   std::lock_guard<std::mutex> lock(g_feedback_data_cache_mutex);
@@ -1194,70 +939,16 @@ std::shared_ptr<const FeedbackData> LoadFeedbackData() {
     return g_feedback_data_cache.data;
   }
 
-  const FeedbackFileStamp stamp = GetFeedbackFileStamp(path);
+  const FileStamp stamp = GetFileStamp(path);
   if (g_feedback_data_cache.valid &&
       g_feedback_data_cache.path == path &&
       g_feedback_data_cache.data != nullptr &&
-      SameFeedbackFileStamp(g_feedback_data_cache.stamp, stamp)) {
+      SameStamp(g_feedback_data_cache.stamp, stamp)) {
     g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
     return g_feedback_data_cache.data;
   }
 
-  std::vector<ParsedFeedbackRecord> records;
-  if (stamp.exists) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-      // Do not turn a transient open failure into a valid empty cache.
-      // Preserve the last known-good data when possible and retry after the
-      // normal stamp interval.
-      if (g_feedback_data_cache.valid &&
-          g_feedback_data_cache.path == path &&
-          g_feedback_data_cache.data != nullptr) {
-        g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-        return g_feedback_data_cache.data;
-      }
-      g_feedback_data_cache.valid = true;
-      g_feedback_data_cache.path = path;
-      g_feedback_data_cache.stamp = FeedbackFileStamp();
-      g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-      g_feedback_data_cache.data = BuildFeedbackData({});
-      return g_feedback_data_cache.data;
-    }
-    LoadRecordsFromStream(&file, false, &records);
-  }
-
-  g_feedback_data_cache.valid = true;
-  g_feedback_data_cache.path = path;
-  g_feedback_data_cache.stamp = stamp;
-  g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-  g_feedback_data_cache.data = BuildFeedbackData(std::move(records));
-  return g_feedback_data_cache.data;
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  // ConfigDialog is a separate process on macOS too, so use the same bounded
-  // metadata polling policy as Windows.  This keeps normal conversions
-  // memory-only while making import/delete/clear visible without restarting IME.
-  constexpr auto kStampCheckInterval = std::chrono::seconds(1);
-  const std::string path = GetFeedbackPathUtf8();
-  const auto now = std::chrono::steady_clock::now();
-
-  std::lock_guard<std::mutex> lock(g_feedback_data_cache_mutex);
-  if (g_feedback_data_cache.valid &&
-      g_feedback_data_cache.path == path &&
-      g_feedback_data_cache.data != nullptr &&
-      now < g_feedback_data_cache.next_stamp_check) {
-    return g_feedback_data_cache.data;
-  }
-
-  const FeedbackFileStamp stamp = GetFeedbackFileStamp(path);
-  if (g_feedback_data_cache.valid &&
-      g_feedback_data_cache.path == path &&
-      g_feedback_data_cache.data != nullptr &&
-      SameFeedbackFileStamp(g_feedback_data_cache.stamp, stamp)) {
-    g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-    return g_feedback_data_cache.data;
-  }
-
-  std::vector<ParsedFeedbackRecord> records;
+  std::vector<Record> records;
   if (stamp.exists) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -1267,274 +958,182 @@ std::shared_ptr<const FeedbackData> LoadFeedbackData() {
         g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
         return g_feedback_data_cache.data;
       }
-      g_feedback_data_cache.valid = true;
-      g_feedback_data_cache.path = path;
-      g_feedback_data_cache.stamp = FeedbackFileStamp();
-      g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-      g_feedback_data_cache.data = BuildFeedbackData({});
-      return g_feedback_data_cache.data;
+      records.clear();
+    } else {
+      (void)LoadRecordsFromStream(&file, false, &records);
     }
-    LoadRecordsFromStream(&file, false, &records);
   }
 
   g_feedback_data_cache.valid = true;
   g_feedback_data_cache.path = path;
   g_feedback_data_cache.stamp = stamp;
   g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-  g_feedback_data_cache.data = BuildFeedbackData(std::move(records));
+  g_feedback_data_cache.data = BuildFeedbackData(records);
   return g_feedback_data_cache.data;
 #else
-  static const std::shared_ptr<const FeedbackData> empty_data =
+  static const std::shared_ptr<const FeedbackData> empty =
       BuildFeedbackData({});
-  return empty_data;
+  return empty;
 #endif
 }
 
-std::shared_ptr<const FeedbackCounts> LoadCounts() {
-  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
-  return std::shared_ptr<const FeedbackCounts>(data, &data->counts);
-}
-
-#if defined(_WIN32)
-bool WriteRecordsToPath(const std::wstring& path,
-                        const std::vector<ParsedFeedbackRecord>& records) {
+[[maybe_unused]] bool WriteRecordsToPath(const std::filesystem::path& path,
+                        const std::vector<Record>& records) {
   if (path.empty()) {
     return false;
   }
-
   std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  if (!file) {
-    StoreDebugOutputWide(
-        std::wstring(L"write open failed ")
-            .append(RedactedWidePathStats(L"path", path)));
-    return false;
-  }
-
-  return WriteRecordsToStream(records, &file);
-}
-
-bool WriteFeedbackRecordsAtomically(
-    const std::vector<ParsedFeedbackRecord>& records) {
-  const std::wstring dir_w = GetFeedbackDirWideForWrite();
-  const std::wstring path_w = GetFeedbackPathWideFromDir(dir_w);
-
-  if (dir_w.empty() || path_w.empty()) {
-    StoreDebugOutput("atomic write failed: empty path");
-    return false;
-  }
-
-  if (records.empty()) {
-    if (::DeleteFileW(path_w.c_str())) {
-      StoreDebugOutput("clear ok: file removed");
-      InvalidateFeedbackRecordsCache();
-      return true;
-    }
-
-    const DWORD error = ::GetLastError();
-    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-      StoreDebugOutput("clear ok: file already absent");
-      InvalidateFeedbackRecordsCache();
-      return true;
-    }
-
-    StoreDebugOutputWide(
-        std::wstring(L"clear failed error=")
-            .append(std::to_wstring(error))
-            .append(L" ")
-            .append(RedactedWidePathStats(L"path", path_w)));
-    return false;
-  }
-
-  const std::wstring tmp_path_w =
-      path_w + L".tmp." + std::to_wstring(::GetCurrentProcessId());
-
-  if (!WriteRecordsToPath(tmp_path_w, records)) {
-    ::DeleteFileW(tmp_path_w.c_str());
-    return false;
-  }
-
-  if (!::MoveFileExW(tmp_path_w.c_str(),
-                     path_w.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    const DWORD error = ::GetLastError();
-    StoreDebugOutputWide(
-        std::wstring(L"atomic replace failed error=")
-            .append(std::to_wstring(error))
-            .append(L" ")
-            .append(RedactedWidePathStats(L"path", path_w)));
-    ::DeleteFileW(tmp_path_w.c_str());
-    return false;
-  }
-
-  StoreDebugOutputWide(
-      std::wstring(L"atomic write ok ")
-          .append(RedactedWidePathStats(L"path", path_w)));
-  InvalidateFeedbackRecordsCache();
-  return true;
-}
-#elif defined(__APPLE__) && TARGET_OS_OSX
-bool WriteRecordsToPathUtf8(
-    absl::string_view path,
-    const std::vector<ParsedFeedbackRecord>& records) {
-  if (path.empty()) {
-    return false;
-  }
-  std::ofstream file(std::string(path), std::ios::binary | std::ios::trunc);
   return file && WriteRecordsToStream(records, &file);
 }
 
-bool WriteFeedbackRecordsAtomically(
-    const std::vector<ParsedFeedbackRecord>& records) {
-  const std::string path = GetFeedbackPathUtf8ForWrite();
+bool WriteRecordsAtomically(const std::vector<Record>& records) {
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
+  const std::filesystem::path path = FeedbackPathForWrite();
   if (path.empty()) {
     return false;
   }
+
   if (records.empty()) {
     std::error_code ec;
-    const bool existed = std::filesystem::exists(path, ec);
+    std::filesystem::remove(path, ec);
     if (ec) {
       return false;
     }
-    if (existed) {
-      std::filesystem::remove(path, ec);
-      if (ec) {
-        return false;
-      }
-    }
-    InvalidateFeedbackRecordsCache();
+    InvalidateCache();
     return true;
   }
 
-  const std::string tmp_path = path + ".tmp";
-  if (!WriteRecordsToPathUtf8(tmp_path, records)) {
-    std::error_code ignored;
-    std::filesystem::remove(tmp_path, ignored);
-    return false;
-  }
-  std::error_code ec;
-  std::filesystem::rename(tmp_path, path, ec);
-  if (ec) {
-    std::error_code ignored;
-    std::filesystem::remove(tmp_path, ignored);
-    return false;
-  }
-  InvalidateFeedbackRecordsCache();
-  return true;
-}
+#if defined(_WIN32)
+  const std::filesystem::path tmp =
+      path.wstring() + L".tmp." + std::to_wstring(::GetCurrentProcessId());
 #else
-bool WriteFeedbackRecordsAtomically(
-    const std::vector<ParsedFeedbackRecord>&) {
-  StoreDebugOutput("atomic write failed: zenz feedback store is unsupported");
-  return false;
-}
+  const std::filesystem::path tmp =
+      path.string() + ".tmp." + std::to_string(::getpid());
 #endif
 
-void AppendRecords(const std::vector<ParsedFeedbackRecord>& records) {
+  if (!WriteRecordsToPath(tmp, records)) {
+    std::error_code ignored;
+    std::filesystem::remove(tmp, ignored);
+    return false;
+  }
+
+#if defined(_WIN32)
+  if (!::MoveFileExW(tmp.c_str(), path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    std::error_code ignored;
+    std::filesystem::remove(tmp, ignored);
+    return false;
+  }
+#else
+  std::error_code ec;
+  std::filesystem::rename(tmp, path, ec);
+  if (ec) {
+    std::error_code ignored;
+    std::filesystem::remove(tmp, ignored);
+    return false;
+  }
+#endif
+
+  InvalidateCache();
+  return true;
+#else
+  (void)records;
+  return false;
+#endif
+}
+
+void AppendRecords(const std::vector<Record>& records) {
   if (records.empty()) {
     return;
   }
-  for (const ParsedFeedbackRecord& record : records) {
-    if (!IsSafeFeedbackRecord(record)) {
-      StoreDebugOutput(absl::StrCat(
-          "append rejected invalid record action=", record.action,
-          " ", RedactedStats("key", record.key),
-          " context_class=", record.context_class,
-          " ", RedactedStats("value", record.value),
-          " reason=", record.reason));
+  for (const Record& record : records) {
+    if (!IsSafeRecord(record)) {
       return;
     }
   }
 
-  // Build the complete append payload first and serialize appends within this
-  // IME process.  A REV10 local preference is one v3 row, so one observation
-  // can no longer be split into preferred/rejected halves as in REV9.
-  std::ostringstream payload_stream;
-  for (const ParsedFeedbackRecord& record : records) {
-    WriteRecordToStream(record, &payload_stream);
+  std::ostringstream payload;
+  for (const Record& record : records) {
+    WriteRecordToStream(record, &payload);
   }
-  const std::string payload = payload_stream.str();
-  if (payload.empty()) {
+  const std::string text = payload.str();
+  if (text.empty()) {
     return;
   }
 
   std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
   ScopedFeedbackInterprocessLock interprocess_lock;
   if (!interprocess_lock.ok()) {
-    StoreDebugOutput("append failed: cross-process lock unavailable");
     return;
   }
 
-#if defined(_WIN32)
-  const std::wstring dir_w = GetFeedbackDirWideForWrite();
-  const std::wstring path_w = GetFeedbackPathWideFromDir(dir_w);
-
-  StoreDebugOutputWide(
-      std::wstring(L"append feedback dir ")
-          .append(RedactedWidePathStats(L"dir", dir_w)));
-  StoreDebugOutputWide(
-      std::wstring(L"append feedback path ")
-          .append(RedactedWidePathStats(L"path", path_w)));
-
-  if (dir_w.empty() || path_w.empty()) {
-    StoreDebugOutput("append failed: empty path");
-    return;
-  }
-
-  std::ofstream file(path_w, std::ios::binary | std::ios::app);
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  const std::string path = GetFeedbackPathUtf8ForWrite();
+  const std::filesystem::path path = FeedbackPathForWrite();
   if (path.empty()) {
     return;
   }
   std::ofstream file(path, std::ios::binary | std::ios::app);
-#else
-  std::ofstream file;
-#endif
-
   if (!file) {
-#if defined(_WIN32)
-    StoreDebugOutputWide(
-        std::wstring(L"append open failed ")
-            .append(RedactedWidePathStats(L"path", path_w)));
-#else
-    StoreDebugOutput("append open failed");
-#endif
     return;
   }
-
-  file.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+  file.write(text.data(), static_cast<std::streamsize>(text.size()));
   file.flush();
-
   if (!file) {
-    StoreDebugOutput("append write/flush failed");
     return;
   }
+  InvalidateCache();
+}
 
-  InvalidateFeedbackRecordsCache();
-
-  for (const ParsedFeedbackRecord& record : records) {
-    StoreDebugOutput(absl::StrCat(
-        "append ok action=", record.action,
-        " ", RedactedStats("key", record.key),
-        " context_class=", record.context_class,
-        " ", RedactedStats("value", record.value),
-        " reason=", record.reason));
+[[maybe_unused]] std::filesystem::path WidePathToFilesystemPath(const std::wstring& path) {
+#if defined(_WIN32)
+  return std::filesystem::path(path);
+#else
+  std::string utf8;
+  utf8.reserve(path.size());
+  for (const wchar_t wc : path) {
+    const uint32_t c = static_cast<uint32_t>(wc);
+    if (c <= 0x7f) {
+      utf8.push_back(static_cast<char>(c));
+    } else if (c <= 0x7ff) {
+      utf8.push_back(static_cast<char>(0xc0 | (c >> 6)));
+      utf8.push_back(static_cast<char>(0x80 | (c & 0x3f)));
+    } else if (c <= 0xffff) {
+      if (c >= 0xd800 && c <= 0xdfff) {
+        return {};
+      }
+      utf8.push_back(static_cast<char>(0xe0 | (c >> 12)));
+      utf8.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3f)));
+      utf8.push_back(static_cast<char>(0x80 | (c & 0x3f)));
+    } else if (c <= 0x10ffff) {
+      utf8.push_back(static_cast<char>(0xf0 | (c >> 18)));
+      utf8.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3f)));
+      utf8.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3f)));
+      utf8.push_back(static_cast<char>(0x80 | (c & 0x3f)));
+    } else {
+      return {};
+    }
   }
+  return std::filesystem::path(utf8);
+#endif
 }
 
-void AppendRecord(absl::string_view action,
-                  absl::string_view key,
-                  absl::string_view context_class,
-                  absl::string_view value,
-                  absl::string_view reason) {
-  ParsedFeedbackRecord record;
-  record.action = std::string(action);
-  record.key = std::string(key);
-  record.context_class = NormalizeContextClass(context_class);
-  record.value = std::string(value);
-  record.reason = std::string(reason);
-  AppendRecords({record});
-}
+struct FullCompactAggregate {
+  std::string key;
+  std::string context_class;
+  std::string value;
+  int accepted_count = 0;
+  std::map<std::string, int> rejected_by_reason;
+  Counts counts;
+  size_t last_sequence = 0;
+};
+
+struct LocalCompactAggregate {
+  std::string key;
+  std::string context_class;
+  std::string raw_zenz_surface;
+  std::string corrected_surface;
+  int count = 0;
+  size_t last_sequence = 0;
+};
 
 }  // namespace
 
@@ -1550,40 +1149,25 @@ ZenzFeedbackDecision ZenzFeedbackStore::Decide(
     absl::string_view context_class,
     absl::string_view value,
     const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const {
-  const std::shared_ptr<const FeedbackCounts> counts = LoadCounts();
-
+  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
   const std::string normalized_key(key);
-  const std::string normalized_context_class =
+  const std::string normalized_context =
       NormalizeContextClass(context_class);
   const std::string normalized_value(value);
-
   Counts aggregated;
 
-  for (auto it = counts->lower_bound(FeedbackKey(normalized_key, "", ""));
-       it != counts->end() && std::get<0>(it->first) == normalized_key; ++it) {
-    const FeedbackKey& feedback_key = it->first;
-    const Counts& c = it->second;
-
-    const std::string& record_context_class = std::get<1>(feedback_key);
-    const std::string& record_value = std::get<2>(feedback_key);
-
-    if (record_value != normalized_value) {
+  for (auto it =
+           data->counts.lower_bound(FeedbackKey(normalized_key, "", ""));
+       it != data->counts.end() &&
+       std::get<0>(it->first) == normalized_key; ++it) {
+    if (std::get<2>(it->first) != normalized_value ||
+        !IsFeedbackContextCompatible(normalized_context,
+                                     std::get<1>(it->first))) {
       continue;
     }
-
-    if (!IsFeedbackContextCompatible(
-            normalized_context_class, record_context_class)) {
-      continue;
-    }
-
-    MergeCounts(c, &aggregated);
+    MergeCounts(it->second, &aggregated);
   }
 
-  // All ordinary coarse context classes are intentionally promotion-compatible.
-  // Use the same compatible aggregate for every part of the decision so native
-  // context availability cannot change learning sensitivity merely by moving an
-  // observation between e.g. japanese_only and empty.  Privacy-separated
-  // classes remain isolated by IsFeedbackContextCompatible().
   ZenzFeedbackDecision decision = BuildDecisionFromCounts(aggregated);
   ApplyRejectDominanceDecision(aggregated, &decision);
   ApplyAutoBlockDecision(aggregated, auto_block_policy, &decision);
@@ -1601,252 +1185,68 @@ std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetRankedCandidates(
     absl::string_view key,
     absl::string_view context_class,
     const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const {
-  const std::shared_ptr<const FeedbackCounts> counts = LoadCounts();
-
+  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
   const std::string normalized_key(key);
-  const std::string normalized_context_class =
+  const std::string normalized_context =
       NormalizeContextClass(context_class);
+  std::map<std::string, Counts> by_value;
 
-  std::map<std::string, Counts> value_counts;
-
-  for (auto it = counts->lower_bound(FeedbackKey(normalized_key, "", ""));
-       it != counts->end() && std::get<0>(it->first) == normalized_key; ++it) {
-    const FeedbackKey& feedback_key = it->first;
-    const Counts& c = it->second;
-
-    const std::string& record_context_class = std::get<1>(feedback_key);
-    const std::string& record_value = std::get<2>(feedback_key);
-
-    if (!IsFeedbackContextCompatible(
-            normalized_context_class, record_context_class)) {
+  for (auto it =
+           data->counts.lower_bound(FeedbackKey(normalized_key, "", ""));
+       it != data->counts.end() &&
+       std::get<0>(it->first) == normalized_key; ++it) {
+    if (!IsFeedbackContextCompatible(normalized_context,
+                                     std::get<1>(it->first))) {
       continue;
     }
-
-    Counts& aggregated = value_counts[record_value];
-    MergeCounts(c, &aggregated);
+    MergeCounts(it->second, &by_value[std::get<2>(it->first)]);
   }
 
-  std::vector<ZenzFeedbackCandidate> candidates;
-
-  for (const auto& item : value_counts) {
-    const std::string& value = item.first;
-    const Counts& c = item.second;
-
-    if (c.hard_rejected ||
-        IsAutoBlockedByPolicy(c, auto_block_policy) ||
-        IsRejectCountDominant(c) ||
-        c.accepted < kAcceptThreshold ||
-        TotalScore(c) <= 0) {
+  std::vector<ZenzFeedbackCandidate> result;
+  for (const auto& [value, counts] : by_value) {
+    if (counts.hard_rejected ||
+        IsAutoBlockedByPolicy(counts, auto_block_policy) ||
+        IsRejectCountDominant(counts) ||
+        counts.accepted < kAcceptThreshold ||
+        TotalScore(counts) <= 0) {
       continue;
     }
-
     ZenzFeedbackCandidate candidate;
     candidate.value = value;
-    candidate.accepted_count = c.accepted;
-    candidate.rejected_count = c.rejected;
-    candidate.positive_score = c.positive_score;
-    candidate.negative_score = c.negative_score;
-    candidate.total_score = TotalScore(c);
-    candidate.auto_block_reject_count = c.auto_block_rejected;
-    candidate.hard_rejected = c.hard_rejected;
+    candidate.accepted_count = counts.accepted;
+    candidate.rejected_count = counts.rejected;
+    candidate.positive_score = counts.positive_score;
+    candidate.negative_score = counts.negative_score;
+    candidate.total_score = TotalScore(counts);
+    candidate.auto_block_reject_count = counts.auto_block_rejected;
+    candidate.hard_rejected = counts.hard_rejected;
     candidate.auto_blocked = false;
     candidate.reason = "feedback_preferred";
-    candidates.push_back(std::move(candidate));
+    result.push_back(std::move(candidate));
   }
 
-  std::sort(candidates.begin(), candidates.end(),
-            [](const ZenzFeedbackCandidate& a,
-               const ZenzFeedbackCandidate& b) {
-              if (a.total_score != b.total_score) {
-                return a.total_score > b.total_score;
+  std::sort(result.begin(), result.end(),
+            [](const ZenzFeedbackCandidate& lhs,
+               const ZenzFeedbackCandidate& rhs) {
+              if (lhs.total_score != rhs.total_score) {
+                return lhs.total_score > rhs.total_score;
               }
-              if (a.positive_score != b.positive_score) {
-                return a.positive_score > b.positive_score;
+              if (lhs.positive_score != rhs.positive_score) {
+                return lhs.positive_score > rhs.positive_score;
               }
-              if (a.negative_score != b.negative_score) {
-                return a.negative_score < b.negative_score;
+              if (lhs.negative_score != rhs.negative_score) {
+                return lhs.negative_score < rhs.negative_score;
               }
-              return a.value < b.value;
+              return lhs.value < rhs.value;
             });
-
-  return candidates;
-}
-
-std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
-    absl::string_view full_key, absl::string_view context_class,
-    size_t max_results, int min_observation_count) const {
-  std::vector<ZenzLocalPreference> result;
-  if (full_key.empty() || max_results == 0) {
-    return result;
-  }
-  min_observation_count = std::max(1, min_observation_count);
-
-  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
-  if (data->local_preferences_by_reading.empty()) {
-    return result;
-  }
-
-  // Enumerate only readings that are substrings of the current full reading,
-  // then probe the in-memory index. With the normal 64-character Zenz key cap
-  // this is bounded and avoids scanning a growing history on every request.
-  std::vector<size_t> boundaries;
-  boundaries.reserve(full_key.size() + 1);
-  boundaries.push_back(0);
-  for (size_t i = 1; i < full_key.size(); ++i) {
-    const unsigned char c = static_cast<unsigned char>(full_key[i]);
-    if ((c & 0xC0) != 0x80) {
-      boundaries.push_back(i);
-    }
-  }
-  boundaries.push_back(full_key.size());
-
-  std::set<std::string> matching_readings;
-  for (size_t begin_index = 0; begin_index + 1 < boundaries.size();
-       ++begin_index) {
-    for (size_t end_index = begin_index + 1; end_index < boundaries.size();
-         ++end_index) {
-      const size_t begin = boundaries[begin_index];
-      const size_t end = boundaries[end_index];
-      const std::string reading(full_key.substr(begin, end - begin));
-      if (data->local_preferences_by_reading.find(reading) !=
-          data->local_preferences_by_reading.end()) {
-        matching_readings.insert(reading);
-      }
-    }
-  }
-
-  struct Candidate {
-    std::string key;
-    std::string preferred_value;
-    std::string disfavored_value;
-    int observation_count = 0;
-  };
-  std::vector<Candidate> candidates;
-
-  const std::string requested_context_class =
-      NormalizeContextClass(context_class);
-  for (const std::string& key : matching_readings) {
-    if (CountOccurrencesUpToTwo(full_key, key) != 1) {
-      continue;
-    }
-
-    const auto reading_it = data->local_preferences_by_reading.find(key);
-    if (reading_it == data->local_preferences_by_reading.end()) {
-      continue;
-    }
-
-    using DirectionKey = std::pair<std::string, std::string>;
-    std::map<DirectionKey, int> direction_counts;
-    for (const LocalPreferenceAggregate& aggregate : reading_it->second) {
-      if (!IsFeedbackContextCompatible(
-              requested_context_class, aggregate.context_class)) {
-        continue;
-      }
-      direction_counts[DirectionKey(
-          aggregate.preferred_value, aggregate.disfavored_value)] +=
-          aggregate.observation_count;
-    }
-
-    for (const auto& [direction, count] : direction_counts) {
-      if (count < min_observation_count || direction.first.empty() ||
-          direction.second.empty() || direction.first == direction.second) {
-        continue;
-      }
-      candidates.push_back(
-          {key, direction.first, direction.second, count});
-    }
-  }
-
-  std::sort(candidates.begin(), candidates.end(),
-            [](const Candidate& a, const Candidate& b) {
-              if (a.key.size() != b.key.size()) {
-                return a.key.size() > b.key.size();
-              }
-              // Compatible normal context classes represent the same local
-              // preference evidence.  Rank by total evidence, not by which
-              // coarse class happened to be available on this request.
-              if (a.observation_count != b.observation_count) {
-                return a.observation_count > b.observation_count;
-              }
-              if (a.preferred_value != b.preferred_value) {
-                return a.preferred_value < b.preferred_value;
-              }
-              return a.disfavored_value < b.disfavored_value;
-            });
-
-  for (const Candidate& candidate : candidates) {
-    ZenzLocalPreference preference;
-    preference.key = candidate.key;
-    preference.context_class = requested_context_class;
-    preference.preferred_value = candidate.preferred_value;
-    preference.disfavored_value = candidate.disfavored_value;
-    preference.observation_count = candidate.observation_count;
-    result.push_back(std::move(preference));
-    if (result.size() >= max_results) {
-      break;
-    }
-  }
-
   return result;
-}
-
-std::vector<ZenzLocalPreferenceEntry>
-ZenzFeedbackStore::ListLocalPreferenceEntries() const {
-  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
-  std::vector<ZenzLocalPreferenceEntry> entries;
-
-  for (const auto& [key, aggregates] : data->local_preferences_by_reading) {
-    for (const LocalPreferenceAggregate& aggregate : aggregates) {
-      int effective_count = 0;
-      int opposite_effective_count = 0;
-      for (const LocalPreferenceAggregate& other : aggregates) {
-        if (!IsFeedbackContextCompatible(
-                aggregate.context_class, other.context_class)) {
-          continue;
-        }
-        if (other.preferred_value == aggregate.preferred_value &&
-            other.disfavored_value == aggregate.disfavored_value) {
-          effective_count += other.observation_count;
-        }
-        if (other.preferred_value == aggregate.disfavored_value &&
-            other.disfavored_value == aggregate.preferred_value) {
-          opposite_effective_count += other.observation_count;
-        }
-      }
-
-      ZenzLocalPreferenceEntry entry;
-      entry.key = key;
-      entry.context_class = aggregate.context_class;
-      entry.preferred_value = aggregate.preferred_value;
-      entry.disfavored_value = aggregate.disfavored_value;
-      entry.observation_count = aggregate.observation_count;
-      entry.effective_observation_count = effective_count;
-      entry.opposite_effective_observation_count = opposite_effective_count;
-      entries.push_back(std::move(entry));
-    }
-  }
-
-  std::sort(entries.begin(), entries.end(),
-            [](const ZenzLocalPreferenceEntry& a,
-               const ZenzLocalPreferenceEntry& b) {
-              if (a.key != b.key) {
-                return a.key < b.key;
-              }
-              if (a.context_class != b.context_class) {
-                return a.context_class < b.context_class;
-              }
-              if (a.preferred_value != b.preferred_value) {
-                return a.preferred_value < b.preferred_value;
-              }
-              return a.disfavored_value < b.disfavored_value;
-            });
-  return entries;
 }
 
 std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetAcceptedCandidates(
     absl::string_view key,
     absl::string_view context_class) const {
-  return GetRankedCandidates(key, context_class);
+  return GetAcceptedCandidates(key, context_class,
+                               ZenzFeedbackAutoBlockPolicy());
 }
 
 std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetAcceptedCandidates(
@@ -1856,30 +1256,180 @@ std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetAcceptedCandidates(
   return GetRankedCandidates(key, context_class, auto_block_policy);
 }
 
+std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
+    absl::string_view full_key, absl::string_view context_class,
+    size_t max_results, int min_observation_count) const {
+  std::vector<ZenzLocalPreference> result;
+  if (full_key.empty() || max_results == 0) {
+    return result;
+  }
+  const int threshold =
+      std::clamp(min_observation_count, kMinLocalThreshold, kMaxLocalThreshold);
+  const std::string current_context = NormalizeContextClass(context_class);
+  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
+
+  struct Candidate {
+    std::string key;
+    std::string raw;
+    std::string corrected;
+    int count = 0;
+    size_t last_sequence = 0;
+  };
+  std::vector<Candidate> candidates;
+
+  for (const auto& [reading, events] : data->local_events_by_reading) {
+    if (CountOccurrencesUpToTwo(full_key, reading) != 1) {
+      continue;
+    }
+
+    // Local v4.1 evidence is deliberately context-independent. The coarse
+    // context class remains in individual TSV events only as provenance; it is
+    // not part of the logical rule or threshold count. Contextual safety comes
+    // from the current Mozc reading/surface alignment at application time.
+    std::set<std::pair<std::string, std::string>> directions;
+    for (const LocalEvent& event : events) {
+      directions.insert({event.raw_zenz_surface, event.corrected_surface});
+    }
+
+    // For the same reading/raw surface, only one corrected direction may be
+    // behaviorally active. Highest global count wins; exact ties fail closed.
+    std::map<std::string, std::vector<Candidate>> by_raw;
+    for (const auto& [raw, corrected] : directions) {
+      size_t last_sequence = 0;
+      const int count =
+          ReplayLocalCount(events, raw, corrected, &last_sequence);
+      if (count < threshold) {
+        continue;
+      }
+
+      // If the exact inverse direction is also mature globally, do not guess.
+      if (ReplayLocalCount(events, corrected, raw) >= threshold) {
+        continue;
+      }
+
+      by_raw[raw].push_back(
+          {reading, raw, corrected, count, last_sequence});
+    }
+
+    for (auto& [raw, same_raw] : by_raw) {
+      std::sort(same_raw.begin(), same_raw.end(),
+                [](const Candidate& lhs, const Candidate& rhs) {
+                  if (lhs.count != rhs.count) {
+                    return lhs.count > rhs.count;
+                  }
+                  if (lhs.last_sequence != rhs.last_sequence) {
+                    return lhs.last_sequence > rhs.last_sequence;
+                  }
+                  return lhs.corrected < rhs.corrected;
+                });
+      if (same_raw.size() > 1 &&
+          same_raw[0].count == same_raw[1].count) {
+        continue;
+      }
+      candidates.push_back(std::move(same_raw[0]));
+    }
+  }
+
+  std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& lhs, const Candidate& rhs) {
+              if (lhs.key.size() != rhs.key.size()) {
+                return lhs.key.size() > rhs.key.size();
+              }
+              if (lhs.count != rhs.count) {
+                return lhs.count > rhs.count;
+              }
+              if (lhs.last_sequence != rhs.last_sequence) {
+                return lhs.last_sequence > rhs.last_sequence;
+              }
+              if (lhs.key != rhs.key) {
+                return lhs.key < rhs.key;
+              }
+              if (lhs.raw != rhs.raw) {
+                return lhs.raw < rhs.raw;
+              }
+              return lhs.corrected < rhs.corrected;
+            });
+
+  for (const Candidate& candidate : candidates) {
+    ZenzLocalPreference preference;
+    preference.key = candidate.key;
+    // Carry the current context only as event provenance if this applied rule
+    // is later explicitly rejected. It does not participate in rule identity.
+    preference.context_class = current_context;
+    preference.preferred_value = candidate.corrected;
+    preference.disfavored_value = candidate.raw;
+    preference.observation_count = candidate.count;
+    result.push_back(std::move(preference));
+    if (result.size() >= max_results) {
+      break;
+    }
+  }
+  return result;
+}
+
+std::vector<ZenzLocalPreferenceEntry>
+ZenzFeedbackStore::ListLocalPreferenceEntries() const {
+  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
+  std::vector<ZenzLocalPreferenceEntry> entries;
+
+  for (const auto& [reading, events] : data->local_events_by_reading) {
+    std::set<std::pair<std::string, std::string>> directions;
+    for (const LocalEvent& event : events) {
+      directions.insert({event.raw_zenz_surface, event.corrected_surface});
+    }
+
+    for (const auto& [raw, corrected] : directions) {
+      const int count = ReplayLocalCount(events, raw, corrected);
+      if (count == 0) {
+        continue;
+      }
+      const int opposite = ReplayLocalCount(events, corrected, raw);
+
+      ZenzLocalPreferenceEntry entry;
+      entry.key = reading;
+      // Local logical entries are context-independent. Keep the public field
+      // empty so management UI does not imply a false context partition.
+      entry.context_class.clear();
+      entry.preferred_value = corrected;
+      entry.disfavored_value = raw;
+      entry.observation_count = count;
+      entry.effective_observation_count = count;
+      entry.opposite_effective_observation_count = opposite;
+      entries.push_back(std::move(entry));
+    }
+  }
+
+  std::sort(entries.begin(), entries.end(),
+            [](const ZenzLocalPreferenceEntry& lhs,
+               const ZenzLocalPreferenceEntry& rhs) {
+              if (lhs.key != rhs.key) {
+                return lhs.key < rhs.key;
+              }
+              if (lhs.disfavored_value != rhs.disfavored_value) {
+                return lhs.disfavored_value < rhs.disfavored_value;
+              }
+              return lhs.preferred_value < rhs.preferred_value;
+            });
+  return entries;
+}
+
 std::vector<ZenzFeedbackEntry> ZenzFeedbackStore::ListEntries() const {
   return ListEntries(ZenzFeedbackAutoBlockPolicy());
 }
 
 std::vector<ZenzFeedbackEntry> ZenzFeedbackStore::ListEntries(
     const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const {
-  const std::shared_ptr<const FeedbackCounts> counts = LoadCounts();
-
+  const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
   std::vector<ZenzFeedbackEntry> entries;
-  entries.reserve(counts->size());
 
-  for (const auto& item : *counts) {
-    const FeedbackKey& feedback_key = item.first;
-    const Counts& exact = item.second;
-    const std::string& key = std::get<0>(feedback_key);
-    const std::string& context_class = std::get<1>(feedback_key);
-    const std::string& value = std::get<2>(feedback_key);
-
+  for (const auto& [key, counts] : data->counts) {
+    const auto& [reading, context, value] = key;
     Counts effective;
-    for (auto it = counts->lower_bound(FeedbackKey(key, "", ""));
-         it != counts->end() && std::get<0>(it->first) == key; ++it) {
+    for (auto it = data->counts.lower_bound(FeedbackKey(reading, "", ""));
+         it != data->counts.end() &&
+         std::get<0>(it->first) == reading; ++it) {
       if (std::get<2>(it->first) != value ||
-          !IsFeedbackContextCompatible(
-              context_class, std::get<1>(it->first))) {
+          !IsFeedbackContextCompatible(context, std::get<1>(it->first))) {
         continue;
       }
       MergeCounts(it->second, &effective);
@@ -1890,108 +1440,73 @@ std::vector<ZenzFeedbackEntry> ZenzFeedbackStore::ListEntries(
     ApplyAutoBlockDecision(effective, auto_block_policy, &decision);
 
     ZenzFeedbackEntry entry;
-    entry.key = key;
-    entry.context_class = context_class;
+    entry.key = reading;
+    entry.context_class = context;
     entry.value = value;
-    entry.accepted_count = exact.accepted;
-    entry.rejected_count = exact.rejected;
+    entry.accepted_count = counts.accepted;
+    entry.rejected_count = counts.rejected;
     entry.effective_accepted_count = effective.accepted;
     entry.effective_rejected_count = effective.rejected;
-    entry.auto_block_reject_count = exact.auto_block_rejected;
-    entry.hard_rejected = decision.hard_rejected;
+    entry.auto_block_reject_count = effective.auto_block_rejected;
+    entry.hard_rejected = effective.hard_rejected;
     entry.auto_blocked = decision.auto_blocked;
     entry.reason = decision.reason;
     entries.push_back(std::move(entry));
   }
 
   std::sort(entries.begin(), entries.end(),
-            [](const ZenzFeedbackEntry& a,
-               const ZenzFeedbackEntry& b) {
-              if (a.key != b.key) {
-                return a.key < b.key;
+            [](const ZenzFeedbackEntry& lhs,
+               const ZenzFeedbackEntry& rhs) {
+              if (lhs.key != rhs.key) {
+                return lhs.key < rhs.key;
               }
-              if (a.value != b.value) {
-                return a.value < b.value;
+              if (lhs.context_class != rhs.context_class) {
+                return lhs.context_class < rhs.context_class;
               }
-              return a.context_class < b.context_class;
+              return lhs.value < rhs.value;
             });
-
   return entries;
 }
 
 bool ZenzFeedbackStore::ExportToFile(const std::wstring& path) const {
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
+  const std::filesystem::path output_path =
+      WidePathToFilesystemPath(path);
+  if (output_path.empty()) {
+    return false;
+  }
   std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
   ScopedFeedbackInterprocessLock interprocess_lock;
   if (!interprocess_lock.ok()) {
     return false;
   }
-#if defined(_WIN32)
-  std::vector<ParsedFeedbackRecord> records;
-  if (!LoadFeedbackRecordsFromDisk(&records)) {
+  std::vector<Record> records;
+  if (!LoadRecordsFromDisk(&records)) {
     return false;
   }
-  return WriteRecordsToPath(path, records);
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  const std::string path_utf8 = WidePathToUtf8(path);
-  if (path_utf8.empty()) {
-    return false;
-  }
-  std::vector<ParsedFeedbackRecord> records;
-  if (!LoadFeedbackRecordsFromDisk(&records)) {
-    return false;
-  }
-  return WriteRecordsToPathUtf8(path_utf8, records);
+  return WriteRecordsToPath(output_path, records);
 #else
-  StoreDebugOutput("export failed: zenz feedback store is unsupported");
+  (void)path;
   return false;
 #endif
 }
 
 bool ZenzFeedbackStore::ImportFromFile(
-    const std::wstring& path,
-    ZenzFeedbackImportMode mode) {
-#if defined(_WIN32)
-  if (path.empty()) {
-    return false;
-  }
-
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
-    StoreDebugOutputWide(
-        std::wstring(L"import open failed ")
-            .append(RedactedWidePathStats(L"path", path)));
-    return false;
-  }
-#elif defined(__APPLE__) && TARGET_OS_OSX
-  const std::string path_utf8 = WidePathToUtf8(path);
-  if (path_utf8.empty()) {
-    return false;
-  }
-  std::ifstream file(path_utf8, std::ios::binary);
-  if (!file) {
-    StoreDebugOutput("import open failed");
-    return false;
-  }
-#else
-  StoreDebugOutput("import failed: zenz feedback store is unsupported");
-  return false;
-#endif
-
+    const std::wstring& path, ZenzFeedbackImportMode mode) {
 #if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
-  std::vector<ParsedFeedbackRecord> imported_records;
-  if (!LoadRecordsFromStream(&file, true, &imported_records)) {
-#if defined(_WIN32)
-    StoreDebugOutputWide(
-        std::wstring(L"import parse failed ")
-            .append(RedactedWidePathStats(L"path", path)));
-#else
-    StoreDebugOutput("import parse failed");
-#endif
+  const std::filesystem::path input_path =
+      WidePathToFilesystemPath(path);
+  if (input_path.empty()) {
     return false;
   }
-  // Do not keep the import source handle open while replacing the feedback
-  // store. This also makes importing from the store's own path fail-safe on
-  // Windows, where an open handle can otherwise block MoveFileExW.
+  std::ifstream file(input_path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  std::vector<Record> imported;
+  if (!LoadRecordsFromStream(&file, true, &imported)) {
+    return false;
+  }
   file.close();
 
   std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
@@ -2000,17 +1515,17 @@ bool ZenzFeedbackStore::ImportFromFile(
     return false;
   }
 
-  std::vector<ParsedFeedbackRecord> new_records;
+  std::vector<Record> records;
   if (mode == ZenzFeedbackImportMode::kAppend &&
-      !LoadFeedbackRecordsFromDisk(&new_records)) {
+      !LoadRecordsFromDisk(&records)) {
     return false;
   }
-
-  new_records.insert(new_records.end(),
-                     imported_records.begin(),
-                     imported_records.end());
-
-  return WriteFeedbackRecordsAtomically(new_records);
+  records.insert(records.end(), imported.begin(), imported.end());
+  return WriteRecordsAtomically(records);
+#else
+  (void)path;
+  (void)mode;
+  return false;
 #endif
 }
 
@@ -2022,100 +1537,60 @@ bool ZenzFeedbackStore::DeleteEntry(absl::string_view key,
   if (!interprocess_lock.ok()) {
     return false;
   }
-
-  std::vector<ParsedFeedbackRecord> records;
-  if (!LoadFeedbackRecordsFromDisk(&records)) {
+  std::vector<Record> records;
+  if (!LoadRecordsFromDisk(&records)) {
     return false;
   }
 
-  const std::string normalized_key(key);
-  const std::string normalized_context_class =
+  const std::string normalized_context =
       NormalizeContextClass(context_class);
-  const std::string normalized_value(value);
-
   const auto new_end =
       std::remove_if(records.begin(), records.end(),
-                     [&](const ParsedFeedbackRecord& record) {
-                       return record.kind ==
-                                  ParsedFeedbackRecordKind::kFullSequence &&
-                              record.key == normalized_key &&
-                              record.context_class == normalized_context_class &&
-                              record.value == normalized_value;
+                     [&](const Record& record) {
+                       return record.kind == RecordKind::kFull &&
+                              record.key == key &&
+                              record.context_class == normalized_context &&
+                              record.value == value;
                      });
-
   if (new_end == records.end()) {
     return true;
   }
-
   records.erase(new_end, records.end());
-  return WriteFeedbackRecordsAtomically(records);
+  return WriteRecordsAtomically(records);
 }
 
 bool ZenzFeedbackStore::DeleteLocalPreference(
     absl::string_view key, absl::string_view context_class,
     absl::string_view preferred_value, absl::string_view disfavored_value) {
+  (void)context_class;
   std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
   ScopedFeedbackInterprocessLock interprocess_lock;
   if (!interprocess_lock.ok()) {
     return false;
   }
-
-  std::vector<ParsedFeedbackRecord> records;
-  if (!LoadFeedbackRecordsFromDisk(&records)) {
+  std::vector<Record> records;
+  if (!LoadRecordsFromDisk(&records)) {
     return false;
   }
 
-  const std::string normalized_key(key);
-  const std::string normalized_context_class =
-      NormalizeContextClass(context_class);
-  const std::string normalized_preferred(preferred_value);
-  const std::string normalized_disfavored(disfavored_value);
-
-  std::vector<ParsedFeedbackRecord> kept;
-  kept.reserve(records.size());
-  bool changed = false;
-
-  for (size_t i = 0; i < records.size(); ++i) {
-    const ParsedFeedbackRecord& record = records[i];
-    if (record.kind == ParsedFeedbackRecordKind::kLocalPreference &&
-        record.key == normalized_key &&
-        record.context_class == normalized_context_class &&
-        record.value == normalized_preferred &&
-        record.disfavored_value == normalized_disfavored) {
-      changed = true;
-      continue;
-    }
-
-    // Imported REV9 local_revert data is exposed as context "legacy" by the
-    // aggregate view.  Delete the canonical accepted/rejected pair together.
-    if (normalized_context_class == "legacy" &&
-        i + 1 < records.size() &&
-        record.kind == ParsedFeedbackRecordKind::kFullSequence &&
-        record.action == "accepted" &&
-        record.context_class == "local_revert" &&
-        record.reason == "local_revert_preferred" &&
-        record.key == normalized_key &&
-        record.value == normalized_preferred) {
-      const ParsedFeedbackRecord& rejected = records[i + 1];
-      if (rejected.kind == ParsedFeedbackRecordKind::kFullSequence &&
-          rejected.action == "rejected" &&
-          rejected.context_class == "local_revert" &&
-          rejected.reason == "local_revert" &&
-          rejected.key == normalized_key &&
-          rejected.value == normalized_disfavored) {
-        changed = true;
-        ++i;
-        continue;
-      }
-    }
-
-    kept.push_back(record);
-  }
-
-  if (!changed) {
+  const auto new_end =
+      std::remove_if(records.begin(), records.end(),
+                     [&](const Record& record) {
+                       if (record.kind != RecordKind::kLocal) {
+                         return false;
+                       }
+                       const CanonicalLocalIdentity local =
+                           CanonicalizeLocalIdentity(
+                               record.key, record.value, record.extra);
+                       return local.key == key &&
+                              local.raw_zenz_surface == disfavored_value &&
+                              local.corrected_surface == preferred_value;
+                     });
+  if (new_end == records.end()) {
     return true;
   }
-  return WriteFeedbackRecordsAtomically(kept);
+  records.erase(new_end, records.end());
+  return WriteRecordsAtomically(records);
 }
 
 bool ZenzFeedbackStore::ClearAll() {
@@ -2124,44 +1599,64 @@ bool ZenzFeedbackStore::ClearAll() {
   if (!interprocess_lock.ok()) {
     return false;
   }
-  return WriteFeedbackRecordsAtomically({});
+  return WriteRecordsAtomically({});
 }
 
 void ZenzFeedbackStore::RecordAccepted(
-    absl::string_view key,
-    absl::string_view context_class,
+    absl::string_view key, absl::string_view context_class,
     absl::string_view value) {
-  // The caller is responsible for passing the complete ordinary Zenz
-  // reading/correction pair. Local evidence uses the v3 local-preference APIs only.
-  AppendRecord("accepted", key, context_class, value, "");
+  Record record;
+  record.kind = RecordKind::kFull;
+  record.action = "accepted";
+  record.key = std::string(key);
+  record.context_class = NormalizeContextClass(context_class);
+  record.value = std::string(value);
+  record.extra = "";
+  record.count = 1;
+  AppendRecords({record});
 }
 
 void ZenzFeedbackStore::RecordRejected(
-    absl::string_view key,
-    absl::string_view context_class,
-    absl::string_view value,
-    absl::string_view reason) {
-  // An ordinary rejected record is full-sequence scoped. Local evidence uses
-  // the v3 local-preference APIs only.
-  AppendRecord("rejected", key, context_class, value, reason);
+    absl::string_view key, absl::string_view context_class,
+    absl::string_view value, absl::string_view reason) {
+  Record record;
+  record.kind = RecordKind::kFull;
+  record.action = "rejected";
+  record.key = std::string(key);
+  record.context_class = NormalizeContextClass(context_class);
+  record.value = std::string(value);
+  record.extra = std::string(reason);
+  record.count = 1;
+  AppendRecords({record});
 }
 
-void ZenzFeedbackStore::RecordLocalPreference(
+void ZenzFeedbackStore::RecordLocalAccepted(
     absl::string_view key, absl::string_view context_class,
-    absl::string_view preferred_value, absl::string_view disfavored_value,
-    absl::string_view reason) {
+    absl::string_view raw_zenz_surface,
+    absl::string_view corrected_surface) {
   ZenzLocalPreference preference;
   preference.key = std::string(key);
-  preference.context_class = std::string(context_class);
-  preference.preferred_value = std::string(preferred_value);
-  preference.disfavored_value = std::string(disfavored_value);
-  RecordLocalPreferences({preference}, reason);
+  preference.context_class = NormalizeContextClass(context_class);
+  preference.preferred_value = std::string(corrected_surface);
+  preference.disfavored_value = std::string(raw_zenz_surface);
+  RecordLocalAccepteds({preference});
 }
 
-void ZenzFeedbackStore::RecordLocalPreferences(
-    const std::vector<ZenzLocalPreference>& preferences,
-    absl::string_view reason) {
-  std::vector<ParsedFeedbackRecord> records;
+void ZenzFeedbackStore::RecordLocalRejected(
+    absl::string_view key, absl::string_view context_class,
+    absl::string_view raw_zenz_surface,
+    absl::string_view corrected_surface) {
+  ZenzLocalPreference preference;
+  preference.key = std::string(key);
+  preference.context_class = NormalizeContextClass(context_class);
+  preference.preferred_value = std::string(corrected_surface);
+  preference.disfavored_value = std::string(raw_zenz_surface);
+  RecordLocalRejecteds({preference});
+}
+
+void ZenzFeedbackStore::RecordLocalAccepteds(
+    const std::vector<ZenzLocalPreference>& preferences) {
+  std::vector<Record> records;
   records.reserve(preferences.size());
   for (const ZenzLocalPreference& preference : preferences) {
     if (preference.key.empty() || preference.preferred_value.empty() ||
@@ -2169,19 +1664,301 @@ void ZenzFeedbackStore::RecordLocalPreferences(
         preference.preferred_value == preference.disfavored_value) {
       continue;
     }
-
-    ParsedFeedbackRecord record;
-    record.kind = ParsedFeedbackRecordKind::kLocalPreference;
-    record.key = preference.key;
-    record.context_class = NormalizeContextClass(preference.context_class);
-    record.value = preference.preferred_value;
-    record.disfavored_value = preference.disfavored_value;
-    record.reason = std::string(reason);
+    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+        preference.key, preference.disfavored_value,
+        preference.preferred_value);
+    Record record;
+    record.kind = RecordKind::kLocal;
+    record.action = "accepted";
+    record.key = local.key;
+    record.context_class =
+        NormalizeContextClass(preference.context_class);
+    record.value = local.raw_zenz_surface;
+    record.extra = local.corrected_surface;
+    record.count = 1;
     records.push_back(std::move(record));
   }
   AppendRecords(records);
 }
 
+void ZenzFeedbackStore::RecordLocalRejecteds(
+    const std::vector<ZenzLocalPreference>& preferences) {
+  std::vector<Record> records;
+  records.reserve(preferences.size());
+  for (const ZenzLocalPreference& preference : preferences) {
+    if (preference.key.empty() || preference.preferred_value.empty() ||
+        preference.disfavored_value.empty() ||
+        preference.preferred_value == preference.disfavored_value) {
+      continue;
+    }
+    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+        preference.key, preference.disfavored_value,
+        preference.preferred_value);
+    Record record;
+    record.kind = RecordKind::kLocal;
+    record.action = "rejected";
+    record.key = local.key;
+    record.context_class =
+        NormalizeContextClass(preference.context_class);
+    record.value = local.raw_zenz_surface;
+    record.extra = local.corrected_surface;
+    record.count = 1;
+    records.push_back(std::move(record));
+  }
+  AppendRecords(records);
+}
+
+void ZenzFeedbackStore::RecordLocalPreference(
+    absl::string_view key, absl::string_view context_class,
+    absl::string_view preferred_value, absl::string_view disfavored_value,
+    absl::string_view) {
+  RecordLocalAccepted(key, context_class, disfavored_value, preferred_value);
+}
+
+void ZenzFeedbackStore::RecordLocalPreferences(
+    const std::vector<ZenzLocalPreference>& preferences,
+    absl::string_view) {
+  RecordLocalAccepteds(preferences);
+}
+
+bool ZenzFeedbackStore::Maintenance(size_t max_entries) {
+  max_entries =
+      std::clamp(max_entries, kMinMaintenanceEntries,
+                 kMaxMaintenanceEntries);
+
+  std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
+  ScopedFeedbackInterprocessLock interprocess_lock;
+  if (!interprocess_lock.ok()) {
+    return false;
+  }
+
+  std::vector<Record> records;
+  if (!LoadRecordsFromDisk(&records)) {
+    return false;
+  }
+
+  std::map<FeedbackKey, FullCompactAggregate> full;
+  std::map<LocalKey, std::vector<LocalEvent>> local_events;
+
+  for (size_t i = 0; i < records.size(); ++i) {
+    const Record& record = records[i];
+    if (record.kind == RecordKind::kFull) {
+      const FeedbackKey key(record.key, record.context_class, record.value);
+      FullCompactAggregate& aggregate = full[key];
+      aggregate.key = record.key;
+      aggregate.context_class = record.context_class;
+      aggregate.value = record.value;
+      aggregate.last_sequence = i;
+      if (record.action == "accepted") {
+        aggregate.accepted_count = SaturatingAddNonNegative(
+            aggregate.accepted_count, record.count);
+        AddAccepted(record.count, &aggregate.counts);
+      } else {
+        aggregate.rejected_by_reason[record.extra] = SaturatingAddNonNegative(
+            aggregate.rejected_by_reason[record.extra], record.count);
+        AddRejected(record.extra, record.count, &aggregate.counts);
+      }
+      continue;
+    }
+
+    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+        record.key, record.value, record.extra);
+    LocalEvent event;
+    event.context_class = record.context_class;
+    event.raw_zenz_surface = local.raw_zenz_surface;
+    event.corrected_surface = local.corrected_surface;
+    event.accepted = record.action == "accepted";
+    event.count = record.count;
+    event.sequence = i;
+    local_events[LocalKey(local.key, local.raw_zenz_surface,
+                          local.corrected_surface)]
+        .push_back(std::move(event));
+  }
+
+  std::vector<FullCompactAggregate> full_entries;
+  full_entries.reserve(full.size());
+  for (auto& [key, aggregate] : full) {
+    full_entries.push_back(std::move(aggregate));
+  }
+
+  auto full_keep_better =
+      [](const FullCompactAggregate& lhs,
+         const FullCompactAggregate& rhs) {
+        const bool lhs_clear =
+            lhs.counts.hard_rejected || TotalScore(lhs.counts) != 0;
+        const bool rhs_clear =
+            rhs.counts.hard_rejected || TotalScore(rhs.counts) != 0;
+        if (lhs_clear != rhs_clear) {
+          return lhs_clear > rhs_clear;
+        }
+        const int64_t lhs_strength =
+            static_cast<int64_t>(lhs.counts.positive_score) +
+            lhs.counts.negative_score;
+        const int64_t rhs_strength =
+            static_cast<int64_t>(rhs.counts.positive_score) +
+            rhs.counts.negative_score;
+        if (lhs_strength != rhs_strength) {
+          return lhs_strength > rhs_strength;
+        }
+        if (lhs.last_sequence != rhs.last_sequence) {
+          return lhs.last_sequence > rhs.last_sequence;
+        }
+        return std::tie(lhs.key, lhs.context_class, lhs.value) <
+               std::tie(rhs.key, rhs.context_class, rhs.value);
+      };
+  std::sort(full_entries.begin(), full_entries.end(), full_keep_better);
+  if (full_entries.size() > max_entries) {
+    full_entries.resize(max_entries);
+  }
+
+  std::vector<LocalCompactAggregate> local_entries;
+  local_entries.reserve(local_events.size());
+  for (const auto& [key, events] : local_events) {
+    const auto& [reading, raw, corrected] = key;
+    int count = 0;
+    size_t last_sequence = 0;
+    std::string last_context = "empty";
+    for (const LocalEvent& event : events) {
+      last_sequence = event.sequence;
+      last_context = event.context_class;
+      if (event.accepted) {
+        const int remaining = kMaxLocalEvidenceCount - count;
+        count = event.count >= remaining
+                    ? kMaxLocalEvidenceCount
+                    : count + event.count;
+      } else {
+        count = event.count >= count ? 0 : count - event.count;
+      }
+    }
+    if (count == 0) {
+      continue;
+    }
+    local_entries.push_back(
+        {reading, last_context, raw, corrected, count, last_sequence});
+  }
+
+  std::sort(local_entries.begin(), local_entries.end(),
+            [](const LocalCompactAggregate& lhs,
+               const LocalCompactAggregate& rhs) {
+              if (lhs.count != rhs.count) {
+                return lhs.count > rhs.count;
+              }
+              if (lhs.last_sequence != rhs.last_sequence) {
+                return lhs.last_sequence > rhs.last_sequence;
+              }
+              return std::tie(lhs.key, lhs.context_class,
+                              lhs.raw_zenz_surface,
+                              lhs.corrected_surface) <
+                     std::tie(rhs.key, rhs.context_class,
+                              rhs.raw_zenz_surface,
+                              rhs.corrected_surface);
+            });
+  if (local_entries.size() > max_entries) {
+    local_entries.resize(max_entries);
+  }
+
+  // Re-establish recency by writing old logical entries first and new entries
+  // last. Within one Full logical entry, accepted and reason-specific rejected
+  // aggregate rows remain adjacent.
+  std::sort(full_entries.begin(), full_entries.end(),
+            [](const FullCompactAggregate& lhs,
+               const FullCompactAggregate& rhs) {
+              return lhs.last_sequence < rhs.last_sequence;
+            });
+  std::sort(local_entries.begin(), local_entries.end(),
+            [](const LocalCompactAggregate& lhs,
+               const LocalCompactAggregate& rhs) {
+              return lhs.last_sequence < rhs.last_sequence;
+            });
+
+  struct OrderedOutput {
+    size_t last_sequence = 0;
+    bool local = false;
+    size_t index = 0;
+  };
+  std::vector<OrderedOutput> ordered;
+  ordered.reserve(full_entries.size() + local_entries.size());
+  for (size_t i = 0; i < full_entries.size(); ++i) {
+    ordered.push_back({full_entries[i].last_sequence, false, i});
+  }
+  for (size_t i = 0; i < local_entries.size(); ++i) {
+    ordered.push_back({local_entries[i].last_sequence, true, i});
+  }
+  std::sort(ordered.begin(), ordered.end(),
+            [](const OrderedOutput& lhs, const OrderedOutput& rhs) {
+              if (lhs.last_sequence != rhs.last_sequence) {
+                return lhs.last_sequence < rhs.last_sequence;
+              }
+              return lhs.local < rhs.local;
+            });
+
+  std::vector<Record> compacted;
+  for (const OrderedOutput& item : ordered) {
+    if (!item.local) {
+      const FullCompactAggregate& entry = full_entries[item.index];
+      if (entry.accepted_count > 0) {
+        Record record;
+        record.kind = RecordKind::kFull;
+        record.action = "accepted";
+        record.key = entry.key;
+        record.context_class = entry.context_class;
+        record.value = entry.value;
+        record.extra = "";
+        record.count = entry.accepted_count;
+        compacted.push_back(std::move(record));
+      }
+      for (const auto& [reason, count] : entry.rejected_by_reason) {
+        if (count <= 0) {
+          continue;
+        }
+        Record record;
+        record.kind = RecordKind::kFull;
+        record.action = "rejected";
+        record.key = entry.key;
+        record.context_class = entry.context_class;
+        record.value = entry.value;
+        record.extra = reason;
+        record.count = count;
+        compacted.push_back(std::move(record));
+      }
+      continue;
+    }
+
+    const LocalCompactAggregate& entry = local_entries[item.index];
+    Record record;
+    record.kind = RecordKind::kLocal;
+    record.action = "accepted";
+    record.key = entry.key;
+    record.context_class = entry.context_class;
+    record.value = entry.raw_zenz_surface;
+    record.extra = entry.corrected_surface;
+    record.count = entry.count;
+    compacted.push_back(std::move(record));
+  }
+
+  return WriteRecordsAtomically(compacted);
+}
+
+bool ZenzFeedbackStore::MaybeMaintenance(size_t max_entries) {
+  max_entries =
+      std::clamp(max_entries, kMinMaintenanceEntries, kMaxMaintenanceEntries);
+  const std::filesystem::path maintenance_path = FeedbackPathForRead();
+
+  std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_maintenance_mutex);
+  if (g_lifecycle_maintenance_done &&
+      g_lifecycle_maintenance_path == maintenance_path &&
+      g_lifecycle_maintenance_max_entries == max_entries) {
+    return true;
+  }
+
+  if (!Maintenance(max_entries)) {
+    return false;
+  }
+  g_lifecycle_maintenance_done = true;
+  g_lifecycle_maintenance_path = maintenance_path;
+  g_lifecycle_maintenance_max_entries = max_entries;
+  return true;
+}
 
 }  // namespace session
 }  // namespace mozc
