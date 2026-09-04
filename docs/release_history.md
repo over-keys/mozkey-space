@@ -4,21 +4,13 @@ Release History
 Mozkey 4.10.0 / Mozc 3.34 / *2026-09-04*
 -------------------------------------------
 
-### 3.34 の内容（再掲）
+### macOSへのインストール（重要）
 
-このリリースは Mozc 3.34 をベースにしています。3.34 の内容として、Mozc の日本語入力エンジン、変換・候補表示、辞書、Windows x64 のビルド基盤を引き継ぎます。Mozkey 系で追加されている主な内容は次のとおりです。
+macOS PKGは実験的なパッケージです。Developer IDによる署名と公証を行っていないため、macOSによってインストールがブロックされる場合があります。
 
-* 曖昧なローマ字の途中表示、句読点・記号の単打確定、確定取り消し時のユーザー履歴学習を改善。
-* ライブ変換、デバウンス、最小文字数、確定済み左文脈・限定的な右文脈を用いた変換補正を追加。
-* キー設定の複数コマンド、MS-IME 風の選択文字列再変換、左右 Shift / Ctrl の個別割り当てを追加。
-* Windows の既定 IME 設定、IME アイコン、候補・サジェスト・用例・ルビ表示のテーマ、フォント、太さ、縦書き、未確定文字色を設定可能にした。
-* system dictionary の追加辞書生成、日常語・実務語・外来語・人名・地名・ネット固有名詞、文節境界を守る syntax guard を追加。
-* llama.cpp によるローカル Zenz live correction、Windows named pipe / localhost runtime、macOS の Zenz context 取得を追加。
-* Zenz の入力 context を privacy filtering し、ASCII / mixed-script、記号幅、ユーザー辞書語を保護。password field と sensitive-like context では補正・再利用を抑制。
-* Zenz feedback の保存・再利用、Full Feedback と Local Preference の分離、通常変換 ranking、multi-segment live correction、Zenz runtime の license notice を追加。
-* 句読点の auto-conversion は通常の Zenz 補正経路へ接続し、句読点・記号の direct commit は独立した経路として維持。
-* 数字の直後の `/` を数値入力として扱い、`8/29` や `2026/8/29` のような入力を安定して変換・予測できるようにした。
-* Mozc の reading correction と legacy KeyCorrector の provenance を尊重し、読みを変える候補で Zenz が元の誤入力へ戻す挙動を抑制。Space で残った限定的なローマ字には安全な一かな補正を適用。
+インストールを拒否された場合は、「システム設定 > プライバシーとセキュリティ」を開き、ブロックされたインストーラーに表示される「このまま開く」（または同等の「Open Anyway」）を明示的に選択してから、PKGをもう一度開いてください。「プライバシーとセキュリティ」でこの許可を明示的に与えない限り、macOS版はインストールできません。
+
+macOS版のファイル名は `mozkey-space_4.10_macos_universal_zenz.pkg` です。SHA-256チェックサムは、同じリリースに添付しています。
 
 ### 4.10 の追加内容
 
