@@ -2041,13 +2041,16 @@ BuildLocalPreferenceLearningPairsFromUniqueAlignment(
         Util::CharsLen(key) < kMinLocalKeyChars ||
         Util::CharsLen(key) > kMaxLocalKeyChars ||
         Util::CharsLen(pending.preferred_value) > kMaxLocalSurfaceChars ||
-        Util::CharsLen(pending.disfavored_value) > kMaxLocalSurfaceChars ||
-        CountSurfaceOccurrences(full_key, key) != 1 ||
-        CountSurfaceOccurrences(preferred_full_value,
-                                pending.preferred_value) != 1 ||
-        CountSurfaceOccurrences(disfavored_full_value,
-                                pending.disfavored_value) != 1) {
+        Util::CharsLen(pending.disfavored_value) > kMaxLocalSurfaceChars) {
       return true;
+    }
+
+    for (const ZenzLocalPreferenceLearningPair& existing : result) {
+      if (existing.key == key &&
+          existing.preferred_value == pending.preferred_value &&
+          existing.disfavored_value == pending.disfavored_value) {
+        return true;
+      }
     }
 
     result.push_back({std::string(key), pending.preferred_value,
@@ -2175,33 +2178,42 @@ ZenzLocalRepairResult ApplyLocalPreferenceRepairs(
   std::vector<Replacement> replacements;
 
   for (const ZenzLocalPreference& preference : mature) {
-    if (CountSurfaceOccurrences(full_key, preference.key) != 1) {
-      continue;
-    }
-    const size_t reading_begin = full_key.find(preference.key);
-    if (reading_begin == absl::string_view::npos) {
-      continue;
-    }
-    const size_t reading_end = reading_begin + preference.key.size();
-
-    std::string raw_surface;
-    size_t surface_begin = 0;
-    size_t surface_end = 0;
-    if (!ExtractSurfaceForReadingRange(
-            zenz_alignment, reading_begin, reading_end, &raw_surface,
-            &surface_begin, &surface_end) ||
-        raw_surface != preference.disfavored_value) {
+    if (preference.key.empty()) {
       continue;
     }
 
-    std::string mozc_surface;
-    if (!ExtractSurfaceForReadingRange(
-            mozc_alignment, reading_begin, reading_end, &mozc_surface) ||
-        mozc_surface != preference.preferred_value) {
-      continue;
-    }
+    size_t search_pos = 0;
+    while (search_pos < full_key.size()) {
+      const size_t reading_begin = full_key.find(preference.key, search_pos);
+      if (reading_begin == absl::string_view::npos) {
+        break;
+      }
+      const size_t reading_end = reading_begin + preference.key.size();
+      search_pos = reading_end;
 
-    replacements.push_back({surface_begin, surface_end, preference});
+      std::string raw_surface;
+      size_t surface_begin = 0;
+      size_t surface_end = 0;
+      if (!ExtractSurfaceForReadingRange(
+              zenz_alignment, reading_begin, reading_end, &raw_surface,
+              &surface_begin, &surface_end) ||
+          raw_surface != preference.disfavored_value) {
+        continue;
+      }
+
+      std::string mozc_surface;
+      if (!ExtractSurfaceForReadingRange(
+              mozc_alignment, reading_begin, reading_end, &mozc_surface) ||
+          mozc_surface != preference.preferred_value) {
+        continue;
+      }
+
+      ZenzLocalPreference applied = preference;
+      applied.reading_begin = reading_begin;
+      applied.has_reading_begin = true;
+      replacements.push_back(
+          {surface_begin, surface_end, std::move(applied)});
+    }
   }
 
   if (replacements.empty()) {
@@ -2440,6 +2452,29 @@ bool MozcUserHistoryPreferencesArePreserved(
         return true;
       };
 
+  auto applied_range =
+      [&](const ZenzLocalPreference& applied, size_t* begin, size_t* end) {
+        if (begin == nullptr || end == nullptr || applied.key.empty()) {
+          return false;
+        }
+        if (applied.has_reading_begin) {
+          if (applied.reading_begin > full_key.size() ||
+              applied.key.size() > full_key.size() - applied.reading_begin) {
+            return false;
+          }
+          const size_t candidate_end =
+              applied.reading_begin + applied.key.size();
+          if (full_key.substr(applied.reading_begin, applied.key.size()) !=
+              applied.key) {
+            return false;
+          }
+          *begin = applied.reading_begin;
+          *end = candidate_end;
+          return true;
+        }
+        return unique_reading_range(applied.key, begin, end);
+      };
+
   std::vector<engine::UserHistoryConversionPreference> preferences;
   converter.GetUserHistoryConversionPreferences(&preferences);
 
@@ -2489,51 +2524,59 @@ bool MozcUserHistoryPreferencesArePreserved(
 
     // Local v4 may intentionally override Mozc history only on the exact
     // reading interval it actually repaired.  When both whole strings can be
-    // aligned, verify the learned Mozc surface on that interval directly so a
-    // Local edit cannot mask loss of an identical learned surface elsewhere.
-    size_t preference_begin = 0;
-    size_t preference_end = 0;
-    if (!unique_reading_range(preference.key, &preference_begin,
-                              &preference_end)) {
-      return false;
-    }
-
-    bool exempted_by_applied_local = false;
-    for (const ZenzLocalPreference& applied : applied_local_preferences) {
-      size_t local_begin = 0;
-      size_t local_end = 0;
-      if (!unique_reading_range(applied.key, &local_begin, &local_end)) {
-        continue;
-      }
-      if (preference_begin < local_end && local_begin < preference_end) {
-        exempted_by_applied_local = true;
+    // aligned, verify each occurrence independently so a Local edit cannot
+    // mask loss of an identical learned surface elsewhere.
+    size_t aligned_required_occurrences = 0;
+    size_t search_pos = 0;
+    while (search_pos < full_key.size()) {
+      const size_t preference_begin =
+          full_key.find(preference.key, search_pos);
+      if (preference_begin == absl::string_view::npos) {
         break;
       }
-    }
-    if (!exempted_by_applied_local) {
-      return false;
+      const size_t preference_end =
+          preference_begin + preference.key.size();
+      search_pos = preference_end;
+
+      std::string mozc_surface;
+      std::string zenz_surface;
+      size_t surface_begin = 0;
+      size_t surface_end = 0;
+      if (!ExtractSurfaceForReadingRange(
+              mozc_alignment, preference_begin, preference_end,
+              &mozc_surface, &surface_begin, &surface_end) ||
+          !ExtractSurfaceForReadingRange(
+              zenz_alignment, preference_begin, preference_end,
+              &zenz_surface, &surface_begin, &surface_end)) {
+        return false;
+      }
+
+      if (mozc_surface != preference.value) {
+        continue;
+      }
+      ++aligned_required_occurrences;
+      if (zenz_surface == preference.value) {
+        continue;
+      }
+
+      bool exempted_by_applied_local = false;
+      for (const ZenzLocalPreference& applied : applied_local_preferences) {
+        size_t local_begin = 0;
+        size_t local_end = 0;
+        if (!applied_range(applied, &local_begin, &local_end)) {
+          continue;
+        }
+        if (preference_begin < local_end && local_begin < preference_end) {
+          exempted_by_applied_local = true;
+          break;
+        }
+      }
+      if (!exempted_by_applied_local) {
+        return false;
+      }
     }
 
-    std::string mozc_surface;
-    std::string zenz_surface;
-    size_t surface_begin = 0;
-    size_t surface_end = 0;
-    if (!ExtractSurfaceForReadingRange(
-            mozc_alignment, preference_begin, preference_end,
-            &mozc_surface, &surface_begin, &surface_end) ||
-        !ExtractSurfaceForReadingRange(
-            zenz_alignment, preference_begin, preference_end,
-            &zenz_surface, &surface_begin, &surface_end) ||
-        mozc_surface != preference.value ||
-        zenz_surface == preference.value) {
-      return false;
-    }
-
-    // This exact Local-repaired reading interval may account for one missing
-    // occurrence of the learned surface, but never for losses elsewhere.
-    const size_t zenz_occurrences =
-        CountSurfaceOccurrences(zenz_value, preference.value);
-    if (zenz_occurrences + 1 < required_occurrences) {
+    if (aligned_required_occurrences != required_occurrences) {
       return false;
     }
   }
@@ -5984,10 +6027,16 @@ void Session::ObservePendingZenzFeedbackCommittedResult(
     return;
   }
 
-  // Only a fully committed conversion/direct commit should resolve pending
-  // rejected feedback. Partial segment commits stay in CONVERSION and must not
-  // be interpreted as the user's final full-sequence decision.
+  // A partial segment commit stays in CONVERSION. Once any actual text
+  // fragment has been committed, the eventual last-fragment result is no
+  // longer a trustworthy representation of the original full sequence.
   if (context_->state() != ImeContext::PRECOMPOSITION) {
+    if (command.output().has_result() &&
+        command.output().result().type() == commands::Result::STRING &&
+        command.output().result().has_value() &&
+        !command.output().result().value().empty()) {
+      DiscardPendingZenzFeedback("partial_segment_commit");
+    }
     return;
   }
 
@@ -6177,14 +6226,29 @@ void Session::ConfirmPendingZenzFeedback() {
           } else {
             for (const ZenzLocalPreference& applied :
                  pending_zenz_feedback_.applied_local_preferences) {
-              if (CountSurfaceOccurrences(pending_zenz_feedback_.key,
-                                          applied.key) != 1) {
-                continue;
-              }
-              const size_t reading_begin =
-                  pending_zenz_feedback_.key.find(applied.key);
-              if (reading_begin == std::string::npos) {
-                continue;
+              size_t reading_begin = 0;
+              if (applied.has_reading_begin) {
+                if (applied.reading_begin >
+                        pending_zenz_feedback_.key.size() ||
+                    applied.key.size() >
+                        pending_zenz_feedback_.key.size() -
+                            applied.reading_begin ||
+                    pending_zenz_feedback_.key.substr(
+                        applied.reading_begin, applied.key.size()) !=
+                        applied.key) {
+                  continue;
+                }
+                reading_begin = applied.reading_begin;
+              } else {
+                if (CountSurfaceOccurrences(pending_zenz_feedback_.key,
+                                            applied.key) != 1) {
+                  continue;
+                }
+                reading_begin =
+                    pending_zenz_feedback_.key.find(applied.key);
+                if (reading_begin == std::string::npos) {
+                  continue;
+                }
               }
               const size_t reading_end = reading_begin + applied.key.size();
               std::string final_surface;
@@ -7588,12 +7652,25 @@ bool Session::ApplyZenzLiveCorrectionResult(
       std::vector<ZenzLocalPreference> displayed_local_preferences;
       displayed_local_preferences.reserve(applied_local_preferences.size());
       for (const ZenzLocalPreference& applied : applied_local_preferences) {
-        if (CountSurfaceOccurrences(pending_zenz_live_.key, applied.key) != 1) {
-          continue;
-        }
-        const size_t reading_begin = pending_zenz_live_.key.find(applied.key);
-        if (reading_begin == std::string::npos) {
-          continue;
+        size_t reading_begin = 0;
+        if (applied.has_reading_begin) {
+          if (applied.reading_begin > pending_zenz_live_.key.size() ||
+              applied.key.size() >
+                  pending_zenz_live_.key.size() - applied.reading_begin ||
+              pending_zenz_live_.key.substr(applied.reading_begin,
+                                            applied.key.size()) != applied.key) {
+            continue;
+          }
+          reading_begin = applied.reading_begin;
+        } else {
+          if (CountSurfaceOccurrences(pending_zenz_live_.key,
+                                      applied.key) != 1) {
+            continue;
+          }
+          reading_begin = pending_zenz_live_.key.find(applied.key);
+          if (reading_begin == std::string::npos) {
+            continue;
+          }
         }
         const size_t reading_end = reading_begin + applied.key.size();
         std::string displayed_surface;

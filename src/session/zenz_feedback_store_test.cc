@@ -16,6 +16,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__) && TARGET_OS_OSX
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -374,6 +375,61 @@ V4_TEST(LocalMatureSameRawCorrectionsRemainAvailableForMozcGate) {
   EXPECT_TRUE(saw_shikai);
   EXPECT_TRUE(saw_shikai_alt);
 }
+
+V4_TEST(LocalRepeatedReadingRemainsAvailableForAlignmentGate) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordLocalAccepted("しかい", "empty", "歯科医", "司会");
+  store.RecordLocalAccepted("しかい", "japanese_only", "歯科医", "司会");
+
+  const auto rules =
+      store.GetLocalPreferences("しかいとしかい", "empty", 12, 2);
+  ASSERT_EQ(rules.size(), 1);
+  EXPECT_EQ(rules[0].key, "しかい");
+  EXPECT_EQ(rules[0].disfavored_value, "歯科医");
+  EXPECT_EQ(rules[0].preferred_value, "司会");
+  EXPECT_EQ(rules[0].observation_count, 2);
+}
+
+V4_TEST(TornAppendKeepsFollowingRecordParseable) {
+  V4_PROFILE();
+  const std::filesystem::path path(V4_FEEDBACK_PATH());
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  ASSERT_FALSE(ec);
+
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(file);
+    file << "v4\tfull\taccepted\tbroken";
+    file.flush();
+    ASSERT_TRUE(file);
+  }
+
+  ZenzFeedbackStore store;
+  store.RecordAccepted("りせき", "empty", "離席");
+  const ZenzFeedbackDecision decision =
+      store.Decide("りせき", "empty", "離席");
+  EXPECT_EQ(decision.action, ZenzFeedbackAction::kPrefer);
+  EXPECT_EQ(decision.accepted_count, 1);
+}
+
+#if defined(__APPLE__) && TARGET_OS_OSX
+V4_TEST(MacInternalFeedbackFileIsPrivate0600) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordAccepted("りせき", "empty", "離席");
+
+  struct stat st = {};
+  const std::filesystem::path path(V4_FEEDBACK_PATH());
+  ASSERT_EQ(::stat(path.c_str(), &st), 0);
+  EXPECT_EQ(st.st_mode & 0777, 0600);
+
+  ASSERT_TRUE(store.Maintenance(1000));
+  ASSERT_EQ(::stat(path.c_str(), &st), 0);
+  EXPECT_EQ(st.st_mode & 0777, 0600);
+}
+#endif
 
 V4_TEST(LocalMatureInverseDirectionsFailClosed) {
   V4_PROFILE();

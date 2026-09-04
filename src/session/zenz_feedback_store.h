@@ -85,6 +85,13 @@ struct ZenzLocalPreference {
   std::string preferred_value;
   std::string disfavored_value;
   int observation_count = 0;
+
+  // Transient application metadata. These fields are never part of Local
+  // identity, persistence, threshold counting, import/export, or compaction.
+  // They let a rule applied to repeated readings be attributed to the exact
+  // reading occurrence if the user later edits or rejects that repair.
+  size_t reading_begin = 0;
+  bool has_reading_begin = false;
 };
 
 struct ZenzLocalPreferenceEntry {

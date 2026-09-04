@@ -702,11 +702,10 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
   auto* local_threshold = new QSpinBox(threshold_parent);
   local_threshold->setObjectName(
       QStringLiteral("zenzLocalPreferenceThresholdSpinBox"));
-  local_threshold->setRange(1, 999);
+  local_threshold->setRange(1, 255);
   local_threshold->setSuffix(QString::fromUtf8(" 回"));
   local_threshold->setValue(static_cast<int>(std::clamp<uint32_t>(
-      dialog->zenz_local_preference_threshold_for_ui(), 1, 999)));
-  local_threshold->setRange(1, 255);
+      dialog->zenz_local_preference_threshold_for_ui(), 1, 255)));
   local_threshold->setToolTip(local_threshold_label->toolTip());
 
   auto* max_entries_label = new QLabel(
@@ -781,7 +780,7 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
       local_threshold, qOverload<int>(&QSpinBox::valueChanged), dialog,
       [dialog](int value) {
         dialog->set_zenz_local_preference_threshold_for_ui(
-            static_cast<uint32_t>(std::clamp(value, 1, 999)));
+            static_cast<uint32_t>(std::clamp(value, 1, 255)));
       });
   // Reuse ConfigDialog's existing modified-state machinery rather than
   // maintaining a second Apply/OK path for the dynamic controls.

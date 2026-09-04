@@ -34,6 +34,7 @@
 #elif defined(__APPLE__) && TARGET_OS_OSX
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -112,6 +113,7 @@ std::mutex g_lifecycle_maintenance_mutex;
 bool g_lifecycle_maintenance_done = false;
 std::filesystem::path g_lifecycle_maintenance_path;
 size_t g_lifecycle_maintenance_max_entries = 0;
+uintmax_t g_lifecycle_maintenance_file_size = 0;
 
 std::string EscapeTsv(absl::string_view s) {
   std::string out;
@@ -661,26 +663,6 @@ CanonicalLocalIdentity CanonicalizeLocalIdentity(
   return canonical;
 }
 
-size_t CountOccurrencesUpToTwo(absl::string_view text,
-                               absl::string_view needle) {
-  if (text.empty() || needle.empty()) {
-    return 0;
-  }
-  size_t count = 0;
-  size_t pos = 0;
-  while (pos <= text.size()) {
-    const size_t found = text.find(needle, pos);
-    if (found == absl::string_view::npos) {
-      break;
-    }
-    if (++count >= 2) {
-      return count;
-    }
-    pos = found + 1;
-  }
-  return count;
-}
-
 int ReplayLocalCount(const std::vector<LocalEvent>& events,
                      absl::string_view raw_zenz_surface,
                      absl::string_view corrected_surface,
@@ -788,6 +770,55 @@ std::filesystem::path FeedbackPathForWrite() {
     return {};
   }
   return dir / "zenz_feedback_v4.tsv";
+}
+
+bool EnsurePrivateInternalFeedbackFile(
+    const std::filesystem::path& path) {
+#if defined(__APPLE__) && TARGET_OS_OSX
+  if (path.empty()) {
+    return false;
+  }
+  return ::chmod(path.c_str(), S_IRUSR | S_IWUSR) == 0;
+#else
+  (void)path;
+  return true;
+#endif
+}
+
+bool NeedsAppendBoundaryNewline(const std::filesystem::path& path,
+                                bool* needs_newline) {
+  if (needs_newline == nullptr) {
+    return false;
+  }
+  *needs_newline = false;
+  if (path.empty()) {
+    return false;
+  }
+
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) {
+    return !ec;
+  }
+  const uintmax_t size = std::filesystem::file_size(path, ec);
+  if (ec) {
+    return false;
+  }
+  if (size == 0) {
+    return true;
+  }
+
+  std::ifstream tail(path, std::ios::binary);
+  if (!tail) {
+    return false;
+  }
+  tail.seekg(-1, std::ios::end);
+  char last = '\0';
+  tail.get(last);
+  if (!tail) {
+    return false;
+  }
+  *needs_newline = last != '\n';
+  return true;
 }
 
 class ScopedFeedbackInterprocessLock {
@@ -1023,7 +1054,8 @@ bool WriteRecordsAtomically(const std::vector<Record>& records) {
       path.string() + ".tmp." + std::to_string(::getpid());
 #endif
 
-  if (!WriteRecordsToPath(tmp, records)) {
+  if (!WriteRecordsToPath(tmp, records) ||
+      !EnsurePrivateInternalFeedbackFile(tmp)) {
     std::error_code ignored;
     std::filesystem::remove(tmp, ignored);
     return false;
@@ -1073,7 +1105,11 @@ void AppendRecords(const std::vector<Record>& records) {
     return;
   }
 
-  std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
+  std::unique_lock<std::mutex> mutation_lock(
+      g_feedback_mutation_mutex, std::try_to_lock);
+  if (!mutation_lock.owns_lock()) {
+    return;
+  }
   // Feedback recording is on an IME hot path. If another process is running a
   // maintenance/import operation, skip this observation rather than stalling
   // user input for the long management-operation lock timeout.
@@ -1087,9 +1123,22 @@ void AppendRecords(const std::vector<Record>& records) {
   if (path.empty()) {
     return;
   }
+
+  bool needs_boundary_newline = false;
+  if (!NeedsAppendBoundaryNewline(path, &needs_boundary_newline)) {
+    return;
+  }
+
   std::ofstream file(path, std::ios::binary | std::ios::app);
   if (!file) {
     return;
+  }
+  if (!EnsurePrivateInternalFeedbackFile(path)) {
+    file.close();
+    return;
+  }
+  if (needs_boundary_newline) {
+    file.put('\n');
   }
   file.write(text.data(), static_cast<std::streamsize>(text.size()));
   file.flush();
@@ -1294,7 +1343,7 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
   std::vector<Candidate> candidates;
 
   for (const auto& [reading, events] : data->local_events_by_reading) {
-    if (CountOccurrencesUpToTwo(full_key, reading) != 1) {
+    if (reading.empty() || full_key.find(reading) == absl::string_view::npos) {
       continue;
     }
 
@@ -1941,12 +1990,19 @@ bool ZenzFeedbackStore::MaybeMaintenance(size_t max_entries) {
   max_entries =
       std::clamp(max_entries, kMinMaintenanceEntries, kMaxMaintenanceEntries);
   const std::filesystem::path maintenance_path = FeedbackPathForRead();
+  const FileStamp current_stamp = GetFileStamp(maintenance_path);
+  const uintmax_t growth_threshold = std::max<uintmax_t>(
+      256 * 1024, static_cast<uintmax_t>(max_entries) * 512);
 
   std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_maintenance_mutex);
   if (g_lifecycle_maintenance_done &&
       g_lifecycle_maintenance_path == maintenance_path &&
       g_lifecycle_maintenance_max_entries == max_entries) {
-    return true;
+    const uintmax_t current_size = current_stamp.exists ? current_stamp.size : 0;
+    if (current_size <=
+        g_lifecycle_maintenance_file_size + growth_threshold) {
+      return true;
+    }
   }
 
   if (!Maintenance(max_entries)) {
@@ -1955,6 +2011,9 @@ bool ZenzFeedbackStore::MaybeMaintenance(size_t max_entries) {
   g_lifecycle_maintenance_done = true;
   g_lifecycle_maintenance_path = maintenance_path;
   g_lifecycle_maintenance_max_entries = max_entries;
+  const FileStamp compacted_stamp = GetFileStamp(maintenance_path);
+  g_lifecycle_maintenance_file_size =
+      compacted_stamp.exists ? compacted_stamp.size : 0;
   return true;
 }
 

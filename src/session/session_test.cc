@@ -2437,7 +2437,7 @@ TEST_F(SessionTest,
 }
 
 TEST_F(SessionTest,
-       PendingRejectedZenzFeedbackIgnoresPartialNonStringAndEmptyResults) {
+       PendingRejectedZenzFeedbackIgnoresNonStringAndEmptyResults) {
 #if defined(_WIN32)
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
@@ -2453,21 +2453,12 @@ TEST_F(SessionTest,
   ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
 
   commands::Command command;
-  command.mutable_output()->mutable_result()->set_type(
-      commands::Result::STRING);
-  command.mutable_output()->mutable_result()->set_value("彼は点滴です");
-
-  // A partial commit still in CONVERSION is not a final full-sequence choice.
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
-  session_peer.ObservePendingZenzFeedbackCommittedResult(command, "partial");
-  EXPECT_TRUE(session_peer.pending_zenz_feedback_().pending);
-  EXPECT_FALSE(session_peer.pending_zenz_feedback_().has_final_committed_value);
-
   session_peer.context_()->set_state(ImeContext::PRECOMPOSITION);
 
   // Only Result::STRING represents inserted committed text for this purpose.
   command.mutable_output()->mutable_result()->set_type(
       commands::Result::NONE);
+  command.mutable_output()->mutable_result()->set_value("彼は点滴です");
   session_peer.ObservePendingZenzFeedbackCommittedResult(command, "non_string");
   EXPECT_TRUE(session_peer.pending_zenz_feedback_().pending);
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().has_final_committed_value);
@@ -2482,6 +2473,44 @@ TEST_F(SessionTest,
 
   EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
   session_peer.DiscardPendingZenzFeedback("test_cleanup");
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
+
+TEST_F(SessionTest,
+       PendingRejectedZenzFeedbackDiscardsPartialStringCommit) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+  SetPendingRejectedZenzFeedbackForTest(&session_peer);
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+
+  commands::Command partial;
+  partial.mutable_output()->mutable_result()->set_type(
+      commands::Result::STRING);
+  partial.mutable_output()->mutable_result()->set_key("かれは");
+  partial.mutable_output()->mutable_result()->set_value("彼は");
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.ObservePendingZenzFeedbackCommittedResult(
+      partial, "partial_test");
+
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+  EXPECT_TRUE(session_peer.zenz_feedback_store_()
+                  .ListLocalPreferenceEntries()
+                  .empty());
 #else
   GTEST_SKIP()
       << "This feedback-persistence test currently has Windows-only test "
@@ -2788,9 +2817,12 @@ TEST_F(SessionTest, ZenzRejectThenMozcCommitLearnsFullLocalAndMozcHistory) {
   reverse_segment->add_candidate()->value = "りせき";
 
   EXPECT_CALL(*converter, StartReverseConversion(_, "離席"))
-      .WillOnce(DoAll(SetArgPointee<0>(preferred_reverse), Return(true)));
+      .Times(AtLeast(1))
+      .WillRepeatedly(DoAll(SetArgPointee<0>(preferred_reverse), Return(true)));
   EXPECT_CALL(*converter, StartReverseConversion(_, "離籍"))
-      .WillOnce(DoAll(SetArgPointee<0>(disfavored_reverse), Return(true)));
+      .Times(AtLeast(1))
+      .WillRepeatedly(
+          DoAll(SetArgPointee<0>(disfavored_reverse), Return(true)));
 
   std::string normal_mozc_key;
   std::string normal_mozc_value;
