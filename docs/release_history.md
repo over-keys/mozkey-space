@@ -14,7 +14,7 @@ macOS版のファイル名は `mozkey-space_4.10_macos_universal_zenz.pkg` で�
 
 ### 4.10 の追加内容
 
-3.34 の内容に加えて、Zenz feedback learning の Local canonical identity を更新しました。Local 学習は完全な読み、raw Zenz surface、corrected surface を基本識別子とし、context class はイベントの provenance として扱います。候補の一意な alignment と新しい Mozc evidence を要求し、auto-applied correction は中立、表示後に exact raw を確定した場合は表示候補の却下と raw の採用を記録します。Full Feedback の意味論と session の visible-state guard は変更していません。
+3.34 の内容に加えて、Zenz feedback learning の Local canonical identity を更新しました。ローカル学習では、ユーザーの修正を一意に対応付けられる場合に、安全に局所化した最小の読み、Zenzが最初に出した表記、修正後の表記を組み合わせて学習します。例えば「りせきします」に対する「離籍します → 離席します」という修正は、安全に確認できれば「りせき / 離籍 → 離席」という局所ルールとしてまとめられます。学習した局所ルールは無条件には適用せず、現在のMozc変換結果が修正後の表記を独立に支持し、読みとの対応を一意に確認できた場合だけ使用します。context class はイベントの由来情報として扱います。自動適用された修正は中立とし、表示後に元の入力をそのまま確定した場合は、表示候補の却下と元の入力の採用を記録します。Full Feedback の意味論と session の visible-state guard は変更していません。
 
 **重要:** このリリースでは Zenz の学習データがリセットされます。既存の Zenz 学習データは新しい Local canonical 形式へ移行せず、クリアされた状態から再学習が始まります。通常の Mozc ユーザー辞書と変換履歴はリセットされません。
 
