@@ -792,14 +792,19 @@ std::filesystem::path FeedbackPathForWrite() {
 
 class ScopedFeedbackInterprocessLock {
  public:
-  ScopedFeedbackInterprocessLock() {
+  explicit ScopedFeedbackInterprocessLock(
+      std::chrono::milliseconds timeout = std::chrono::milliseconds(1000)) {
+    (void)timeout;
 #if defined(_WIN32)
     handle_ =
         ::CreateMutexW(nullptr, FALSE, L"Local\\MozcZenzFeedbackStoreMutationV4");
     if (handle_ == nullptr) {
       return;
     }
-    const DWORD wait = ::WaitForSingleObject(handle_, 1000);
+    const int64_t timeout_msec = std::clamp<int64_t>(
+        timeout.count(), 0, std::numeric_limits<DWORD>::max());
+    const DWORD wait = ::WaitForSingleObject(
+        handle_, static_cast<DWORD>(timeout_msec));
     locked_ = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
 #elif defined(__APPLE__) && TARGET_OS_OSX
     const std::filesystem::path path = FeedbackPathForWrite();
@@ -815,7 +820,12 @@ class ScopedFeedbackInterprocessLock {
     if (flags >= 0) {
       (void)::fcntl(fd_, F_SETFD, flags | FD_CLOEXEC);
     }
-    for (int attempt = 0; attempt < 100; ++attempt) {
+    const int64_t timeout_msec = std::max<int64_t>(0, timeout.count());
+    const int64_t rounded_attempts =
+        timeout_msec == 0 ? 1 : (timeout_msec - 1) / 10 + 1;
+    const int attempts = static_cast<int>(std::min<int64_t>(
+        rounded_attempts, std::numeric_limits<int>::max()));
+    for (int attempt = 0; attempt < attempts; ++attempt) {
       if (::flock(fd_, LOCK_EX | LOCK_NB) == 0) {
         locked_ = true;
         return;
@@ -823,7 +833,9 @@ class ScopedFeedbackInterprocessLock {
       if (errno != EWOULDBLOCK && errno != EAGAIN) {
         return;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      if (attempt + 1 < attempts) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
     }
 #endif
   }
@@ -1062,7 +1074,11 @@ void AppendRecords(const std::vector<Record>& records) {
   }
 
   std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
-  ScopedFeedbackInterprocessLock interprocess_lock;
+  // Feedback recording is on an IME hot path. If another process is running a
+  // maintenance/import operation, skip this observation rather than stalling
+  // user input for the long management-operation lock timeout.
+  ScopedFeedbackInterprocessLock interprocess_lock(
+      std::chrono::milliseconds(20));
   if (!interprocess_lock.ok()) {
     return;
   }
@@ -1291,9 +1307,10 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
       directions.insert({event.raw_zenz_surface, event.corrected_surface});
     }
 
-    // For the same reading/raw surface, only one corrected direction may be
-    // behaviorally active. Highest global count wins; exact ties fail closed.
-    std::map<std::string, std::vector<Candidate>> by_raw;
+    // For the same reading/raw surface, keep every mature corrected direction.
+    // The current Mozc surface is the contextual gate at application time, so
+    // choosing a global winner here would discard valid homophone-specific
+    // rules before ApplyLocalPreferenceRepairs can disambiguate them.
     for (const auto& [raw, corrected] : directions) {
       size_t last_sequence = 0;
       const int count =
@@ -1307,26 +1324,7 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
         continue;
       }
 
-      by_raw[raw].push_back(
-          {reading, raw, corrected, count, last_sequence});
-    }
-
-    for (auto& [raw, same_raw] : by_raw) {
-      std::sort(same_raw.begin(), same_raw.end(),
-                [](const Candidate& lhs, const Candidate& rhs) {
-                  if (lhs.count != rhs.count) {
-                    return lhs.count > rhs.count;
-                  }
-                  if (lhs.last_sequence != rhs.last_sequence) {
-                    return lhs.last_sequence > rhs.last_sequence;
-                  }
-                  return lhs.corrected < rhs.corrected;
-                });
-      if (same_raw.size() > 1 &&
-          same_raw[0].count == same_raw[1].count) {
-        continue;
-      }
-      candidates.push_back(std::move(same_raw[0]));
+      candidates.push_back({reading, raw, corrected, count, last_sequence});
     }
   }
 

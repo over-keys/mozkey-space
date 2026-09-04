@@ -347,14 +347,32 @@ V4_TEST(DeleteLocalPreferenceRemovesAllContextEvents) {
   EXPECT_TRUE(store.ListLocalPreferenceEntries().empty());
 }
 
-V4_TEST(LocalConflictingEqualStrengthCorrectionsFailClosed) {
+V4_TEST(LocalMatureSameRawCorrectionsRemainAvailableForMozcGate) {
   V4_PROFILE();
   ZenzFeedbackStore store;
   for (int i = 0; i < 2; ++i) {
     store.RecordLocalAccepted("しかい", "empty", "歯科医", "視界");
+  }
+  for (int i = 0; i < 3; ++i) {
     store.RecordLocalAccepted("しかい", "empty", "歯科医", "司会");
   }
-  EXPECT_TRUE(store.GetLocalPreferences("しかい", "empty", 12, 2).empty());
+
+  const auto rules = store.GetLocalPreferences("しかい", "empty", 12, 2);
+  ASSERT_EQ(rules.size(), 2);
+  bool saw_shikai = false;
+  bool saw_shikai_alt = false;
+  for (const ZenzLocalPreference& rule : rules) {
+    EXPECT_EQ(rule.disfavored_value, "歯科医");
+    if (rule.preferred_value == "視界") {
+      saw_shikai = true;
+      EXPECT_EQ(rule.observation_count, 2);
+    } else if (rule.preferred_value == "司会") {
+      saw_shikai_alt = true;
+      EXPECT_EQ(rule.observation_count, 3);
+    }
+  }
+  EXPECT_TRUE(saw_shikai);
+  EXPECT_TRUE(saw_shikai_alt);
 }
 
 V4_TEST(LocalMatureInverseDirectionsFailClosed) {

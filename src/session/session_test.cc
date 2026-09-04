@@ -2722,6 +2722,118 @@ TEST_F(SessionTest,
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
 }
 
+TEST_F(SessionTest, ZenzRejectThenMozcCommitLearnsFullLocalAndMozcHistory) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  commands::Command command;
+  InsertCharacterString("りせき", "aaa", &session, &command);
+  ASSERT_EQ(session.context().composer().GetQueryForConversion(), "りせき");
+
+  Segments mozc_segments;
+  Segment* mozc_segment = mozc_segments.add_segment();
+  mozc_segment->set_key("りせき");
+  AddCandidate("りせき", "離席", mozc_segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(mozc_segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(session.Convert(&command));
+  EXPECT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_PREEDIT("離席", command);
+  Mock::VerifyAndClearExpectations(converter.get());
+
+  // Show the Zenz raw surface "離籍" over the normal Mozc candidate "離席".
+  // The subsequent Space is the user rejecting Zenz and returning to Mozc.
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = "りせき";
+  session_peer.live_conversion_preedit_() = "りせき";
+  session_peer.live_conversion_value_() = "離席";
+  session_peer.live_conversion_preedit_output_() = command.output().preedit();
+  session_peer.zenz_live_visible_generation_() = 1;
+  session_peer.zenz_live_key_() = "りせき";
+  session_peer.zenz_live_display_key_() = "りせき";
+  session_peer.zenz_live_value_() = "離籍";
+  session_peer.zenz_live_raw_value_() = "離籍";
+  session_peer.zenz_live_mozc_value_() = "離席";
+  session_peer.zenz_live_context_class_() = "empty";
+  session_peer.zenz_live_mozc_preedit_output_() = command.output().preedit();
+  session_peer.zenz_live_from_live_conversion_() = true;
+
+  command.Clear();
+  ASSERT_TRUE(session_peer.OutputZenzLiveCorrection("離籍", &command));
+  EXPECT_PREEDIT("離籍", command);
+
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+  EXPECT_PREEDIT("離席", command);
+  ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
+
+  Segments preferred_reverse;
+  Segment* reverse_segment = preferred_reverse.add_segment();
+  reverse_segment->set_key("離席");
+  reverse_segment->add_candidate()->value = "りせき";
+
+  Segments disfavored_reverse;
+  reverse_segment = disfavored_reverse.add_segment();
+  reverse_segment->set_key("離籍");
+  reverse_segment->add_candidate()->value = "りせき";
+
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離席"))
+      .WillOnce(DoAll(SetArgPointee<0>(preferred_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離籍"))
+      .WillOnce(DoAll(SetArgPointee<0>(disfavored_reverse), Return(true)));
+
+  std::string normal_mozc_key;
+  std::string normal_mozc_value;
+  EXPECT_CALL(*converter, CommitSegmentValue(_, _, _))
+      .WillOnce(DoAll(
+          Invoke([&](Segments* segments, size_t segment_index,
+                     int candidate_index) {
+            const Segment& segment =
+                segments->conversion_segment(segment_index);
+            normal_mozc_key = segment.key();
+            normal_mozc_value = segment.candidate(candidate_index).value;
+          }),
+          Return(true)));
+  EXPECT_CALL(*converter, FinishConversion(_, _));
+
+  // A normal text input commits the selected Mozc candidate first. Session's
+  // output path then resolves the pending Zenz rejection and records Full and
+  // Local evidence, while CommitSegmentValue is Mozc's ordinary history path.
+  command.Clear();
+  ASSERT_TRUE(SendKey("a", &session, &command));
+  EXPECT_RESULT_AND_KEY("離席", "りせき", command);
+  EXPECT_PREEDIT("あ", command);
+  EXPECT_EQ(normal_mozc_key, "りせき");
+  EXPECT_EQ(normal_mozc_value, "離席");
+  EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+
+  const std::vector<ZenzFeedbackEntry> full_entries =
+      session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(full_entries.size(), 1);
+  EXPECT_EQ(full_entries[0].key, "りせき");
+  EXPECT_EQ(full_entries[0].value, "離籍");
+  EXPECT_EQ(full_entries[0].rejected_count, 1);
+
+  const std::vector<ZenzLocalPreference> local_preferences =
+      session_peer.zenz_feedback_store_().GetLocalPreferences(
+          "りせき", "empty", 12, 1);
+  ASSERT_EQ(local_preferences.size(), 1);
+  EXPECT_EQ(local_preferences[0].key, "りせき");
+  EXPECT_EQ(local_preferences[0].disfavored_value, "離籍");
+  EXPECT_EQ(local_preferences[0].preferred_value, "離席");
+  EXPECT_EQ(local_preferences[0].observation_count, 1);
+}
+
 #endif  // defined(_WIN32)
 
 TEST_F(SessionTest, LiveConversionUsesDefaultMinKeyLength) {
