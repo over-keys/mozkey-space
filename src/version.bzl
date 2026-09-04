@@ -43,7 +43,7 @@ REVISION = 100
 # User-facing Mozkey release version.  This is shown in the About dialog and
 # should match the GitHub release tag without the leading "v".
 MOZKEY_RELEASE_VERSION_MAJOR = 4
-MOZKEY_RELEASE_VERSION_MINOR = 10
+MOZKEY_RELEASE_VERSION_MINOR = 20
 MOZKEY_RELEASE_VERSION_PATCH = 0
 
 # LINT.IfChange
