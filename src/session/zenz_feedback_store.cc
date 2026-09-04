@@ -785,6 +785,30 @@ bool EnsurePrivateInternalFeedbackFile(
 #endif
 }
 
+bool PreparePrivateInternalFeedbackFileForWrite(
+    const std::filesystem::path& path) {
+#if defined(__APPLE__) && TARGET_OS_OSX
+  if (path.empty()) {
+    return false;
+  }
+
+  // Secure internal atomic-temp storage before any feedback content is
+  // written. fchmod also corrects a stale temp file left by an interrupted
+  // operation.
+  const int fd =
+      ::open(path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+  if (fd < 0) {
+    return false;
+  }
+  const bool ok = ::fchmod(fd, S_IRUSR | S_IWUSR) == 0;
+  ::close(fd);
+  return ok;
+#else
+  (void)path;
+  return true;
+#endif
+}
+
 bool NeedsAppendBoundaryNewline(const std::filesystem::path& path,
                                 bool* needs_newline) {
   if (needs_newline == nullptr) {
@@ -1054,7 +1078,8 @@ bool WriteRecordsAtomically(const std::vector<Record>& records) {
       path.string() + ".tmp." + std::to_string(::getpid());
 #endif
 
-  if (!WriteRecordsToPath(tmp, records) ||
+  if (!PreparePrivateInternalFeedbackFileForWrite(tmp) ||
+      !WriteRecordsToPath(tmp, records) ||
       !EnsurePrivateInternalFeedbackFile(tmp)) {
     std::error_code ignored;
     std::filesystem::remove(tmp, ignored);
