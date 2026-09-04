@@ -2070,6 +2070,123 @@ void SetPendingRejectedZenzFeedbackForTest(SessionTestPeer* session_peer) {
 }
 #endif  // defined(_WIN32)
 
+TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
+#if defined(_WIN32)
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer session_peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_feedback_learning(true);
+  config.set_use_zenz_local_preference_learning(true);
+  config.set_use_zenz_synthetic_candidate(true);
+  config.set_zenz_local_preference_threshold(2);
+  session.SetConfig(config);
+
+  const std::string key = "すみませんりせきします";
+  const std::string raw_zenz = "すみません離籍します";
+  const std::string mozc_value = "すみません離席します";
+
+  // The local correction was learned in another full-sentence context.
+  for (int i = 0; i < 2; ++i) {
+    session_peer.zenz_feedback_store_().RecordLocalAccepted(
+        "りせき", "empty", "離籍", "離席");
+  }
+
+  session_peer.context_()->set_state(ImeContext::CONVERSION);
+  session_peer.live_conversion_active_() = true;
+  session_peer.live_conversion_key_() = key;
+  session_peer.live_conversion_preedit_() = key;
+  session_peer.live_conversion_value_() = mozc_value;
+
+  auto& pending = session_peer.pending_zenz_live_();
+  pending.generation = 8;
+  pending.key = key;
+  pending.context_class = "empty";
+  pending.mozc_value = mozc_value;
+  pending.symbol_style_source = key;
+  pending.pending = true;
+  pending.from_live_conversion = true;
+  pending.use_conversion_history = true;
+
+  // Deliberately expose only one coarse full-sentence reverse segment. The
+  // strict Local path cannot split out "りせき" from this alignment.
+  Segments raw_reverse;
+  Segment* segment = raw_reverse.add_segment();
+  segment->set_key(raw_zenz);
+  segment->add_candidate()->value = key;
+
+  Segments mozc_reverse;
+  segment = mozc_reverse.add_segment();
+  segment->set_key(mozc_value);
+  segment->add_candidate()->value = key;
+
+  Segments preferred_local_reverse;
+  segment = preferred_local_reverse.add_segment();
+  segment->set_key("離席");
+  segment->add_candidate()->value = "りせき";
+
+  Segments disfavored_local_reverse;
+  segment = disfavored_local_reverse.add_segment();
+  segment->set_key("離籍");
+  segment->add_candidate()->value = "りせき";
+
+  EXPECT_CALL(*converter, StartReverseConversion(_, raw_zenz))
+      .WillOnce(DoAll(SetArgPointee<0>(raw_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, mozc_value))
+      .Times(2)
+      .WillRepeatedly(DoAll(SetArgPointee<0>(mozc_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離席"))
+      .Times(2)
+      .WillRepeatedly(
+          DoAll(SetArgPointee<0>(preferred_local_reverse), Return(true)));
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離籍"))
+      .Times(2)
+      .WillRepeatedly(
+          DoAll(SetArgPointee<0>(disfavored_local_reverse), Return(true)));
+
+  ZenzLiveResponse response;
+  response.generation = 8;
+  response.key = key;
+  response.value = raw_zenz;
+  response.ok = true;
+  response.timeout = false;
+
+  commands::Command command;
+  ASSERT_TRUE(session_peer.ApplyZenzLiveCorrectionResult(response, &command));
+  EXPECT_PREEDIT(mozc_value, command);
+  EXPECT_EQ(session_peer.zenz_live_value_(), mozc_value);
+
+  ASSERT_EQ(session_peer.zenz_live_applied_local_preferences_().size(), 1);
+  const ZenzLocalPreference& applied =
+      session_peer.zenz_live_applied_local_preferences_()[0];
+  EXPECT_EQ(applied.key, "りせき");
+  EXPECT_EQ(applied.preferred_value, "離席");
+  EXPECT_EQ(applied.disfavored_value, "離籍");
+  ASSERT_TRUE(applied.has_reading_begin);
+  EXPECT_EQ(applied.reading_begin, std::string("すみません").size());
+
+  // Auto application is not new Local evidence.
+  const std::vector<ZenzLocalPreference> active =
+      session_peer.zenz_feedback_store_().GetLocalPreferences(
+          key, "empty", 12, 2);
+  ASSERT_EQ(active.size(), 1);
+  EXPECT_EQ(active[0].observation_count, 2);
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
+
 TEST_F(SessionTest,
        LocalV4RepeatedReadingRoutesEachOccurrenceByCurrentMozcSurface) {
 #if defined(_WIN32)
