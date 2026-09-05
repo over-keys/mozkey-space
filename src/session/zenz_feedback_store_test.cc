@@ -376,6 +376,24 @@ V4_TEST(LocalMatureSameRawCorrectionsRemainAvailableForMozcGate) {
   EXPECT_TRUE(saw_shikai_alt);
 }
 
+V4_TEST(LocalSurfaceFilterRunsBeforeBoundedRanking) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordLocalAccepted("しかい", "empty", "歯科医", "視界");
+  store.RecordLocalAccepted("しかい", "empty", "歯科医", "視界");
+  store.RecordLocalAccepted("りせき", "empty", "離籍", "離席");
+  store.RecordLocalAccepted("りせき", "empty", "離籍", "離席");
+
+  // Without the surface gate, the equal-length "しかい" rule can occupy the
+  // only returned slot before Session checks the current raw/Mozc surfaces.
+  const auto rules = store.GetLocalPreferences(
+      "りせきしかい", "empty", 1, 2, "離籍", "離席");
+  ASSERT_EQ(rules.size(), 1);
+  EXPECT_EQ(rules[0].key, "りせき");
+  EXPECT_EQ(rules[0].disfavored_value, "離籍");
+  EXPECT_EQ(rules[0].preferred_value, "離席");
+}
+
 V4_TEST(LocalRepeatedReadingRemainsAvailableForAlignmentGate) {
   V4_PROFILE();
   ZenzFeedbackStore store;

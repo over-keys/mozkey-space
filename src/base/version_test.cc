@@ -39,16 +39,16 @@ namespace mozc {
 
 TEST(VersionTest, BasicTest) {
   EXPECT_EQ(Version::GetMozcVersion(), version::kMozcVersion);
-  EXPECT_EQ(Version::GetMozkeyReleaseVersion(),
-            version::kMozkeyReleaseVersion);
+  EXPECT_EQ(Version::GetMozkeySpaceReleaseVersion(),
+            version::kMozkeySpaceReleaseVersion);
 }
 
-TEST(VersionTest, MozkeyReleaseVersionNumberTest) {
-  EXPECT_EQ(Version::GetMozkeyReleaseVersion(),
+TEST(VersionTest, MozkeySpaceReleaseVersionNumberTest) {
+  EXPECT_EQ(Version::GetMozkeySpaceReleaseVersion(),
             absl::StrFormat("v%d.%d.%d",
-                            version::kMozkeyReleaseVersionMajor,
-                            version::kMozkeyReleaseVersionMinor,
-                            version::kMozkeyReleaseVersionPatch));
+                            version::kMozkeySpaceReleaseVersionMajor,
+                            version::kMozkeySpaceReleaseVersionMinor,
+                            version::kMozkeySpaceReleaseVersionPatch));
 }
 
 TEST(VersionTest, VersionNumberTest) {

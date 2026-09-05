@@ -41,7 +41,7 @@ load(
     "mozc_select_enable_supplemental_model",
     "mozc_select_enable_usage_rewriter",
 )
-load("//:config.bzl", "BAZEL_TOOLS_PREFIX")
+load("//:config.bzl", "BAZEL_TOOLS_PREFIX", "BRANDING")
 load("//:version.bzl", "DEFAULT_BUILD_LABEL_MACOS")
 load("//bazel:stubs.bzl", "bzl_library")
 
@@ -211,7 +211,7 @@ cc_library(
         windows = [
             "GOOGLE_JAPANESE_INPUT_BUILD",
         ],
-    ) + mozc_select(
+    ) + (["MOZKEY_SPACE_BUILD"] if BRANDING == "Mozc" else []) + mozc_select(
         windows = [
             "WINVER=0x0A00",
             "_WIN32_WINNT=0x0A00",

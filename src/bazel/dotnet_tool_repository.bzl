@@ -55,7 +55,7 @@ def _dotnet_tool_repo_impl(repo_ctx):
         tool_name = repo_ctx.attr.name.replace("~", "+").split("+")[-1]
     version = repo_ctx.attr.version
 
-    repo_ctx.execute([
+    install_args = [
         dotnet_tool,
         "tool",
         "install",
@@ -64,7 +64,20 @@ def _dotnet_tool_repo_impl(repo_ctx):
         version,
         "--tool-path",
         repo_root,
-    ])
+    ]
+    # Local builds may provide a previously downloaded package source when
+    # NuGet's network endpoint is unavailable. Actions leaves this unset and
+    # therefore uses the normal NuGet source resolution.
+    local_source = repo_ctx.os.environ.get("DOTNET_TOOL_SOURCE")
+    if local_source:
+        install_args.extend([
+            "--add-source",
+            local_source,
+            "--ignore-failed-sources",
+        ])
+    result = repo_ctx.execute(install_args)
+    if result.return_code != 0:
+        fail("Failed to install dotnet tool: " + tool_name + "\n" + result.stderr)
 
     build_file_data = BUILD_TEMPLATE.format(
         executable = tool_name + ".exe",

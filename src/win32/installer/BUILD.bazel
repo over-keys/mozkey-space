@@ -70,6 +70,10 @@ _WXS_FILE = ":installer_oss_64bit.wxs" if BRANDING == "Mozc" else ":installer_64
 
 _MSI_FILE = "Mozc64.msi" if BRANDING == "Mozc" else "GoogleJapaneseInput64.msi"
 
+_MSI_VERIFIER_SRCS = [
+    ":verify_msi_post_install_dialog.ps1",
+] if BRANDING == "Mozc" else []
+
 selects.config_setting_group(
     name = "build_arm64_binaries",
     match_any = [
@@ -98,7 +102,7 @@ genrule(
         "//data/installer:credits_en.html",
         "@qt_win//:bin/Qt6Core.dll",
         "@wix//:wix.exe",
-    ] + select({
+    ] + _MSI_VERIFIER_SRCS + select({
         ":build_arm64_binaries": [
             "//win32/tip:mozc_tip64arm",
             "//win32/tip:mozc_tip64x",
@@ -128,7 +132,7 @@ genrule(
         "--wix_path=$(location @wix//:wix.exe)",
         "--branding=" + BRANDING,
         "--vs_install_dir=\"%BAZEL_VC%\"",
-    ]) + select({
+    ]) + (" --verify_msi=$(location :verify_msi_post_install_dialog.ps1)" if BRANDING == "Mozc" else "") + select({
         ":build_arm64_binaries": " " + " ".join([
             "--mozc_tip64arm=$(location //win32/tip:mozc_tip64arm)",
             "--mozc_tip64x=$(location //win32/tip:mozc_tip64x)",

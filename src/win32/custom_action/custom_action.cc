@@ -448,6 +448,45 @@ UINT __stdcall OpenUninstallSurveyPage(MSIHANDLE msi_handle) {
   return ERROR_SUCCESS;
 }
 
+// [Return='ignore']
+UINT __stdcall LaunchPostInstallDialog(MSIHANDLE msi_handle) {
+  DEBUG_BREAK_FOR_DEBUGGER();
+
+  const std::wstring executable = GetMozcComponentPath(mozc::kMozcTool);
+  std::wstring command_line = QuoteCommandLineArg(executable);
+  command_line.append(L" --mode=post_install_dialog");
+  std::vector<wchar_t> mutable_command_line(command_line.begin(),
+                                            command_line.end());
+  mutable_command_line.push_back(L'\0');
+
+  STARTUPINFOW startup_info = {};
+  startup_info.cb = sizeof(startup_info);
+  PROCESS_INFORMATION process_info = {};
+
+  if (!::CreateProcessW(nullptr, mutable_command_line.data(), nullptr, nullptr,
+                        FALSE, 0, nullptr, nullptr, &startup_info,
+                        &process_info)) {
+    // The confirmation dialog is a convenience for manual installs.  Never
+    // turn a completed installation into a failure if the tool cannot start,
+    // but still provide the promised success acknowledgement as a fallback.
+    ::OutputDebugStringW(L"Mozkey: cannot launch post-install dialog.\n");
+    ::MessageBoxW(
+        nullptr,
+        L"インストールが完了しました。OKを押して終了してください。",
+        L"Mozkey",
+        MB_OK | MB_ICONINFORMATION);
+    return ERROR_SUCCESS;
+  }
+
+  // Keep the MSI process alive until the user acknowledges the success
+  // message.  This makes the dialog modal with respect to the installer and
+  // guarantees that a successful installation is visibly confirmed.
+  ::WaitForSingleObject(process_info.hProcess, INFINITE);
+  ::CloseHandle(process_info.hThread);
+  ::CloseHandle(process_info.hProcess);
+  return ERROR_SUCCESS;
+}
+
 UINT __stdcall ShutdownServer(MSIHANDLE msi_handle) {
   DEBUG_BREAK_FOR_DEBUGGER();
 

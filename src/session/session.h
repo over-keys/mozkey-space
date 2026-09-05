@@ -199,6 +199,8 @@ class Session {
     Action action = Action::kNone;
     std::string key;
     std::string context_class;
+    // Keep the displayed candidate separate from the model output: accepting
+    // an automatically repaired display is not Full evidence for either text.
     std::string value;
     std::string raw_value;
     std::vector<ZenzLocalPreference> applied_local_preferences;

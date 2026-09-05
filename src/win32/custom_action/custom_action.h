@@ -56,6 +56,12 @@ UINT __stdcall UnregisterTIPRollback(MSIHANDLE msi_handle);
 // Opens the uninstall survey page with the default browser.
 UINT __stdcall OpenUninstallSurveyPage(MSIHANDLE msi_handle);
 
+// Shows the post-installation confirmation dialog for manual MSI installs.
+// This is intentionally implemented as a DLL custom action instead of a
+// FileRef EXE custom action.  Windows Installer can return error 2753 for a
+// FileRef when the referenced file is unchanged during an upgrade/reinstall.
+UINT __stdcall LaunchPostInstallDialog(MSIHANDLE msi_handle);
+
 // Shuts down mozc_server.exe and mozc_renderer.exe to remove their files.
 UINT __stdcall ShutdownServer(MSIHANDLE msi_handle);
 

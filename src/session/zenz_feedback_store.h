@@ -138,7 +138,12 @@ class ZenzFeedbackStore {
       absl::string_view full_key,
       absl::string_view context_class,
       size_t max_results = 12,
-      int min_observation_count = 1) const;
+      int min_observation_count = 1,
+      // Optional necessary surface filters for the current raw Zenz and Mozc
+      // values. They only discard rules that cannot occur in the values; the
+      // exact reading-position gate remains the caller's responsibility.
+      absl::string_view raw_surface_filter = absl::string_view(),
+      absl::string_view preferred_surface_filter = absl::string_view()) const;
 
   std::vector<ZenzLocalPreferenceEntry> ListLocalPreferenceEntries() const;
 

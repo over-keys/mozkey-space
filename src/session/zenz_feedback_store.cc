@@ -12,7 +12,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -99,12 +98,17 @@ struct LocalEvent {
 };
 
 using FeedbackCounts = std::map<FeedbackKey, Counts>;
-using LocalEventsByReading =
-    std::map<std::string, std::vector<LocalEvent>>;
+struct LocalCounts {
+  int count = 0;
+  size_t last_sequence = 0;
+};
+
+using LocalDirections =
+    std::map<std::pair<std::string, std::string>, LocalCounts>;
 
 struct FeedbackData {
   FeedbackCounts counts;
-  LocalEventsByReading local_events_by_reading;
+  std::map<std::string, LocalDirections> local_counts_by_reading;
 };
 
 std::mutex g_feedback_data_cache_mutex;
@@ -663,35 +667,6 @@ CanonicalLocalIdentity CanonicalizeLocalIdentity(
   return canonical;
 }
 
-int ReplayLocalCount(const std::vector<LocalEvent>& events,
-                     absl::string_view raw_zenz_surface,
-                     absl::string_view corrected_surface,
-                     size_t* last_sequence = nullptr) {
-  int count = 0;
-  size_t last = 0;
-  bool seen = false;
-  for (const LocalEvent& event : events) {
-    if (event.raw_zenz_surface != raw_zenz_surface ||
-        event.corrected_surface != corrected_surface) {
-      continue;
-    }
-    seen = true;
-    last = event.sequence;
-    if (event.accepted) {
-      const int remaining = kMaxLocalEvidenceCount - count;
-      count = event.count >= remaining
-                  ? kMaxLocalEvidenceCount
-                  : count + event.count;
-    } else {
-      count = event.count >= count ? 0 : count - event.count;
-    }
-  }
-  if (last_sequence != nullptr) {
-    *last_sequence = seen ? last : 0;
-  }
-  return count;
-}
-
 std::shared_ptr<const FeedbackData> BuildFeedbackData(
     const std::vector<Record>& records) {
   auto data = std::make_shared<FeedbackData>();
@@ -710,14 +685,22 @@ std::shared_ptr<const FeedbackData> BuildFeedbackData(
 
     const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
         record.key, record.value, record.extra);
-    LocalEvent event;
-    event.context_class = record.context_class;
-    event.raw_zenz_surface = local.raw_zenz_surface;
-    event.corrected_surface = local.corrected_surface;
-    event.accepted = record.action == "accepted";
-    event.count = record.count;
-    event.sequence = record.sequence;
-    data->local_events_by_reading[local.key].push_back(std::move(event));
+    // Replay once in file order when loading the immutable snapshot. Applying
+    // the cap/floor per event is essential: a net accepted-minus-rejected sum
+    // would change learning after saturation or rejection at zero.
+    LocalCounts& counts = data->local_counts_by_reading[local.key]
+        [{local.raw_zenz_surface, local.corrected_surface}];
+    counts.last_sequence = record.sequence;
+    if (record.action == "accepted") {
+      const int remaining = kMaxLocalEvidenceCount - counts.count;
+      counts.count = record.count >= remaining
+                         ? kMaxLocalEvidenceCount
+                         : counts.count + record.count;
+    } else {
+      counts.count = record.count >= counts.count
+                         ? 0
+                         : counts.count - record.count;
+    }
   }
   return data;
 }
@@ -1348,7 +1331,9 @@ std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetAcceptedCandidates(
 
 std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     absl::string_view full_key, absl::string_view context_class,
-    size_t max_results, int min_observation_count) const {
+    size_t max_results, int min_observation_count,
+    absl::string_view raw_surface_filter,
+    absl::string_view preferred_surface_filter) const {
   std::vector<ZenzLocalPreference> result;
   if (full_key.empty() || max_results == 0) {
     return result;
@@ -1359,15 +1344,15 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
   const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
 
   struct Candidate {
-    std::string key;
-    std::string raw;
-    std::string corrected;
+    absl::string_view key;
+    absl::string_view raw;
+    absl::string_view corrected;
     int count = 0;
     size_t last_sequence = 0;
   };
   std::vector<Candidate> candidates;
 
-  for (const auto& [reading, events] : data->local_events_by_reading) {
+  for (const auto& [reading, directions] : data->local_counts_by_reading) {
     if (reading.empty() || full_key.find(reading) == absl::string_view::npos) {
       continue;
     }
@@ -1376,29 +1361,35 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     // context class remains in individual TSV events only as provenance; it is
     // not part of the logical rule or threshold count. Contextual safety comes
     // from the current Mozc reading/surface alignment at application time.
-    std::set<std::pair<std::string, std::string>> directions;
-    for (const LocalEvent& event : events) {
-      directions.insert({event.raw_zenz_surface, event.corrected_surface});
-    }
-
     // For the same reading/raw surface, keep every mature corrected direction.
     // The current Mozc surface is the contextual gate at application time, so
     // choosing a global winner here would discard valid homophone-specific
     // rules before ApplyLocalPreferenceRepairs can disambiguate them.
-    for (const auto& [raw, corrected] : directions) {
-      size_t last_sequence = 0;
-      const int count =
-          ReplayLocalCount(events, raw, corrected, &last_sequence);
-      if (count < threshold) {
+    for (const auto& [direction, counts] : directions) {
+      const auto& [raw, corrected] = direction;
+      // These are necessary conditions only. Exact reading-position and
+      // Mozc-surface correspondence is still checked by Session after this
+      // bounded ranking step.
+      if ((!raw_surface_filter.empty() &&
+           raw_surface_filter.find(absl::string_view(raw)) ==
+               absl::string_view::npos) ||
+          (!preferred_surface_filter.empty() &&
+           preferred_surface_filter.find(absl::string_view(corrected)) ==
+               absl::string_view::npos)) {
+        continue;
+      }
+      if (counts.count < threshold) {
         continue;
       }
 
       // If the exact inverse direction is also mature globally, do not guess.
-      if (ReplayLocalCount(events, corrected, raw) >= threshold) {
+      const auto inverse = directions.find({corrected, raw});
+      if (inverse != directions.end() && inverse->second.count >= threshold) {
         continue;
       }
 
-      candidates.push_back({reading, raw, corrected, count, last_sequence});
+      candidates.push_back(
+          {reading, raw, corrected, counts.count, counts.last_sequence});
     }
   }
 
@@ -1444,18 +1435,16 @@ ZenzFeedbackStore::ListLocalPreferenceEntries() const {
   const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
   std::vector<ZenzLocalPreferenceEntry> entries;
 
-  for (const auto& [reading, events] : data->local_events_by_reading) {
-    std::set<std::pair<std::string, std::string>> directions;
-    for (const LocalEvent& event : events) {
-      directions.insert({event.raw_zenz_surface, event.corrected_surface});
-    }
-
-    for (const auto& [raw, corrected] : directions) {
-      const int count = ReplayLocalCount(events, raw, corrected);
+  for (const auto& [reading, directions] : data->local_counts_by_reading) {
+    for (const auto& [direction, counts] : directions) {
+      const auto& [raw, corrected] = direction;
+      const int count = counts.count;
       if (count == 0) {
         continue;
       }
-      const int opposite = ReplayLocalCount(events, corrected, raw);
+      const auto inverse = directions.find({corrected, raw});
+      const int opposite =
+          inverse == directions.end() ? 0 : inverse->second.count;
 
       ZenzLocalPreferenceEntry entry;
       entry.key = reading;

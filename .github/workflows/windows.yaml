@@ -155,6 +155,11 @@ jobs:
         run: |
           bazelisk build --config release_build package
 
+      - name: Verify interactive MSI completion dialogs
+        shell: pwsh
+        run: |
+          & ".\.github\scripts\verify_msi_post_install_dialog.ps1" -MsiPath ".\src\bazel-bin\win32\installer\Mozc64.msi"
+
       - name: upload Mozc64_x64.msi
         uses: actions/upload-artifact@v6
         with:
