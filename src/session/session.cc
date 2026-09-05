@@ -40,6 +40,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1742,6 +1743,7 @@ struct ZenzLocalPreferenceLearningPair {
   std::string key;
   std::string preferred_value;
   std::string disfavored_value;
+  size_t reading_begin = 0;  // Transient; never persisted as rule identity.
 };
 
 bool ExtractSurfaceForReadingRange(
@@ -1799,6 +1801,55 @@ bool ExtractSurfaceForReadingRange(
     *surface_end = local_surface_end;
   }
   return true;
+}
+
+// Locate an already-learned surface without reverse-reading it again. Exact
+// alignment is authoritative, including a mismatch. Within a coarse segment,
+// require a literal reading/surface prefix or suffix to anchor the same slot,
+// and a matching adjacent character at its other boundary.
+bool MatchesKnownSurfaceForReadingRange(
+    const std::vector<engine::ReadingSurfaceAlignmentSegment>& alignment,
+    size_t reading_begin, size_t reading_end, absl::string_view known_surface) {
+  if (reading_begin >= reading_end || known_surface.empty()) {
+    return false;
+  }
+  std::string surface;
+  if (ExtractSurfaceForReadingRange(alignment, reading_begin, reading_end,
+                                   &surface)) {
+    return surface == known_surface;
+  }
+  for (const auto& segment : alignment) {
+    if (segment.reading_begin > reading_begin ||
+        segment.reading_end < reading_end) {
+      continue;
+    }
+    const absl::string_view reading = segment.reading;
+    const absl::string_view value = segment.surface;
+    if (segment.reading_end - segment.reading_begin != reading.size() ||
+        CountSurfaceOccurrences(value, known_surface) != 1) {
+      return false;
+    }
+    const size_t begin = value.find(known_surface);
+    const auto value_prefix = value.substr(0, begin);
+    const auto value_suffix = value.substr(begin + known_surface.size());
+    const auto reading_prefix =
+        reading.substr(0, reading_begin - segment.reading_begin);
+    const auto reading_suffix =
+        reading.substr(reading_end - segment.reading_begin);
+    const auto last_char = [](absl::string_view text) {
+      char32_t c = 0;
+      Util::SplitLastChar32(text, nullptr, &c);
+      return c;
+    };
+    // Do not mistake a prefix/suffix of a longer word for the known surface
+    // (e.g. preserved "取扱" versus explicitly restored "取扱い").
+    return (value_prefix == reading_prefix &&
+            Util::Utf8SubString(value_suffix, 0, 1) ==
+                Util::Utf8SubString(reading_suffix, 0, 1)) ||
+           (value_suffix == reading_suffix &&
+            last_char(value_prefix) == last_char(reading_prefix));
+  }
+  return false;
 }
 
 std::vector<ZenzLocalPreferenceLearningPair>
@@ -1959,7 +2010,8 @@ BuildLocalPreferenceLearningPairFromSurfaceDiff(
     return {};
   }
 
-  return {{local_reading, preferred_surface, disfavored_surface}};
+  return {{local_reading, preferred_surface, disfavored_surface,
+           full_key.find(local_reading)}};
 }
 
 std::vector<ZenzLocalPreferenceLearningPair>
@@ -2045,16 +2097,10 @@ BuildLocalPreferenceLearningPairsFromUniqueAlignment(
       return true;
     }
 
-    for (const ZenzLocalPreferenceLearningPair& existing : result) {
-      if (existing.key == key &&
-          existing.preferred_value == pending.preferred_value &&
-          existing.disfavored_value == pending.disfavored_value) {
-        return true;
-      }
-    }
-
+    // Keep occurrences distinct until applied-Local ownership is resolved.
+    // Identical text elsewhere may be an independent, explicit user edit.
     result.push_back({std::string(key), pending.preferred_value,
-                      pending.disfavored_value});
+                      pending.disfavored_value, pending.reading_begin});
     return result.size() <= kMaxLocalPairs;
   };
 
@@ -2151,7 +2197,8 @@ ZenzLocalRepairResult ApplyLocalPreferenceRepairs(
   // context classes. context_class is retained only as current-event provenance.
   const std::vector<ZenzLocalPreference> mature =
       store.GetLocalPreferences(full_key, context_class, 12,
-                                hard_repair_threshold);
+                                hard_repair_threshold, zenz_value,
+                                mozc_value);
   if (mature.empty()) {
     return result;
   }
@@ -2217,39 +2264,55 @@ ZenzLocalRepairResult ApplyLocalPreferenceRepairs(
     }
   }
 
-  if (replacements.empty()) {
-    // Learning already uses this proof when reverse conversion returns a
-    // coarse segment such as "離席します" <-> "りせきします". Reuse the
-    // same proof here, but never create new evidence during application. The
-    // inferred pair must exactly match an already-mature Local rule, and the
-    // helper itself requires the reading and both local surfaces to be unique.
-    const std::vector<ZenzLocalPreferenceLearningPair> fallback_pairs =
-        BuildLocalPreferenceLearningPairFromSurfaceDiff(
-            converter, full_key, mozc_value, zenz_value);
-    if (fallback_pairs.size() == 1) {
-      const ZenzLocalPreferenceLearningPair& pair = fallback_pairs[0];
-      for (const ZenzLocalPreference& preference : mature) {
-        if (preference.key != pair.key ||
-            preference.preferred_value != pair.preferred_value ||
-            preference.disfavored_value != pair.disfavored_value) {
-          continue;
-        }
+  if (replacements.empty() && has_unique_alignment) {
+    // Application must not re-learn or re-infer an already-mature Local rule.
+    // A coarse alignment may use the stored direction only when both surfaces
+    // can be anchored to the same reading slot. Occurrence counts alone cannot
+    // establish that correspondence. Keep the single-rule ambiguity guard.
+    std::optional<Replacement> fallback_replacement;
+    bool fallback_ambiguous = false;
+    for (const ZenzLocalPreference& preference : mature) {
+      if (preference.key.empty() || preference.preferred_value.empty() ||
+          preference.disfavored_value.empty() ||
+          preference.preferred_value == preference.disfavored_value ||
+          CountSurfaceOccurrences(full_key, preference.key) != 1 ||
+          CountSurfaceOccurrences(zenz_value,
+                                  preference.disfavored_value) != 1 ||
+          CountSurfaceOccurrences(mozc_value,
+                                  preference.preferred_value) != 1) {
+        continue;
+      }
 
-        const size_t reading_begin = full_key.find(pair.key);
-        const size_t surface_begin = zenz_value.find(pair.disfavored_value);
-        if (reading_begin == absl::string_view::npos ||
-            surface_begin == absl::string_view::npos) {
-          break;
-        }
+      const size_t reading_begin = full_key.find(preference.key);
+      const size_t surface_begin =
+          zenz_value.find(preference.disfavored_value);
+      const size_t reading_end = reading_begin + preference.key.size();
+      if (!MatchesKnownSurfaceForReadingRange(
+              zenz_alignment, reading_begin, reading_end,
+              preference.disfavored_value) ||
+          !MatchesKnownSurfaceForReadingRange(
+              mozc_alignment, reading_begin, reading_end,
+              preference.preferred_value)) {
+        continue;
+      }
 
-        ZenzLocalPreference applied = preference;
-        applied.reading_begin = reading_begin;
-        applied.has_reading_begin = true;
-        replacements.push_back(
-            {surface_begin, surface_begin + pair.disfavored_value.size(),
-             std::move(applied)});
+      ZenzLocalPreference applied = preference;
+      applied.reading_begin = reading_begin;
+      applied.has_reading_begin = true;
+      Replacement candidate{
+          surface_begin,
+          surface_begin + preference.disfavored_value.size(),
+          std::move(applied)};
+
+      if (fallback_replacement.has_value()) {
+        fallback_ambiguous = true;
         break;
       }
+      fallback_replacement = std::move(candidate);
+    }
+
+    if (!fallback_ambiguous && fallback_replacement.has_value()) {
+      replacements.push_back(std::move(*fallback_replacement));
     }
   }
 
@@ -6097,15 +6160,8 @@ void Session::ObservePendingZenzFeedbackCommittedResult(
       " context_class=", pending_zenz_feedback_.context_class,
       " pending_reason=", pending_zenz_feedback_.reason));
 
-  // A fully committed different surface is definitive rejected feedback.
-  // Persist it immediately rather than waiting for another text-input event,
-  // so the feedback manager and the next Zenz decision can observe it at once.
-  // Same-surface commits remain pending for the existing neutralization path,
-  // while partial/non-string/empty results never reach this branch.
-  if (pending_zenz_feedback_.final_committed_value !=
-      pending_zenz_feedback_.value) {
-    ConfirmPendingZenzFeedback();
-  }
+  // Like accepted feedback, keep this reversible until the next text input.
+  // Undo discards the pending Full/Local evidence together with the commit.
 }
 
 void Session::ConfirmPendingZenzFeedback() {
@@ -6118,6 +6174,14 @@ void Session::ConfirmPendingZenzFeedback() {
     return;
   }
 
+  // Full evidence requires raw Zenz to be the object of the user's judgment:
+  // either raw was displayed for acceptance/rejection, or the user explicitly
+  // restored it below. Committing an automatic repair proves neither. Check
+  // both provenance and text so missing attribution cannot credit a composite.
+  const bool displayed_raw =
+      pending_zenz_feedback_.applied_local_preferences.empty() &&
+      pending_zenz_feedback_.value == pending_zenz_feedback_.raw_value;
+
   if (pending_zenz_feedback_.action ==
       PendingZenzFeedback::Action::kAccepted) {
     ZenzDebugOutput(absl::StrCat(
@@ -6126,13 +6190,15 @@ void Session::ConfirmPendingZenzFeedback() {
         " ", ZenzRedactedTextStats("value", pending_zenz_feedback_.value),
         " context_class=", pending_zenz_feedback_.context_class));
 
-    // Accepted feedback stored in the TSV remains full-sequence scoped.
-    // Any broader generalization is delegated to Mozc history learning below.
-    zenz_feedback_store_.RecordAccepted(
-        pending_zenz_feedback_.key,
-        pending_zenz_feedback_.context_class,
-        pending_zenz_feedback_.value);
+    if (displayed_raw) {
+      zenz_feedback_store_.RecordAccepted(
+          pending_zenz_feedback_.key,
+          pending_zenz_feedback_.context_class,
+          pending_zenz_feedback_.raw_value);
+    }
 
+    // The committed surface remains valid usage evidence for Mozc history,
+    // even when automatic repair makes it neutral for Full and Local counts.
     const bool learned_to_mozc_history =
         MaybeLearnZenzCandidateToMozcHistory(
             pending_zenz_feedback_.key,
@@ -6192,15 +6258,23 @@ void Session::ConfirmPendingZenzFeedback() {
           " context_class=", pending_zenz_feedback_.context_class,
           " reason=", pending_zenz_feedback_.reason));
 
-      // The ordinary rejected record remains full-sequence scoped.  Local
-      // preference is separate evidence and is created only after the user's
-      // actual final commit is known.  Rejection itself never synthesizes Mozc
-      // user history in REV10.
-      zenz_feedback_store_.RecordRejected(
-          pending_zenz_feedback_.key,
-          pending_zenz_feedback_.context_class,
-          pending_zenz_feedback_.value,
-          pending_zenz_feedback_.reason);
+      if (displayed_raw) {
+        zenz_feedback_store_.RecordRejected(
+            pending_zenz_feedback_.key,
+            pending_zenz_feedback_.context_class,
+            pending_zenz_feedback_.raw_value,
+            pending_zenz_feedback_.reason);
+      } else if (!IsExplicitZenzHardRejectReason(pending_zenz_feedback_.reason) &&
+                 !pending_zenz_feedback_.raw_value.empty() &&
+                 pending_zenz_feedback_.final_committed_value ==
+                     pending_zenz_feedback_.raw_value) {
+        // Explicitly restoring raw is positive evidence for raw, independently
+        // of whether Local learning is still enabled at confirmation time.
+        zenz_feedback_store_.RecordAccepted(
+            pending_zenz_feedback_.key,
+            pending_zenz_feedback_.context_class,
+            pending_zenz_feedback_.raw_value);
+      }
 
       int local_preference_record_count = 0;
       if (!IsExplicitZenzHardRejectReason(pending_zenz_feedback_.reason) &&
@@ -6237,18 +6311,27 @@ void Session::ConfirmPendingZenzFeedback() {
 
         const bool had_applied_local =
             !pending_zenz_feedback_.applied_local_preferences.empty();
-        bool applied_alignment_proven = true;
+        bool applied_alignment_proven = displayed_raw || had_applied_local;
+        // Proposals contain only explicit edits to the displayed candidate.
+        // They also identify a third spelling when coarse reverse segments
+        // cannot expose the Local boundary directly. Exact raw restoration
+        // needs neither inference nor new Local proposals.
+        const std::vector<ZenzLocalPreferenceLearningPair> local_pairs =
+            applied_alignment_proven &&
+                    pending_zenz_feedback_.final_committed_value !=
+                        pending_zenz_feedback_.raw_value
+                ? BuildLocalPreferenceLearningPairsFromUniqueAlignment(
+                      *context_->mutable_converter(),
+                      pending_zenz_feedback_.key,
+                      pending_zenz_feedback_.final_committed_value,
+                      pending_zenz_feedback_.value)
+                : std::vector<ZenzLocalPreferenceLearningPair>();
 
         if (had_applied_local &&
             pending_zenz_feedback_.final_committed_value ==
                 pending_zenz_feedback_.raw_value) {
-          // The user explicitly restored the exact raw Zenz whole surface.
-          // This is direct positive Full evidence for raw, and every Local rule
+          // Full credited the explicitly restored raw above. Every Local rule
           // that changed raw into the displayed value was explicitly rejected.
-          zenz_feedback_store_.RecordAccepted(
-              pending_zenz_feedback_.key,
-              pending_zenz_feedback_.context_class,
-              pending_zenz_feedback_.raw_value);
           rejected_local_preferences =
               pending_zenz_feedback_.applied_local_preferences;
         } else if (had_applied_local) {
@@ -6273,17 +6356,20 @@ void Session::ConfirmPendingZenzFeedback() {
                     pending_zenz_feedback_.key.substr(
                         applied.reading_begin, applied.key.size()) !=
                         applied.key) {
+                  applied_alignment_proven = false;
                   continue;
                 }
                 reading_begin = applied.reading_begin;
               } else {
                 if (CountSurfaceOccurrences(pending_zenz_feedback_.key,
                                             applied.key) != 1) {
+                  applied_alignment_proven = false;
                   continue;
                 }
                 reading_begin =
                     pending_zenz_feedback_.key.find(applied.key);
                 if (reading_begin == std::string::npos) {
+                  applied_alignment_proven = false;
                   continue;
                 }
               }
@@ -6294,7 +6380,31 @@ void Session::ConfirmPendingZenzFeedback() {
               if (!ExtractSurfaceForReadingRange(
                       final_alignment, reading_begin, reading_end,
                       &final_surface, &surface_begin, &surface_end)) {
-                continue;
+                // Use the same anchored, known-surface check as application.
+                // Other edits must not hide an explicit revert of this slot.
+                if (MatchesKnownSurfaceForReadingRange(
+                        final_alignment, reading_begin, reading_end,
+                        applied.preferred_value)) {
+                  continue;
+                }
+                if (MatchesKnownSurfaceForReadingRange(
+                        final_alignment, reading_begin, reading_end,
+                        applied.disfavored_value)) {
+                  final_surface = applied.disfavored_value;
+                } else {
+                  const auto edit = std::find_if(
+                      local_pairs.begin(), local_pairs.end(),
+                      [&](const ZenzLocalPreferenceLearningPair& pair) {
+                        return pair.reading_begin == reading_begin &&
+                               pair.key == applied.key &&
+                               pair.disfavored_value == applied.preferred_value;
+                      });
+                  if (edit == local_pairs.end()) {
+                    applied_alignment_proven = false;
+                    continue;
+                  }
+                  final_surface = edit->preferred_value;
+                }
               }
               if (final_surface == applied.preferred_value) {
                 continue;
@@ -6309,6 +6419,24 @@ void Session::ConfirmPendingZenzFeedback() {
           }
         }
 
+        // One commit supplies at most one observation per rule, even when the
+        // same rule was applied or edited at several reading positions.
+        auto deduplicate_rules = [](std::vector<ZenzLocalPreference>* rules) {
+          auto identity = [](const ZenzLocalPreference& rule) {
+            return std::tie(rule.key, rule.disfavored_value,
+                            rule.preferred_value);
+          };
+          std::sort(rules->begin(), rules->end(),
+                    [&](const auto& lhs, const auto& rhs) {
+                      return identity(lhs) < identity(rhs);
+                    });
+          rules->erase(std::unique(rules->begin(), rules->end(),
+                                   [&](const auto& lhs, const auto& rhs) {
+                                     return identity(lhs) == identity(rhs);
+                                   }),
+                       rules->end());
+        };
+        deduplicate_rules(&rejected_local_preferences);
         if (!rejected_local_preferences.empty()) {
           zenz_feedback_store_.RecordLocalRejecteds(
               rejected_local_preferences);
@@ -6316,23 +6444,25 @@ void Session::ConfirmPendingZenzFeedback() {
               static_cast<int>(rejected_local_preferences.size());
         }
 
-        // Learn explicit raw->final corrections outside the spans already
-        // owned by applied Local rules. If applied-span alignment was ambiguous,
-        // fail closed for all Local credit from this composite candidate.
+        // Outside applied Local spans, learn only what the user changed from
+        // the displayed text. Comparing raw->final would include untouched
+        // automatic repairs in a new (possibly coarse) rule. Applied spans
+        // were handled above, including explicit raw->third-surface choices.
         if (applied_alignment_proven &&
             pending_zenz_feedback_.final_committed_value !=
                 pending_zenz_feedback_.raw_value) {
-          const std::vector<ZenzLocalPreferenceLearningPair> local_pairs =
-              BuildLocalPreferenceLearningPairsFromUniqueAlignment(
-                  *context_->mutable_converter(), pending_zenz_feedback_.key,
-                  pending_zenz_feedback_.final_committed_value,
-                  pending_zenz_feedback_.raw_value);
           for (const ZenzLocalPreferenceLearningPair& pair : local_pairs) {
             bool owned_by_applied_local = false;
             for (const ZenzLocalPreference& applied :
                  pending_zenz_feedback_.applied_local_preferences) {
-              if (pair.key == applied.key &&
-                  pair.disfavored_value == applied.disfavored_value) {
+              const size_t applied_begin =
+                  applied.has_reading_begin
+                      ? applied.reading_begin
+                      : pending_zenz_feedback_.key.find(applied.key);
+              // All applied intervals were validated above. Exclude overlap,
+              // not just equal keys: a coarse pair may contain a Local span.
+              if (pair.reading_begin < applied_begin + applied.key.size() &&
+                  applied_begin < pair.reading_begin + pair.key.size()) {
                 owned_by_applied_local = true;
                 break;
               }
@@ -6344,6 +6474,7 @@ void Session::ConfirmPendingZenzFeedback() {
           }
         }
 
+        deduplicate_rules(&accepted_local_preferences);
         if (!accepted_local_preferences.empty()) {
           local_preference_record_count +=
               static_cast<int>(accepted_local_preferences.size());
@@ -7724,25 +7855,32 @@ bool Session::ApplyZenzLiveCorrectionResult(
       }
     }
 
-    // The application fallback above may have repaired a proven local pair
+    // The application fallback above may have repaired a mature Local rule
     // inside one coarse reverse-conversion segment. Preserve that bookkeeping
-    // only when the final displayed candidate versus the original raw Zenz
-    // surface proves the same single pair again. This keeps later user feedback
-    // neutral for an auto-applied Local rule instead of accidentally learning
-    // the same correction as new explicit evidence.
+    // without re-running the learning-time reverse-reading heuristic: directly
+    // replay the one stored raw -> preferred replacement and require it to
+    // reproduce the final displayed candidate exactly. If a later adoption
+    // repair changed another span, fail closed and drop attribution rather than
+    // guessing. This keeps ordinary auto-application neutral without coupling
+    // application-time bookkeeping back to Local learning inference.
     if (displayed_local_preferences.empty() &&
         originally_applied.size() == 1) {
-      const std::vector<ZenzLocalPreferenceLearningPair> fallback_pairs =
-          BuildLocalPreferenceLearningPairFromSurfaceDiff(
-              *context_->mutable_converter(), pending_zenz_live_.key,
-              zenz_value, raw_zenz_value);
-      if (fallback_pairs.size() == 1) {
-        const ZenzLocalPreferenceLearningPair& pair = fallback_pairs[0];
-        const ZenzLocalPreference& applied = originally_applied[0];
-        if (applied.key == pair.key &&
-            applied.preferred_value == pair.preferred_value &&
-            applied.disfavored_value == pair.disfavored_value) {
-          displayed_local_preferences.push_back(applied);
+      const ZenzLocalPreference& applied = originally_applied[0];
+      if (!applied.key.empty() && !applied.preferred_value.empty() &&
+          !applied.disfavored_value.empty() &&
+          CountSurfaceOccurrences(pending_zenz_live_.key, applied.key) == 1 &&
+          CountSurfaceOccurrences(raw_zenz_value,
+                                  applied.disfavored_value) == 1) {
+        std::string direct_repair = raw_zenz_value;
+        const size_t surface_begin =
+            direct_repair.find(applied.disfavored_value);
+        if (surface_begin != std::string::npos) {
+          direct_repair.replace(surface_begin,
+                                applied.disfavored_value.size(),
+                                applied.preferred_value);
+          if (direct_repair == zenz_value) {
+            displayed_local_preferences.push_back(applied);
+          }
         }
       }
     }

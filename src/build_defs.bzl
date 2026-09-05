@@ -74,6 +74,12 @@ def _copts_unsigned_char():
         "//conditions:default": ["-funsigned-char"],
     })
 
+def _windows_intrinsics_compat_dep():
+    return select({
+        "@platforms//os:windows": ["//base:clang_intrinsics_compat"],
+        "//conditions:default": [],
+    })
+
 def _update_visibility(visibility = None):
     """
     Returns updated visibility. This is temporarily used for the code location migration.
@@ -89,7 +95,7 @@ def mozc_cc_library(deps = [], copts = [], visibility = None, **kwargs):
     cc_library wrapper adding //:macro dependecny.
     """
     cc_library(
-        deps = deps + ["//:macro"],
+        deps = deps + ["//:macro"] + _windows_intrinsics_compat_dep(),
         copts = copts + _copts_unsigned_char(),
         visibility = _update_visibility(visibility),
         **kwargs
@@ -105,7 +111,7 @@ def mozc_cc_binary(deps = [], copts = [], linkopts = [], **kwargs):
     cc_binary wrapper adding //:macro dependecny.
     """
     cc_binary(
-        deps = deps + ["//:macro"],
+        deps = deps + ["//:macro"] + _windows_intrinsics_compat_dep(),
         copts = copts + _copts_unsigned_char(),
         linkopts = linkopts + mozc_select(
             wasm = [
@@ -137,7 +143,7 @@ def mozc_cc_test(name, tags = [], deps = [], copts = [], **kwargs):
     cc_test(
         name = name,
         tags = tags,
-        deps = deps + ["//:macro"],
+        deps = deps + ["//:macro"] + _windows_intrinsics_compat_dep(),
         copts = copts + _copts_unsigned_char(),
         **kwargs
     )

@@ -200,6 +200,10 @@
     <CustomAction Id="InstallMozcFirewallRules" DllEntry="InstallMozcFirewallRules" Execute="deferred" Impersonate="no" Return="ignore" BinaryRef="mozc_installer_helper.dll" />
     <CustomAction Id="InstallMozcFirewallRulesRollback" DllEntry="RemoveMozcFirewallRules" Execute="rollback" Impersonate="no" Return="ignore" BinaryRef="mozc_installer_helper.dll" />
     <CustomAction Id="RemoveMozcFirewallRules" DllEntry="RemoveMozcFirewallRules" Execute="deferred" Impersonate="no" Return="ignore" BinaryRef="mozc_installer_helper.dll" />
+    <!-- Manual MSI installs do not go through Omaha.  Launch the dialog from
+         the installer helper DLL after InstallFinalize so the action does not
+         depend on a FileRef being marked for installation (error 2753). -->
+    <CustomAction Id="LaunchPostInstallDialog" DllEntry="LaunchPostInstallDialog" Impersonate="yes" Return="ignore" BinaryRef="mozc_installer_helper.dll" />
     <CustomAction Id="NewerVersionError" Error="4000" />
 
     <InstallExecuteSequence>
@@ -248,9 +252,10 @@
       <Custom Action="InitialInstallationCommit" Before="FixupConfigFilePermission" Condition="(NOT (REMOVE=&quot;ALL&quot;)) AND (NOT UPGRADING)" />
       <Custom Action="FixupConfigFilePermission" Before="EnableTipProfile" Condition="NOT (REMOVE=&quot;ALL&quot;)" />
       <Custom Action="EnableTipProfile" Before="InstallFinalize" Condition="NOT (REMOVE=&quot;ALL&quot;)" />
+      <Custom Action="LaunchPostInstallDialog" After="InstallFinalize" Condition="(NOT (REMOVE=&quot;ALL&quot;)) AND (UILevel &gt;= 3)" />
       <!-- show reboot dialog to execute pending file opartions -->
       <?if ($(var.VSConfigurationName) = "Release") ?>
-        <ScheduleReboot After="InstallFinalize" Condition="(REMOVE=&quot;ALL&quot;)" />
+        <ScheduleReboot After="LaunchPostInstallDialog" Condition="(REMOVE=&quot;ALL&quot;)" />
       <?endif?>
     </InstallExecuteSequence>
 

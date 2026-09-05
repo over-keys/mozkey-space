@@ -62,16 +62,16 @@ QString ReplaceString(const QString &str) {
   QString replaced(str);
   Replace(replaced, "[ProductName]", GuiUtil::ProductName());
 
-#ifdef GOOGLE_JAPANESE_INPUT_BUILD
+#if defined(GOOGLE_JAPANESE_INPUT_BUILD) && !defined(MOZKEY_SPACE_BUILD)
   Replace(replaced, "[ProductUrl]", "https://www.google.co.jp/ime/");
   Replace(replaced, "[ForumUrl]",
           "https://support.google.com/gboard/community?hl=ja");
   Replace(replaced, "[ForumName]", QObject::tr("product forum"));
-#else  // GOOGLE_JAPANESE_INPUT_BUILD
+#else  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
   Replace(replaced, "[ProductUrl]", "https://github.com/over-keys/mozkey-space");
   Replace(replaced, "[ForumUrl]", "https://github.com/over-keys/mozkey-space/issues");
   Replace(replaced, "[ForumName]", QObject::tr("issues"));
-#endif  // GOOGLE_JAPANESE_INPUT_BUILD
+#endif  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
 
   const std::string credit_filepath =
       FileUtil::JoinPath(SystemUtil::GetDocumentDirectory(), "credits_en.html");
@@ -95,13 +95,13 @@ AboutDialog::AboutDialog(QWidget *parent)
   window_palette.setColor(QPalette::WindowText, QColor(0, 0, 0));
   setPalette(window_palette);
   setAutoFillBackground(true);
-#ifdef GOOGLE_JAPANESE_INPUT_BUILD
+#if defined(GOOGLE_JAPANESE_INPUT_BUILD) && !defined(MOZKEY_SPACE_BUILD)
   const std::string version_info = "(" + Version::GetMozcVersion() + ")";
-#else  // GOOGLE_JAPANESE_INPUT_BUILD
+#else  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
   const std::string version_info =
-      Version::GetMozkeyReleaseVersion() + "\nBuild " +
+      Version::GetMozkeySpaceReleaseVersion() + "\nBuild " +
       Version::GetMozcVersion();
-#endif  // GOOGLE_JAPANESE_INPUT_BUILD
+#endif  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
   version_label->setText(QLatin1String(version_info.c_str()));
   GuiUtil::ReplaceWidgetLabels(this);
 

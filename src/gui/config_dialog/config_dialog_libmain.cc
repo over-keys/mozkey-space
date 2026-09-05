@@ -419,8 +419,12 @@ void ShowRev10ZenzFeedbackManagementDialog(
         &dialog, dialog.windowTitle(),
         QString::fromUtf8(
             "【全文フィードバック】\n"
-            "Zenz に送った読み全体と表示された補正結果の採用/却下です。"
-            "Space で通常変換へ戻して別の結果を確定すると却下が1回記録されます。"
+            "raw Zenzがユーザー判断の対象になった場合に限って採用/却下を記録します。"
+            "未補正のrawを採用した場合、またはLocal後にrawへ明示的に戻した場合はrawの採用です。"
+            "未補正のrawから通常変換へ戻して別の結果を確定するとrawの却下が1回記録されます。"
+            "Local後の候補をそのまま確定しても、Fullの採用/却下とLocalの回数は増減しません。"
+            "確定した表記の利用履歴はMozc側で学習します。"
+            "Local後の候補を編集しただけでは、見えていないrawの却下とは扱いません。"
             "Space 却下1回は弱いマイナス信号で、通常 Mozc 候補を削除しません。"
             "通常の粗い文脈クラス間では実行時と同じ有効回数を合算し、保存行の回数と"
             "異なる場合は「有効N」と併記します。\n\n"
@@ -606,7 +610,8 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
 
   feedback->setText(QString::fromUtf8("Zenzの選択結果を学習する"));
   feedback->setToolTip(QString::fromUtf8(
-      "確定したZenz補正の採用・却下をローカルに記録し、今後の候補順位や補正に利用します。"));
+      "raw Zenzがユーザー判断の対象になった場合に採用・却下を記録します。"
+      "Local後の無編集確定はFull・Localとも中立です。rawへ明示的に戻した場合はrawの採用になります。"));
   auto_block->setText(
       QString::fromUtf8("繰り返し却下した全文候補を自動ブロック"));
   auto_block->setToolTip(QString::fromUtf8(

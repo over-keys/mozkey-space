@@ -41,16 +41,16 @@ inline constexpr int kMozcVersionMinor = @MINOR@;
 inline constexpr int kMozcVersionBuildNumber = @BUILD@;
 inline constexpr int kMozcVersionRevision = @REVISION@;
 
-inline constexpr int kMozkeyReleaseVersionMajor =
-    @MOZKEY_RELEASE_VERSION_MAJOR@;
-inline constexpr int kMozkeyReleaseVersionMinor =
-    @MOZKEY_RELEASE_VERSION_MINOR@;
-inline constexpr int kMozkeyReleaseVersionPatch =
-    @MOZKEY_RELEASE_VERSION_PATCH@;
-inline constexpr const char kMozkeyReleaseVersion[] =
-    "v@MOZKEY_RELEASE_VERSION_MAJOR@."
-    "@MOZKEY_RELEASE_VERSION_MINOR@."
-    "@MOZKEY_RELEASE_VERSION_PATCH@";
+inline constexpr int kMozkeySpaceReleaseVersionMajor =
+    @MOZKEY_SPACE_RELEASE_VERSION_MAJOR@;
+inline constexpr int kMozkeySpaceReleaseVersionMinor =
+    @MOZKEY_SPACE_RELEASE_VERSION_MINOR@;
+inline constexpr int kMozkeySpaceReleaseVersionPatch =
+    @MOZKEY_SPACE_RELEASE_VERSION_PATCH@;
+inline constexpr const char kMozkeySpaceReleaseVersion[] =
+    "v@MOZKEY_SPACE_RELEASE_VERSION_MAJOR@."
+    "@MOZKEY_SPACE_RELEASE_VERSION_MINOR@."
+    "@MOZKEY_SPACE_RELEASE_VERSION_PATCH@";
 
 inline constexpr const char kMozcEngineVersion[] = "@ENGINE_VERSION@";
 

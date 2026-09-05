@@ -29,6 +29,7 @@
 
 load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load(
     "//:build_defs.bzl",
     "mozc_cc_library",
@@ -47,6 +48,13 @@ load("//bazel:run_build_tool.bzl", "mozc_run_build_tool")
 load("//build_tools:embed_file.bzl", "mozc_embed_file")
 
 package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "clang_intrinsics_compat",
+    srcs = ["clang_intrinsics_compat.cc"],
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:public"],
+)
 
 mozc_cc_library(
     name = "init_mozc",

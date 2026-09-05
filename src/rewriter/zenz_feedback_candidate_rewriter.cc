@@ -269,12 +269,14 @@ bool ZenzFeedbackCandidateRewriter::Rewrite(
     }
 
     if (zenz_value == original_top_value) {
-      continue;
+      // Candidates are ordered by feedback strength. The strongest applicable
+      // choice is already first; do not promote a weaker alternative over it.
+      return false;
     }
 
     const int existing_pos = FindCandidateByValue(*segment, zenz_value);
     if (existing_pos == 0) {
-      continue;
+      return false;
     }
 
     if (existing_pos > 0) {

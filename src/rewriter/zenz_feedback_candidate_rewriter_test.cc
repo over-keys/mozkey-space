@@ -1,5 +1,7 @@
 #include "rewriter/zenz_feedback_candidate_rewriter.h"
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -57,7 +59,8 @@ class ScopedUserProfileForZenzFeedbackCandidateRewriterTest {
         std::wstring(temp_path, temp_len) +
         L"mozc_zenz_feedback_candidate_rewriter_test_" +
         std::to_wstring(::GetCurrentProcessId()) + L"_" +
-        std::to_wstring(static_cast<unsigned long long>(::GetTickCount64()));
+        std::to_wstring(static_cast<unsigned long long>(::GetTickCount64())) +
+        L"_" + std::to_wstring(sequence_.fetch_add(1));
 
     const std::wstring app_data_dir = JoinPath(profile_dir_, L"AppData");
     const std::wstring local_low_dir = JoinPath(app_data_dir, L"LocalLow");
@@ -72,6 +75,12 @@ class ScopedUserProfileForZenzFeedbackCandidateRewriterTest {
   }
 
   ~ScopedUserProfileForZenzFeedbackCandidateRewriterTest() {
+    // Clear the process-wide store cache while USERPROFILE still points at
+    // this isolated profile. Otherwise a reused path can expose old records
+    // to the next table-driven test.
+    if (ok_) {
+      session::ZenzFeedbackStore().ClearAll();
+    }
     if (has_old_profile_) {
       ::SetEnvironmentVariableW(L"USERPROFILE", old_profile_.c_str());
     } else {
@@ -94,6 +103,7 @@ class ScopedUserProfileForZenzFeedbackCandidateRewriterTest {
   bool ok() const { return ok_; }
 
  private:
+  inline static std::atomic<uint64_t> sequence_{0};
   bool ok_ = false;
   bool has_old_profile_ = false;
   std::wstring old_profile_;
@@ -244,6 +254,48 @@ TEST(ZenzFeedbackCandidateRewriterTest,
   EXPECT_EQ(segment.candidate(1).value, "彼は点滴です");
   EXPECT_FALSE(segment.candidate(1).attributes &
                converter::Attribute::BEST_CANDIDATE);
+}
+
+TEST(ZenzFeedbackCandidateRewriterTest,
+     KeepsStrongestFeedbackAlreadyAtTop) {
+  for (const bool alternative_exists : {false, true}) {
+    SCOPED_TRACE(alternative_exists);
+    ScopedUserProfileForZenzFeedbackCandidateRewriterTest profile;
+    ASSERT_TRUE(profile.ok());
+    session::ZenzFeedbackStore store;
+    for (int i = 0; i < 10; ++i) {
+      store.RecordAccepted("こうせい", "empty", "構成");
+    }
+    store.RecordAccepted("こうせい", "empty", "校正");
+
+    Segments segments;
+    AddSegment("こうせい", "構成", &segments);
+    Segment* segment = segments.mutable_conversion_segment(0);
+    segment->mutable_candidate(0)->cost = 3000;
+    segment->mutable_candidate(0)->wcost = 3000;
+    if (alternative_exists) {
+      converter::Candidate* alternative = segment->add_candidate();
+      *alternative = segment->candidate(0);
+      alternative->value = alternative->content_value = "校正";
+      alternative->attributes = 0;
+      alternative->cost = alternative->wcost = 3200;
+    }
+
+    ZenzFeedbackCandidateRewriter rewriter;
+    const ConversionRequest request = CreateZenzFeedbackConversionRequest();
+    // Repeated rewriting must not introduce or accumulate a weaker bonus.
+    for (int i = 0; i < 2; ++i) {
+      EXPECT_FALSE(rewriter.Rewrite(request, &segments));
+      EXPECT_EQ(segment->candidate(0).value, "構成");
+      EXPECT_EQ(segment->candidate(0).cost, 3000);
+      EXPECT_TRUE(segment->candidate(0).attributes &
+                  converter::Attribute::BEST_CANDIDATE);
+      ASSERT_EQ(segment->candidates_size(), alternative_exists ? 2 : 1);
+      if (alternative_exists) {
+        EXPECT_EQ(segment->candidate(1).cost, 3200);
+      }
+    }
+  }
 }
 
 TEST(ZenzFeedbackCandidateRewriterTest,

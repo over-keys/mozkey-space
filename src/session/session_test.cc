@@ -30,6 +30,7 @@
 #include "session/session.h"
 #include "session/zenz_prompt_builder.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -219,11 +220,15 @@ class ScopedUserProfileForZenzFeedbackSessionTest {
       return;
     }
 
+    // GetTickCount64 can repeat across fast table-driven cases. A reused path
+    // could also reuse the store's one-second read cache from the prior case.
+    static std::atomic<uint64_t> sequence{0};
     profile_dir_ =
         std::wstring(temp_path, temp_len) +
         L"mozc_zenz_feedback_session_test_" +
         std::to_wstring(::GetCurrentProcessId()) + L"_" +
-        std::to_wstring(::GetTickCount64());
+        std::to_wstring(::GetTickCount64()) + L"_" +
+        std::to_wstring(sequence.fetch_add(1));
 
     const std::wstring app_data_dir =
         JoinPathForZenzFeedbackSessionTest(profile_dir_, L"AppData");
@@ -2050,6 +2055,7 @@ void SetPendingRejectedZenzFeedbackForTest(SessionTestPeer* session_peer) {
   session_peer->zenz_live_visible_generation_() = 1;
   session_peer->zenz_live_key_() = "かれはてんてきです";
   session_peer->zenz_live_value_() = "彼は天敵です";
+  session_peer->zenz_live_raw_value_() = "彼は天敵です";
   session_peer->zenz_live_mozc_value_() = "彼は点滴です";
   session_peer->zenz_live_context_class_() = "empty";
 
@@ -2129,29 +2135,15 @@ TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
   segment->set_key(mozc_value);
   segment->add_candidate()->value = key;
 
-  Segments preferred_local_reverse;
-  segment = preferred_local_reverse.add_segment();
-  segment->set_key("離席");
-  segment->add_candidate()->value = "りせき";
-
-  Segments disfavored_local_reverse;
-  segment = disfavored_local_reverse.add_segment();
-  segment->set_key("離籍");
-  segment->add_candidate()->value = "りせき";
-
   EXPECT_CALL(*converter, StartReverseConversion(_, raw_zenz))
       .WillOnce(DoAll(SetArgPointee<0>(raw_reverse), Return(true)));
   EXPECT_CALL(*converter, StartReverseConversion(_, mozc_value))
       .Times(2)
       .WillRepeatedly(DoAll(SetArgPointee<0>(mozc_reverse), Return(true)));
-  EXPECT_CALL(*converter, StartReverseConversion(_, "離席"))
-      .Times(2)
-      .WillRepeatedly(
-          DoAll(SetArgPointee<0>(preferred_local_reverse), Return(true)));
-  EXPECT_CALL(*converter, StartReverseConversion(_, "離籍"))
-      .Times(2)
-      .WillRepeatedly(
-          DoAll(SetArgPointee<0>(disfavored_local_reverse), Return(true)));
+  // Mature Local application must not reverse-read the local surfaces again.
+  // Learning already proved the direction; current Mozc is the contextual gate.
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離席")).Times(0);
+  EXPECT_CALL(*converter, StartReverseConversion(_, "離籍")).Times(0);
 
   ZenzLiveResponse response;
   response.generation = 8;
@@ -2329,8 +2321,8 @@ TEST_F(SessionTest, LocalV4AutoAppliedSuccessIsNeutralAndRawRevertRejectsRule) {
   session_peer.zenz_feedback_store_().RecordLocalAccepted(
       "しかい", "empty", "歯科医", "視界");
 
-  // Local intervenes and the displayed correction is accepted. Full learns the
-  // displayed whole candidate, while Local receives no self-reinforcing +1.
+  // Accepting a Local-repaired display is neutral for both Full and Local.
+  // Only Mozc history learns the surface the user actually committed.
   session_peer.context_()->set_state(ImeContext::CONVERSION);
   session_peer.live_conversion_active_() = true;
   session_peer.live_conversion_key_() = "しかい";
@@ -2349,10 +2341,9 @@ TEST_F(SessionTest, LocalV4AutoAppliedSuccessIsNeutralAndRawRevertRejectsRule) {
       "しかい", "empty", 12, 2);
   ASSERT_EQ(active.size(), 1);
   EXPECT_EQ(active[0].observation_count, 2);
-  EXPECT_EQ(session_peer.zenz_feedback_store_()
-                .Decide("しかい", "empty", "視界")
-                .action,
-            ZenzFeedbackAction::kPrefer);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+  EXPECT_EQ(converter->learn_call_count, 1);
+  EXPECT_EQ(converter->last_value, "視界");
 
   // The same Local rule intervenes, but the user explicitly returns to the raw
   // Zenz surface. This is direct positive Full evidence for raw and one Local
@@ -2378,6 +2369,7 @@ TEST_F(SessionTest, LocalV4AutoAppliedSuccessIsNeutralAndRawRevertRejectsRule) {
   rejected_command.mutable_output()->mutable_result()->set_value("歯科医");
   session_peer.ObservePendingZenzFeedbackCommittedResult(
       rejected_command, "test");
+  session_peer.ConfirmPendingZenzFeedback();
 
   EXPECT_TRUE(session_peer.zenz_feedback_store_()
                   .GetLocalPreferences("しかい", "empty", 12, 2)
@@ -2386,6 +2378,11 @@ TEST_F(SessionTest, LocalV4AutoAppliedSuccessIsNeutralAndRawRevertRejectsRule) {
                 .Decide("しかい", "empty", "歯科医")
                 .action,
             ZenzFeedbackAction::kPrefer);
+  const auto full = session_peer.zenz_feedback_store_().ListEntries();
+  ASSERT_EQ(full.size(), 1);
+  EXPECT_EQ(full[0].value, "歯科医");
+  EXPECT_EQ(full[0].accepted_count, 1);
+  EXPECT_EQ(full[0].rejected_count, 0);
 #else
   GTEST_SKIP()
       << "This feedback-persistence test currently has Windows-only test "
@@ -2549,6 +2546,7 @@ TEST_F(SessionTest,
   command.mutable_output()->mutable_result()->set_key("かれはてんてきです");
   command.mutable_output()->mutable_result()->set_value("彼は点滴です");
   session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  session_peer.ConfirmPendingZenzFeedback();
 
   const std::vector<ZenzFeedbackEntry> entries =
       session_peer.zenz_feedback_store_().ListEntries();
@@ -2625,7 +2623,7 @@ TEST_F(SessionTest, PendingRejectedZenzFeedbackIsNeutralWhenFinalCommitMatches) 
 }
 
 TEST_F(SessionTest,
-       PendingRejectedZenzFeedbackDifferentFinalCommitPersistsImmediately) {
+       PendingRejectedZenzFeedbackDifferentFinalCommitWaitsForNextTextInput) {
 #if defined(_WIN32)
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
@@ -2646,10 +2644,13 @@ TEST_F(SessionTest,
   command.mutable_output()->mutable_result()->set_key("かれはてんてきです");
   command.mutable_output()->mutable_result()->set_value("彼は点滴です");
 
-  // A genuinely different full commit is definitive rejected feedback and
-  // must reach persistent storage immediately, without waiting for another
-  // InsertCharacter event.
+  // Final text is known, but its learning must remain reversible for Undo.
   session_peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  EXPECT_TRUE(session_peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(session_peer.zenz_feedback_store_().ListEntries().empty());
+
+  command.Clear();
+  ASSERT_TRUE(SendKey("a", &session, &command));
 
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
   std::vector<ZenzFeedbackEntry> entries =
@@ -2833,6 +2834,699 @@ TEST_F(SessionTest,
 }
 
 #if defined(_WIN32)
+
+TEST_F(SessionTest, ZenzFullFeedbackTracksOnlyExplicitRawChoices) {
+  struct TestCase {
+    const char* name;
+    bool repaired;
+    bool accepted;
+    std::string final_value;
+    int full_accepted;
+    int full_rejected;
+    int local_count;
+    int third_count;
+    bool disable_local = false;
+    bool hard_reject = false;
+  };
+  const TestCase cases[] = {
+      {"accept raw", false, true, "歯科医", 1, 0, 0, 0},
+      {"correct visible raw", false, false, "視界", 0, 1, 1, 0},
+      {"unchanged raw after navigation", false, false, "歯科医", 0, 0, 0, 0},
+      {"accept repaired display", true, true, "視界", 0, 0, 2, 0},
+      {"same repaired final after navigation", true, false, "視界", 0, 0, 2, 0},
+      {"explicit third spelling", true, false, "司会", 0, 0, 1, 1},
+      {"restore raw", true, false, "歯科医", 1, 0, 1, 0},
+      {"restore raw after disabling Local", true, false, "歯科医", 1, 0, 2, 0,
+       true},
+      {"hard reject raw", false, false, "", 0, 1, 0, 0, false, true},
+      {"hard reject composite is not a raw judgment", true, false, "", 0, 0,
+       2, 0, false, true},
+  };
+  for (const TestCase& test : cases) {
+    SCOPED_TRACE(test.name);
+    MockEngine engine;
+    auto converter = CreateRecordingExternalLearningConverter(&engine);
+    ScopedUserProfileForZenzFeedbackSessionTest profile;
+    ASSERT_TRUE(profile.ok());
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    EnableZenzFeedbackLearning(&session);
+    const std::string displayed = test.repaired ? "視界" : "歯科医";
+    peer.context_()->set_state(ImeContext::CONVERSION);
+    peer.live_conversion_active_() = true;
+    peer.live_conversion_key_() = peer.zenz_live_key_() = "しかい";
+    peer.live_conversion_value_() = peer.zenz_live_mozc_value_() = "視界";
+    peer.zenz_live_visible_generation_() = 1;
+    peer.zenz_live_value_() = displayed;
+    peer.zenz_live_raw_value_() = "歯科医";
+    peer.zenz_live_context_class_() = "empty";
+    if (test.repaired) {
+      ZenzLocalPreference applied;
+      applied.key = "しかい";
+      applied.context_class = "empty";
+      applied.disfavored_value = "歯科医";
+      applied.preferred_value = "視界";
+      applied.has_reading_begin = true;
+      applied.reading_begin = 0;
+      peer.zenz_live_applied_local_preferences_() = {applied};
+      for (int i = 0; i < 2; ++i) {
+        peer.zenz_feedback_store_().RecordLocalAccepted(
+            "しかい", "empty", "歯科医", "視界");
+      }
+    }
+    EXPECT_CALL(*converter, StartReverseConversion(_, _))
+        .WillRepeatedly([](Segments* out, absl::string_view text) {
+          out->Clear();
+          if (text != "歯科医" && text != "視界" && text != "司会") {
+            return false;
+          }
+          auto* segment = out->add_segment();
+          segment->set_key(text);
+          segment->add_candidate()->value = "しかい";
+          return true;
+        });
+    if (test.accepted) {
+      peer.SetPendingZenzFeedbackAccepted("しかい", "empty", displayed);
+    } else {
+      peer.SetPendingZenzFeedbackRejected(
+          test.hard_reject ? "hard_reject" : "space_revert_zenz_to_mozc");
+      peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+      if (!test.final_value.empty()) {
+        commands::Command command;
+        auto* result = command.mutable_output()->mutable_result();
+        result->set_type(commands::Result::STRING);
+        result->set_key("しかい");
+        result->set_value(test.final_value);
+        peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+      }
+    }
+    if (test.disable_local) {
+      config::Config config = session.context().GetConfig();
+      config.set_use_zenz_local_preference_learning(false);
+      session.SetConfig(config);
+    }
+    ASSERT_TRUE(peer.pending_zenz_feedback_().pending);
+    peer.ConfirmPendingZenzFeedback();
+    peer.ConfirmPendingZenzFeedback();  // Confirmation is idempotent.
+    const auto full = peer.zenz_feedback_store_().ListEntries();
+    ASSERT_EQ(full.size(), test.full_accepted + test.full_rejected);
+    if (!full.empty()) {
+      EXPECT_EQ(full[0].value, "歯科医");
+      EXPECT_EQ(full[0].accepted_count, test.full_accepted);
+      EXPECT_EQ(full[0].rejected_count, test.full_rejected);
+    }
+    const auto local = peer.zenz_feedback_store_().GetLocalPreferences(
+        "しかい", "empty", 12, 1);
+    int local_count = 0;
+    int third_count = 0;
+    for (const auto& rule : local) {
+      EXPECT_EQ(rule.disfavored_value, "歯科医");
+      if (rule.preferred_value == "視界") {
+        local_count = rule.observation_count;
+      } else if (rule.preferred_value == "司会") {
+        third_count = rule.observation_count;
+      } else {
+        ADD_FAILURE() << rule.preferred_value;
+      }
+    }
+    EXPECT_EQ(local_count, test.local_count);
+    EXPECT_EQ(third_count, test.third_count);
+    EXPECT_EQ(converter->learn_call_count, test.accepted ? 1 : 0);
+    if (test.accepted) {
+      EXPECT_EQ(converter->last_value, displayed);
+    }
+  }
+}
+
+TEST_F(SessionTest, LocalCompositeEditsLearnOnlyUserChangedSpans) {
+  for (const bool coarse : {false, true}) {
+    for (const bool change_local : {false, true}) {
+      for (const bool change_other : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << coarse << "," << change_local
+                                         << "," << change_other);
+        MockEngine engine;
+        auto converter = CreateRecordingExternalLearningConverter(&engine);
+        ScopedUserProfileForZenzFeedbackSessionTest profile;
+        ASSERT_TRUE(profile.ok());
+        Session session(engine);
+        SessionTestPeer peer(session);
+        InitSessionToPrecomposition(&session);
+        EnableZenzFeedbackLearning(&session);
+        const std::string key = "りせきしてかいとうします";
+        const std::string displayed = "離席して回答します";
+        const std::string final_value = absl::StrCat(
+            change_local ? "離石" : "離席", "して",
+            change_other ? "解凍" : "回答", "します");
+        ZenzLocalPreference applied;
+        applied.key = "りせき";
+        applied.context_class = "empty";
+        applied.disfavored_value = "離籍";
+        applied.preferred_value = "離席";
+        applied.has_reading_begin = true;
+        for (int i = 0; i < 2; ++i) {
+          peer.zenz_feedback_store_().RecordLocalAccepted(
+              "りせき", "empty", "離籍", "離席");
+        }
+        peer.context_()->set_state(ImeContext::CONVERSION);
+        peer.live_conversion_active_() = true;
+        peer.live_conversion_key_() = peer.zenz_live_key_() = key;
+        peer.live_conversion_value_() = peer.zenz_live_mozc_value_() = displayed;
+        peer.zenz_live_visible_generation_() = 1;
+        peer.zenz_live_value_() = displayed;
+        peer.zenz_live_raw_value_() = "離籍して回答します";
+        peer.zenz_live_applied_local_preferences_() = {applied};
+        peer.zenz_live_context_class_() = "empty";
+        peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+        peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+        EXPECT_CALL(*converter, StartReverseConversion(_, _))
+            .WillRepeatedly([&](Segments* out, absl::string_view text) {
+              out->Clear();
+              if (text == displayed || text == final_value) {
+                if (coarse) {
+                  auto* segment = out->add_segment();
+                  segment->set_key(text);
+                  segment->add_candidate()->value = key;
+                } else {
+                  auto* segment = out->add_segment();
+                  segment->set_key(text.substr(0, 6));
+                  segment->add_candidate()->value = "りせき";
+                  segment = out->add_segment();
+                  segment->set_key("して");
+                  segment->add_candidate()->value = "して";
+                  segment = out->add_segment();
+                  segment->set_key(text.substr(12, 6));
+                  segment->add_candidate()->value = "かいとう";
+                  segment = out->add_segment();
+                  segment->set_key("します");
+                  segment->add_candidate()->value = "します";
+                }
+                return true;
+              }
+              std::string reading;
+              if (text == "離席" || text == "離石") {
+                reading = "りせき";
+              } else if (text == "回答" || text == "解凍") {
+                reading = "かいとう";
+              } else if (text == "離席して回答" || text == "離石して解凍") {
+                reading = "りせきしてかいとう";
+              } else {
+                ADD_FAILURE() << "Unexpected reverse reading: " << text;
+                return false;
+              }
+              auto* segment = out->add_segment();
+              segment->set_key(text);
+              segment->add_candidate()->value = reading;
+              return true;
+            });
+        commands::Command command;
+        auto* result = command.mutable_output()->mutable_result();
+        result->set_type(commands::Result::STRING);
+        result->set_key(key);
+        result->set_value(final_value);
+        peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+        peer.ConfirmPendingZenzFeedback();
+        EXPECT_TRUE(peer.zenz_feedback_store_().ListEntries().empty());
+        const auto local = peer.zenz_feedback_store_().GetLocalPreferences(
+            key, "empty", 12, 1);
+        // With two edits in a coarse segment, their individual reading slots
+        // are not proven. Never learn an overlapping composite as a workaround.
+        const bool proven = !(coarse && change_local && change_other);
+        const int expected_third = proven && change_local ? 1 : 0;
+        const int expected_other = proven && change_other ? 1 : 0;
+        ASSERT_EQ(local.size(), 1 + expected_third + expected_other);
+        for (const auto& rule : local) {
+          if (rule.key == "りせき" && rule.preferred_value == "離席") {
+            EXPECT_EQ(rule.disfavored_value, "離籍");
+            EXPECT_EQ(rule.observation_count, 2 - expected_third);
+          } else if (rule.key == "りせき" && rule.preferred_value == "離石") {
+            EXPECT_EQ(rule.disfavored_value, "離籍");
+            EXPECT_EQ(rule.observation_count, expected_third);
+          } else if (rule.key == "かいとう") {
+            EXPECT_EQ(rule.disfavored_value, "回答");
+            EXPECT_EQ(rule.preferred_value, "解凍");
+            EXPECT_EQ(rule.observation_count, expected_other);
+          } else {
+            ADD_FAILURE() << "Unexpected composite rule: " << rule.key;
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(SessionTest, RepeatedLocalEditsPreserveSlotsAndCountOncePerCommit) {
+  for (const int applied_count : {0, 1, 2}) {
+    for (const bool restore_raw : {false, true}) {
+      if (applied_count == 0 && restore_raw) continue;
+      SCOPED_TRACE(::testing::Message() << applied_count << "," << restore_raw);
+      MockEngine engine;
+      auto converter = CreateRecordingExternalLearningConverter(&engine);
+      ScopedUserProfileForZenzFeedbackSessionTest profile;
+      ASSERT_TRUE(profile.ok());
+      Session session(engine);
+      SessionTestPeer peer(session);
+      InitSessionToPrecomposition(&session);
+      EnableZenzFeedbackLearning(&session);
+      const std::string key = "りせきとりせき";
+      const std::string displayed = "離席と離席";
+      const std::string raw = absl::StrCat(
+          applied_count > 0 ? "離籍" : "離席", "と",
+          applied_count > 1 ? "離籍" : "離席");
+      const std::string final_value = restore_raw ? raw : "離石と離石";
+      for (int i = 0; i < 2; ++i) {
+        peer.zenz_feedback_store_().RecordLocalAccepted(
+            "りせき", "empty", "離籍", "離席");
+      }
+      peer.context_()->set_state(ImeContext::CONVERSION);
+      peer.live_conversion_active_() = true;
+      peer.live_conversion_key_() = peer.zenz_live_key_() = key;
+      peer.live_conversion_value_() = peer.zenz_live_mozc_value_() = displayed;
+      peer.zenz_live_visible_generation_() = 1;
+      peer.zenz_live_value_() = displayed;
+      peer.zenz_live_raw_value_() = raw;
+      peer.zenz_live_context_class_() = "empty";
+      for (int i = 0; i < applied_count; ++i) {
+        ZenzLocalPreference applied;
+        applied.key = "りせき";
+        applied.context_class = "empty";
+        applied.disfavored_value = "離籍";
+        applied.preferred_value = "離席";
+        applied.has_reading_begin = true;
+        applied.reading_begin = i == 0 ? 0 : std::string("りせきと").size();
+        peer.zenz_live_applied_local_preferences_().push_back(applied);
+      }
+      peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+      peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+      EXPECT_CALL(*converter, StartReverseConversion(_, _))
+          .WillRepeatedly([&](Segments* out, absl::string_view text) {
+            out->Clear();
+            if (text != displayed && text != final_value) {
+              ADD_FAILURE() << "Unexpected reverse reading: " << text;
+              return false;
+            }
+            auto* segment = out->add_segment();
+            segment->set_key(text.substr(0, 6));
+            segment->add_candidate()->value = "りせき";
+            segment = out->add_segment();
+            segment->set_key("と");
+            segment->add_candidate()->value = "と";
+            segment = out->add_segment();
+            segment->set_key(text.substr(9));
+            segment->add_candidate()->value = "りせき";
+            return true;
+          });
+      commands::Command command;
+      auto* result = command.mutable_output()->mutable_result();
+      result->set_type(commands::Result::STRING);
+      result->set_key(key);
+      result->set_value(final_value);
+      peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+      peer.ConfirmPendingZenzFeedback();
+      const auto full = peer.zenz_feedback_store_().Decide(key, "empty", raw);
+      EXPECT_EQ(full.accepted_count, restore_raw ? 1 : 0);
+      EXPECT_EQ(full.rejected_count, applied_count == 0 ? 1 : 0);
+      const auto local = peer.zenz_feedback_store_().ListLocalPreferenceEntries();
+      ASSERT_EQ(local.size(), restore_raw ? 1 : (applied_count == 1 ? 3 : 2));
+      for (const auto& rule : local) {
+        EXPECT_EQ(rule.key, "りせき");
+        if (rule.preferred_value == "離席") {
+          EXPECT_EQ(rule.disfavored_value, "離籍");
+          EXPECT_EQ(rule.observation_count, applied_count > 0 ? 1 : 2);
+        } else {
+          EXPECT_EQ(rule.preferred_value, "離石");
+          EXPECT_EQ(rule.observation_count, 1);
+          EXPECT_TRUE(rule.disfavored_value == "離籍" ||
+                      rule.disfavored_value == "離席");
+        }
+      }
+    }
+  }
+}
+
+TEST_F(SessionTest, RepeatedLocalAcceptsDoNotChangeFullScoresOrAutoBlockRaw) {
+  for (const bool existing_full : {false, true}) {
+    for (const bool has_attribution : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << existing_full << ","
+                                       << has_attribution);
+      MockEngine engine;
+      auto converter = CreateRecordingExternalLearningConverter(&engine);
+      ScopedUserProfileForZenzFeedbackSessionTest profile;
+      ASSERT_TRUE(profile.ok());
+      Session session(engine);
+      SessionTestPeer peer(session);
+      InitSessionToPrecomposition(&session);
+      EnableZenzFeedbackLearning(&session);
+      const std::string key = "ちょっとりせきします";
+      const std::string raw = "ちょっと離籍します";
+      const std::string displayed = "ちょっと離席します";
+      if (existing_full) {
+        peer.zenz_feedback_store_().RecordAccepted(key, "empty", displayed);
+      }
+      for (int i = 0; i < 2; ++i) {
+        peer.zenz_feedback_store_().RecordLocalAccepted(
+            "りせき", "empty", "離籍", "離席");
+      }
+      ZenzLocalPreference applied;
+      applied.key = "りせき";
+      applied.context_class = "empty";
+      applied.disfavored_value = "離籍";
+      applied.preferred_value = "離席";
+      ZenzFeedbackAutoBlockPolicy policy;
+      policy.enabled = true;
+      policy.reject_threshold = 2;
+      for (int i = 0; i < 10; ++i) {
+        peer.zenz_live_raw_value_() = raw;
+        if (has_attribution) {
+          peer.zenz_live_applied_local_preferences_() = {applied};
+        }
+        peer.SetPendingZenzFeedbackAccepted(key, "empty", displayed);
+        // The live state is cleared by commit; attribution must survive in
+        // the pending snapshot until the next input confirms the feedback.
+        peer.zenz_live_raw_value_().clear();
+        peer.zenz_live_applied_local_preferences_().clear();
+        peer.ConfirmPendingZenzFeedback();
+        const auto raw_decision =
+            peer.zenz_feedback_store_().Decide(key, "empty", raw, policy);
+        EXPECT_EQ(raw_decision.accepted_count, 0);
+        EXPECT_EQ(raw_decision.rejected_count, 0);
+        EXPECT_EQ(raw_decision.total_score, 0);
+        EXPECT_FALSE(raw_decision.auto_blocked);
+        const auto display_decision =
+            peer.zenz_feedback_store_().Decide(key, "empty", displayed);
+        EXPECT_EQ(display_decision.accepted_count, existing_full ? 1 : 0);
+        EXPECT_EQ(display_decision.rejected_count, 0);
+        EXPECT_EQ(display_decision.total_score, existing_full ? 1000 : 0);
+        const auto local = peer.zenz_feedback_store_().GetLocalPreferences(
+            key, "empty", 12, 1);
+        ASSERT_EQ(local.size(), 1);
+        EXPECT_EQ(local[0].observation_count, 2);
+      }
+      EXPECT_EQ(converter->learn_call_count, 10);
+      EXPECT_EQ(converter->last_value, displayed);
+      EXPECT_EQ(peer.zenz_feedback_store_().ListEntries().size(),
+                existing_full ? 1 : 0);
+    }
+  }
+}
+
+TEST_F(SessionTest, LocalV4FallbackRejectsSurfacesAtAnotherReadingPosition) {
+  // Check both the raw and Mozc gates, independently of reverse granularity.
+  for (const bool misplaced_raw : {false, true}) {
+    for (const bool coarse_raw : {false, true}) {
+      for (const bool coarse_mozc : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << misplaced_raw << "," << coarse_raw
+                                         << "," << coarse_mozc);
+        MockEngine engine;
+        auto converter = CreateEngineConverterMock(&engine);
+        ScopedUserProfileForZenzFeedbackSessionTest profile;
+        ASSERT_TRUE(profile.ok());
+        Session session(engine);
+        SessionTestPeer peer(session);
+        InitSessionToPrecomposition(&session);
+        config::Config config;
+        config::ConfigHandler::GetDefaultConfig(&config);
+        config.set_use_live_conversion(true);
+        config.set_use_zenz_live_correction(true);
+        config.set_use_zenz_feedback_learning(true);
+        config.set_use_zenz_local_preference_learning(true);
+        config.set_use_zenz_synthetic_candidate(true);
+        config.set_zenz_live_correction_min_key_length(2);
+        session.SetConfig(config);
+
+        const std::string key = misplaced_raw ? "なまとせい" : "せいとなま";
+        const std::string raw = misplaced_raw ? "生と姓" : "姓と生";
+        const std::string mozc = misplaced_raw ? "生と性" : "性と生";
+        for (int i = 0; i < 2; ++i) {
+          peer.zenz_feedback_store_().RecordLocalAccepted(
+              "せい", "empty", misplaced_raw ? "生" : "姓",
+              misplaced_raw ? "性" : "生");
+        }
+        peer.context_()->set_state(ImeContext::CONVERSION);
+        peer.live_conversion_active_() = true;
+        peer.live_conversion_key_() = peer.live_conversion_preedit_() = key;
+        peer.live_conversion_value_() = mozc;
+        auto& pending = peer.pending_zenz_live_();
+        pending.generation = 1;
+        pending.key = pending.symbol_style_source = key;
+        pending.mozc_value = mozc;
+        pending.context_class = "empty";
+        pending.pending = pending.from_live_conversion =
+            pending.use_conversion_history = true;
+
+        EXPECT_CALL(*converter, StartReverseConversion(_, _))
+            .WillRepeatedly([&](Segments* out, absl::string_view text) {
+              out->Clear();
+              if (text != raw && text != mozc) {
+                return false;
+              }
+              if (text == raw ? coarse_raw : coarse_mozc) {
+                auto* segment = out->add_segment();
+                segment->set_key(text);
+                segment->add_candidate()->value = key;
+              } else {
+                auto* segment = out->add_segment();
+                segment->set_key(text.substr(0, 3));
+                segment->add_candidate()->value = misplaced_raw ? "なま" : "せい";
+                segment = out->add_segment();
+                segment->set_key("と");
+                segment->add_candidate()->value = "と";
+                segment = out->add_segment();
+                segment->set_key(text.substr(6));
+                segment->add_candidate()->value = misplaced_raw ? "せい" : "なま";
+              }
+              return true;
+            });
+        ZenzLiveResponse response;
+        response.generation = 1;
+        response.key = key;
+        response.value = raw;
+        response.ok = true;
+        response.timeout = false;
+        commands::Command command;
+        ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+        EXPECT_EQ(peer.zenz_live_value_(), raw);
+        EXPECT_TRUE(peer.zenz_live_applied_local_preferences_().empty());
+      }
+    }
+  }
+}
+
+TEST_F(SessionTest, LocalV4CoarseFallbackPreservesUnrelatedDifferences) {
+  struct TestCase {
+    std::string key;
+    std::string raw;
+    std::string mozc;
+    std::string expected;
+  };
+  const TestCase cases[] = {
+      {"りせきしてかいとうします", "離籍して回答します",
+       "離席して解凍します", "離席して回答します"},
+      {"かいとうしてりせき", "回答して離籍", "解凍して離席",
+       "回答して離席"},
+      // Neither surrounding phrase can be tied to the reading literally.
+      {"かいとうしてりせきしてさいよう", "回答して離籍して採用",
+       "解凍して離席して採用", "回答して離籍して採用"},
+  };
+  for (const TestCase& test : cases) {
+    SCOPED_TRACE(test.raw);
+    MockEngine engine;
+    auto converter = CreateEngineConverterMock(&engine);
+    ScopedUserProfileForZenzFeedbackSessionTest profile;
+    ASSERT_TRUE(profile.ok());
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_live_conversion(true);
+    config.set_use_zenz_live_correction(true);
+    config.set_use_zenz_feedback_learning(true);
+    config.set_use_zenz_local_preference_learning(true);
+    config.set_use_zenz_synthetic_candidate(true);
+    session.SetConfig(config);
+    for (int i = 0; i < 2; ++i) {
+      peer.zenz_feedback_store_().RecordLocalAccepted(
+          "りせき", "empty", "離籍", "離席");
+    }
+    peer.context_()->set_state(ImeContext::CONVERSION);
+    peer.live_conversion_active_() = true;
+    peer.live_conversion_key_() = peer.live_conversion_preedit_() = test.key;
+    peer.live_conversion_value_() = test.mozc;
+    auto& pending = peer.pending_zenz_live_();
+    pending.generation = 1;
+    pending.key = pending.symbol_style_source = test.key;
+    pending.mozc_value = test.mozc;
+    pending.context_class = "empty";
+    pending.pending = pending.from_live_conversion =
+        pending.use_conversion_history = true;
+    // No local reverse reading is needed; only full, coarse alignments exist.
+    EXPECT_CALL(*converter, StartReverseConversion(_, _))
+        .WillRepeatedly([&](Segments* out, absl::string_view text) {
+          out->Clear();
+          if (text != test.raw && text != test.mozc && text != test.expected) {
+            ADD_FAILURE() << "Unexpected local reverse reading: " << text;
+            return false;
+          }
+          auto* segment = out->add_segment();
+          segment->set_key(text);
+          segment->add_candidate()->value = test.key;
+          return true;
+        });
+    ZenzLiveResponse response;
+    response.generation = 1;
+    response.key = test.key;
+    response.value = test.raw;
+    response.ok = true;
+    response.timeout = false;
+    commands::Command command;
+    ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+    EXPECT_EQ(peer.zenz_live_value_(), test.expected);
+    EXPECT_EQ(peer.zenz_live_applied_local_preferences_().size(),
+              test.expected == test.raw ? 0 : 1);
+  }
+}
+
+TEST_F(SessionTest, LocalV4CoarseFinalAlignmentAttributesOnlyKnownLocalSurface) {
+  struct TestCase {
+    std::string key;
+    std::string raw;
+    std::string displayed;
+    std::string final_value;
+    size_t reading_begin;
+    int expected_count;
+    std::string local_key = "りせき";
+    std::string disfavored = "離籍";
+    std::string preferred = "離席";
+  };
+  const TestCase cases[] = {
+      {"りせきしてかいとうします", "離籍して回答します",
+       "離席して回答します", "離籍して解凍します", 0, 1},
+      {"りせきしてかいとうします", "離籍して回答します",
+       "離席して回答します", "離席して解凍します", 0, 2},
+      {"りせきしてかいとうします", "離籍して回答します",
+       "離席して回答します", "離石して解凍します", 0, 2},
+      {"かいとうしてりせき", "回答して離籍", "回答して離席",
+       "解凍して離籍", std::string("かいとうして").size(), 1},
+      {"りせきしてりせき", "離籍して離籍", "離席して離籍",
+       "離石して離籍", 0, 2},
+      {"とりあつかいしてかいとう", "取扱いして回答", "取扱して回答",
+       "取扱いして解凍", 0, 1, "とりあつかい", "取扱い", "取扱"},
+  };
+  for (const TestCase& test : cases) {
+    SCOPED_TRACE(test.final_value);
+    MockEngine engine;
+    auto converter = CreateRecordingExternalLearningConverter(&engine);
+    ScopedUserProfileForZenzFeedbackSessionTest profile;
+    ASSERT_TRUE(profile.ok());
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    EnableZenzFeedbackLearning(&session);
+    for (int i = 0; i < 2; ++i) {
+      peer.zenz_feedback_store_().RecordLocalAccepted(
+          test.local_key, "empty", test.disfavored, test.preferred);
+    }
+    ZenzLocalPreference applied;
+    applied.key = test.local_key;
+    applied.context_class = "empty";
+    applied.disfavored_value = test.disfavored;
+    applied.preferred_value = test.preferred;
+    applied.has_reading_begin = true;
+    applied.reading_begin = test.reading_begin;
+    peer.context_()->set_state(ImeContext::CONVERSION);
+    peer.live_conversion_active_() = true;
+    peer.live_conversion_key_() = peer.zenz_live_key_() = test.key;
+    peer.live_conversion_value_() = peer.zenz_live_mozc_value_() = test.displayed;
+    peer.zenz_live_visible_generation_() = 1;
+    peer.zenz_live_value_() = test.displayed;
+    peer.zenz_live_raw_value_() = test.raw;
+    peer.zenz_live_applied_local_preferences_() = {applied};
+    peer.zenz_live_context_class_() = "empty";
+    peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+    peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+    EXPECT_CALL(*converter, StartReverseConversion(_, _))
+        .WillRepeatedly([&](Segments* out, absl::string_view text) {
+          out->Clear();
+          if (text != test.final_value && text != test.raw) {
+            return false;
+          }
+          auto* segment = out->add_segment();
+          segment->set_key(text);
+          segment->add_candidate()->value = test.key;
+          return true;
+        });
+    commands::Command command;
+    auto* result = command.mutable_output()->mutable_result();
+    result->set_type(commands::Result::STRING);
+    result->set_key(test.key);
+    result->set_value(test.final_value);
+    peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+    ASSERT_TRUE(peer.pending_zenz_feedback_().pending);
+    peer.ConfirmPendingZenzFeedback();
+    const auto local = peer.zenz_feedback_store_().GetLocalPreferences(
+        test.local_key, "empty", 12, 1);
+    ASSERT_EQ(local.size(), 1);
+    EXPECT_EQ(local[0].observation_count, test.expected_count);
+  }
+}
+
+TEST_F(SessionTest, UndoRejectedZenzCommitDiscardsFullAndLocalEvidence) {
+  MockEngine engine;
+  auto converter = CreateEngineConverterMock(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+  commands::Capability capability;
+  capability.set_text_deletion(commands::Capability::DELETE_PRECEDING_TEXT);
+  session.set_client_capability(capability);
+  commands::Command command;
+  InsertCharacterString("りせき", "aaa", &session, &command);
+  Segments mozc_segments;
+  auto* segment = mozc_segments.add_segment();
+  segment->set_key("りせき");
+  AddCandidate("りせき", "離席", segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(mozc_segments), Return(true)));
+  command.Clear();
+  ASSERT_TRUE(session.Convert(&command));
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = peer.live_conversion_preedit_() = "りせき";
+  peer.live_conversion_value_() = "離席";
+  peer.live_conversion_preedit_output_() = command.output().preedit();
+  peer.zenz_live_visible_generation_() = 1;
+  peer.zenz_live_key_() = peer.zenz_live_display_key_() = "りせき";
+  peer.zenz_live_value_() = peer.zenz_live_raw_value_() = "離籍";
+  peer.zenz_live_mozc_value_() = "離席";
+  peer.zenz_live_context_class_() = "empty";
+  peer.zenz_live_mozc_preedit_output_() = command.output().preedit();
+  peer.zenz_live_from_live_conversion_() = true;
+  command.Clear();
+  ASSERT_TRUE(peer.OutputZenzLiveCorrection("離籍", &command));
+  command.Clear();
+  ASSERT_TRUE(SendSpecialKey(commands::KeyEvent::SPACE, &session, &command));
+  EXPECT_CALL(*converter, CommitSegmentValue(_, _, _)).WillOnce(Return(true));
+  EXPECT_CALL(*converter, FinishConversion(_, _));
+  EXPECT_CALL(*converter, StartReverseConversion(_, _)).Times(0);
+  command.Clear();
+  ASSERT_TRUE(session.Commit(&command));
+  EXPECT_RESULT_AND_KEY("離席", "りせき", command);
+  ASSERT_TRUE(peer.pending_zenz_feedback_().pending);
+  EXPECT_TRUE(peer.zenz_feedback_store_().ListEntries().empty());
+  EXPECT_TRUE(peer.zenz_feedback_store_().ListLocalPreferenceEntries().empty());
+  command.Clear();
+  ASSERT_TRUE(session.Undo(&command));
+  ASSERT_TRUE(command.output().has_deletion_range());
+  EXPECT_FALSE(peer.pending_zenz_feedback_().pending);
+  peer.ConfirmPendingZenzFeedback();
+  EXPECT_TRUE(peer.zenz_feedback_store_().ListEntries().empty());
+  EXPECT_TRUE(peer.zenz_feedback_store_().ListLocalPreferenceEntries().empty());
+}
 
 TEST_F(SessionTest,
        SpaceWhileZenzLiveCorrectionVisibleRevertsToMozcNormalConversion) {

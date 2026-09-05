@@ -5,6 +5,7 @@ EXPORTS
     UnregisterTIP
     UnregisterTIPRollback
     OpenUninstallSurveyPage
+    LaunchPostInstallDialog
     ShutdownServer
     RestoreUserIMEEnvironment
     HideCancelButton

@@ -57,8 +57,8 @@ bool StringAsIntegerComparator(absl::string_view lhs, absl::string_view rhs) {
 
 std::string Version::GetMozcVersion() { return version::kMozcVersion; }
 
-std::string Version::GetMozkeyReleaseVersion() {
-  return version::kMozkeyReleaseVersion;
+std::string Version::GetMozkeySpaceReleaseVersion() {
+  return version::kMozkeySpaceReleaseVersion;
 }
 
 #ifdef _WIN32

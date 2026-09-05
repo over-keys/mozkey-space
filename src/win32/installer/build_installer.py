@@ -33,6 +33,7 @@
 import argparse
 import os
 import pathlib
+import shutil
 import subprocess
 
 from build_tools import mozc_version
@@ -68,6 +69,30 @@ def exec_command(args: list[str], cwd: str) -> None:
     if stderr:
       msgs += ['-----stderr-----', stderr]
     raise ChildProcessError('\n'.join(msgs))
+
+
+def verify_msi_output(msi_path: pathlib.Path,
+                      verifier_path: pathlib.Path) -> None:
+  """Verifies the generated MSI's user-interface contract on Windows."""
+  powershell = shutil.which('pwsh') or shutil.which('powershell.exe')
+  if powershell is None:
+    raise FileNotFoundError(
+        'Neither pwsh nor powershell.exe was found for MSI verification.'
+    )
+  exec_command(
+      [
+          powershell,
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          str(verifier_path),
+          '-MsiPath',
+          str(msi_path),
+      ],
+      cwd=os.getcwd())
 
 
 def find_redist_crt_dir(redist_root: pathlib.Path, arch: str) -> pathlib.Path:
@@ -213,6 +238,10 @@ def run_wix4(args) -> None:
     if args.enable_win_universal_installer:
       commands += ['-define', 'MozcUniversalInstaller=Yes']
   exec_command(commands, cwd=os.getcwd())
+  if args.verify_msi:
+    verify_msi_output(
+        pathlib.Path(args.output).resolve(),
+        pathlib.Path(args.verify_msi).resolve())
 
 
 def main():
@@ -237,6 +266,11 @@ def main():
   parser.add_argument('--qt_core_dll', type=str)
   parser.add_argument('--wxs_path', type=str)
   parser.add_argument('--wix_path', type=str)
+  parser.add_argument(
+      '--verify_msi',
+      type=str,
+      default='',
+      help='PowerShell verifier for the generated Mozkey MSI.')
   parser.add_argument('--branding', type=str)
   parser.add_argument(
       '--debug_build', dest='debug_build', default=False, action='store_true'

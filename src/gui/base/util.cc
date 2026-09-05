@@ -36,9 +36,10 @@
 
 // Show the build number on the title for debugging when the build
 // configuration is official dev channel.
-#if defined(CHANNEL_DEV) && defined(GOOGLE_JAPANESE_INPUT_BUILD)
+#if defined(CHANNEL_DEV) && defined(GOOGLE_JAPANESE_INPUT_BUILD) && \
+    !defined(MOZKEY_SPACE_BUILD)
 #define MOZC_SHOW_BUILD_NUMBER_ON_TITLE
-#endif  // CHANNEL_DEV && GOOGLE_JAPANESE_INPUT_BUILD
+#endif  // CHANNEL_DEV && GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -128,11 +129,11 @@ void GuiUtil::InstallTranslator(absl::string_view resource_name) {
 
 // static
 QString GuiUtil::ProductName() {
-#ifdef GOOGLE_JAPANESE_INPUT_BUILD
+#if defined(GOOGLE_JAPANESE_INPUT_BUILD) && !defined(MOZKEY_SPACE_BUILD)
   const QString name = QObject::tr("Google Japanese Input");
-#else   // GOOGLE_JAPANESE_INPUT_BUILD
+#else  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
   const QString name = QObject::tr("Mozkey");
-#endif  // GOOGLE_JAPANESE_INPUT_BUILD
+#endif  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
   return name;
 }
 
