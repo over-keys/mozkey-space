@@ -51,6 +51,7 @@ package(default_visibility = ["//:__subpackages__"])
 
 cc_library(
     name = "clang_intrinsics_compat",
+    alwayslink = True,
     srcs = ["clang_intrinsics_compat.cc"],
     target_compatible_with = ["@platforms//os:windows"],
     visibility = ["//visibility:public"],
