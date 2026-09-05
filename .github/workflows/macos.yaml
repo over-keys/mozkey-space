@@ -83,14 +83,14 @@ jobs:
       - name: bazel build
         working-directory: ./src
         run: |
-          bazelisk build package --config oss_macos --macos_cpus=arm64 --config release_build
+          bazelisk build --config oss_macos --config release_build --macos_cpus=arm64 package --verbose_failures
 
       - name: upload artifacts
         uses: actions/upload-artifact@v6
         with:
           name: Mozc_arm64.pkg
           path: src/bazel-bin/mac/Mozc.pkg
-          if-no-files-found: warn
+          if-no-files-found: error
 
   build_intel64:
     needs: prepare_daily_dictionary
@@ -131,14 +131,14 @@ jobs:
       - name: bazel build
         working-directory: ./src
         run: |
-          bazelisk build package --config oss_macos --macos_cpus=x86_64 --config release_build
+          bazelisk build --config oss_macos --config release_build --macos_cpus=x86_64 package --verbose_failures
 
       - name: upload artifacts
         uses: actions/upload-artifact@v6
         with:
           name: Mozc_intel64.pkg
           path: src/bazel-bin/mac/Mozc.pkg
-          if-no-files-found: warn
+          if-no-files-found: error
 
   build_universal_binary:
     needs: prepare_daily_dictionary
@@ -179,14 +179,14 @@ jobs:
       - name: bazel build
         working-directory: ./src
         run: |
-          bazelisk build package --config oss_macos --macos_cpus=x86_64,arm64 --config release_build
+          bazelisk build --config oss_macos --config release_build --macos_cpus=x86_64,arm64 package --verbose_failures
 
       - name: upload artifacts
         uses: actions/upload-artifact@v6
         with:
           name: Mozc_universal_binary.pkg
           path: src/bazel-bin/mac/Mozc.pkg
-          if-no-files-found: warn
+          if-no-files-found: error
 
   test:
     needs: prepare_daily_dictionary
@@ -222,7 +222,7 @@ jobs:
       - name: bazel test
         working-directory: ./src
         run: |
-          bazelisk test ... --config oss_macos --build_tests_only -c dbg
+          bazelisk test --config oss_macos --build_tests_only -c dbg --test_output=errors ...
 
   # actions/cache works without this job, but having this would increase the likelihood of cache hit
   # in other jobs. Another approach would be to use "needs:".

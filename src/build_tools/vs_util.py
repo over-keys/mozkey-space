@@ -94,11 +94,12 @@ def get_vcvarsall(
   if arch.endswith('arm64'):
     base_cmd += ['Microsoft.VisualStudio.Component.VC.Tools.ARM64']
 
-  # Try Visual Studio 2022 first, then fall back to Visual Studio 2026 when
-  # VS 2022 is not installed. This keeps VS 2022 as the default on machines
-  # that have both versions installed.
+  # Try Visual Studio 2022 first, then fall back to any newer Visual Studio
+  # generation. This keeps VS 2022 as the default on machines that have both
+  # versions installed without becoming stale when a future VS generation is
+  # installed.
   # See https://github.com/microsoft/vswhere/wiki/Versions
-  for version_filter in ('[17,18)', '[18,19)'):
+  for version_filter in ('[17,18)', '[18,)'):
     cmd = base_cmd + ['-version', version_filter]
     process = subprocess.Popen(
         cmd,

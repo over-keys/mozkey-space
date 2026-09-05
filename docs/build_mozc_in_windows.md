@@ -130,29 +130,11 @@ if (-not (Test-Path (Join-Path $wixSource 'wix.5.0.2.nupkg'))) {
   throw "Local WiX NuGet source was not found: $wixSource"
 }
 
-# Prefer the pinned Build Tools installation; fall back to the standard VS paths.
-$vcCandidates = @(
-  'C:\BuildTools\VC',
-  'C:\Program Files\Microsoft Visual Studio\2022\Community\VC',
-  'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC',
-  'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC'
-) | Where-Object {
-  Test-Path (Join-Path $_ 'Auxiliary\Build\vcvarsall.bat')
-}
-$env:BAZEL_VC = $vcCandidates | Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($env:BAZEL_VC)) {
-  throw "Invalid BAZEL_VC (expected a VC directory): $env:BAZEL_VC"
-}
-$env:BAZEL_LLVM = Join-Path $src 'third_party\llvm'
-$bundledBash = Join-Path $src 'third_party\msys64\usr\bin\bash.exe'
-$env:BAZEL_SH = if (Test-Path $bundledBash) {
-  $bundledBash
-} else {
-  'C:\Program Files\Git\usr\bin\bash.exe'
-}
-if (-not (Test-Path -LiteralPath $env:BAZEL_SH)) {
-  throw "Bash was not found: $env:BAZEL_SH"
-}
+# Resolve Visual Studio and the bundled clang-cl/MSYS2 tools in the same way
+# as Actions.  Dot-sourcing keeps the environment variables in this shell.
+$repo = Split-Path -Parent $src
+$prepareToolchain = Join-Path $repo 'tools\build\prepare_windows_build_env.ps1'
+. $prepareToolchain -SourceDir $src
 $env:DOTNET_ROOT = $dotnet
 $env:DOTNET_ROOT_x64 = $dotnet
 $env:DOTNET_CLI_HOME = $dotnetHome
@@ -169,6 +151,7 @@ $bazelVersion = ($versionLine -split '=', 2)[1].Trim()
 $bazelCommand = Get-Command bazelisk -ErrorAction SilentlyContinue
 if ($bazelCommand) {
   $bazel = $bazelCommand.Source
+  if ([string]::IsNullOrWhiteSpace($bazel)) { $bazel = $bazelCommand.Path }
 } else {
   $metadata = Join-Path $env:LOCALAPPDATA "bazelisk\downloads\metadata\bazelbuild\bazel-$bazelVersion-windows-x86_64"
   if (-not (Test-Path -LiteralPath $metadata)) {
@@ -192,9 +175,10 @@ $bazelArgs = @(
   '--local_resources=cpu=2',
   '--local_resources=memory=2048',
   '--loading_phase_threads=1',
+  '--config=oss_windows',
   '--config=release_build',
   '--platforms=//:windows-x86_64',
-  "--repo_env=PATH=$dotnet",
+  "--repo_env=PATH=$env:PATH",
   "--repo_env=BAZEL_VC=$env:BAZEL_VC",
   "--repo_env=DOTNET_ROOT=$dotnet",
   "--repo_env=DOTNET_ROOT_x64=$dotnet",
@@ -204,8 +188,9 @@ $bazelArgs = @(
   '--action_env=BAZEL_VC',
   '--action_env=BAZEL_LLVM',
   '--action_env=BAZEL_SH',
-  '--copt=/D_CRT_USE_BUILTIN_OFFSETOF',
-  '--host_copt=/D_CRT_USE_BUILTIN_OFFSETOF',
+  '--copt=/D_CRT_USE_BUILTIN_OFFSETOF=1',
+  '--host_copt=/D_CRT_USE_BUILTIN_OFFSETOF=1',
+  '--verbose_failures',
   '//win32/installer:installer'
 )
 & $bazel @bazelArgs
