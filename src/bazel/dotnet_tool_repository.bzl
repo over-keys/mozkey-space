@@ -65,6 +65,7 @@ def _dotnet_tool_repo_impl(repo_ctx):
         "--tool-path",
         repo_root,
     ]
+
     # Local builds may provide a previously downloaded package source when
     # NuGet's network endpoint is unavailable. Actions leaves this unset and
     # therefore uses the normal NuGet source resolution.
