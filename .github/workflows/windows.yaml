@@ -153,7 +153,7 @@ jobs:
         env:
           ANDROID_NDK_HOME: ""
         run: |
-          bazelisk build --config release_build --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 package
+          bazelisk build --config release_build package
 
       - name: Verify interactive MSI completion dialogs
         shell: pwsh
@@ -2109,7 +2109,7 @@ jobs:
         env:
           ANDROID_NDK_HOME: ""
         run: |
-          bazelisk test ... -c dbg --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --build_tests_only --test_output=errors
+          bazelisk test ... -c dbg --build_tests_only --test_output=errors
 
   test_arm64:
     if: ${{ false }}

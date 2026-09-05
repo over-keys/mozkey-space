@@ -40,6 +40,12 @@ build:windows_env --extra_toolchains=@local_config_cc//:cc-toolchain-x64_x86_win
 build:windows_env --host_platform=//:host-windows-clang-cl
 build:windows_env --repo_env=BAZEL_WIN32_WINNT=/D_WIN32_WINNT=0x0A00
 build:windows_env --action_env=BAZEL_VC
+# Keep the bundled clang-cl configuration identical for local builds and CI.
+# The Windows SDK's offsetof macro needs clang's builtin implementation.
+build:windows_env --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1
+build:windows_env --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1
+test:windows_env --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1
+test:windows_env --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1
 
 ## Compiler options
 common:linux_env   --config=compiler_gcc_like
