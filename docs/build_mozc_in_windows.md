@@ -99,6 +99,113 @@ for Windows.
 bazelisk build package --config release_build
 ```
 
+### mozkey-space のローカルリリースビルド（低負荷・再現用）
+
+mozkey-space の Windows MSI をこの環境で作るときは、次の条件をそろえて
+から実行する。特に `BAZEL_VC` は Visual Studio のインストール先ではなく、
+`VC` ディレクトリを指す必要がある。
+
+```powershell
+# src ディレクトリで実行する。
+$src = (Get-Location).Path
+$work = Split-Path -Parent $src
+$dotnet = Join-Path $work 'local-dotnet-sdk-8.0'
+$dotnetHome = Join-Path $work 'local-dotnet-home'
+$nuget = Join-Path $work 'local-nuget-packages'
+$wixSource = Join-Path $work 'local-wix-tool-5.0.2\.store\wix\5.0.2\wix\5.0.2'
+$bazelRoot = Join-Path $work '_bazel-user-root-mozkey-windows'
+
+if (-not (Test-Path (Join-Path $dotnet 'dotnet.exe'))) {
+  throw "Local .NET SDK was not found: $dotnet"
+}
+if (-not (Test-Path (Join-Path $wixSource 'wix.5.0.2.nupkg'))) {
+  throw "Local WiX NuGet source was not found: $wixSource"
+}
+
+# vs_util.py の出力は C:\...\VC になることを確認する。
+$env:BAZEL_VC = (& python build_tools\vs_util.py --arch x64).Trim()
+if (-not (Test-Path (Join-Path $env:BAZEL_VC 'Auxiliary\Build\vcvarsall.bat'))) {
+  throw "Invalid BAZEL_VC (expected a VC directory): $env:BAZEL_VC"
+}
+$env:BAZEL_LLVM = Join-Path $src 'third_party\llvm'
+$bundledBash = Join-Path $src 'third_party\msys64\usr\bin\bash.exe'
+$env:BAZEL_SH = if (Test-Path $bundledBash) {
+  $bundledBash
+} else {
+  'C:\Program Files\Git\usr\bin\bash.exe'
+}
+$env:DOTNET_ROOT = $dotnet
+$env:DOTNET_ROOT_x64 = $dotnet
+$env:DOTNET_CLI_HOME = $dotnetHome
+$env:NUGET_PACKAGES = $nuget
+$env:PATH = "$dotnet;$env:PATH"
+
+$bazelArgs = @(
+  '--nowindows_enable_symlinks',
+  "--output_user_root=$bazelRoot",
+  'build',
+  '--jobs=2',
+  '--local_resources=cpu=2',
+  '--local_resources=memory=2048',
+  '--loading_phase_threads=1',
+  '--config=release_build',
+  '--platforms=//:windows-x86_64',
+  "--repo_env=PATH=$dotnet",
+  "--repo_env=BAZEL_VC=$env:BAZEL_VC",
+  "--repo_env=DOTNET_ROOT=$dotnet",
+  "--repo_env=DOTNET_ROOT_x64=$dotnet",
+  "--repo_env=DOTNET_CLI_HOME=$dotnetHome",
+  "--repo_env=NUGET_PACKAGES=$nuget",
+  "--repo_env=DOTNET_TOOL_SOURCE=$wixSource",
+  '--action_env=BAZEL_VC',
+  '--action_env=BAZEL_LLVM',
+  '--action_env=BAZEL_SH',
+  '--copt=/D_CRT_USE_BUILTIN_OFFSETOF',
+  '--host_copt=/D_CRT_USE_BUILTIN_OFFSETOF',
+  '//win32/installer:installer'
+)
+& bazelisk @bazelArgs
+if ($LASTEXITCODE -ne 0) {
+  throw "Bazel build failed: $LASTEXITCODE"
+}
+```
+
+`--jobs=2` と `BelowNormal` 相当の低負荷設定を使うため、リリース前の
+ビルドでも CPU 使用率を抑えられる。Bazel の出力ルートは毎回消さず、
+`version.bzl` の変更は入力として自動的に再ビルドさせる。起動オプションを
+変えた場合は `bazel shutdown` を一度実行してから再試行する。
+
+リリース番号を上げる場合は `MOZKEY_SPACE_RELEASE_VERSION_PATCH` と
+`BUILD_OSS` を更新し、MSI の内部版（`MAJOR.MINOR.BUILD.REVISION`）も以前の
+成果物より大きくする。生成後は、少なくとも次を確認する。
+
+```powershell
+$msi = Join-Path $src 'bazel-bin\win32\installer\Mozc64.msi'
+if (-not (Test-Path $msi)) { throw "MSI was not produced: $msi" }
+& "$src\win32\installer\verify_msi_post_install_dialog.ps1" -MsiPath $msi
+Get-FileHash -Algorithm SHA256 $msi
+```
+
+`verify_msi_post_install_dialog.ps1` は実際にインストールせず、完了後の
+カスタムアクションが存在し、通常の対話型インストールでだけ実行され、
+アンインストール時には実行されないことを MSI 内部から検査する。
+
+よくある失敗と対処は次のとおり。
+
+* `VCVARSALL.BAT` や `cl.exe` が見つからない場合は、`BAZEL_VC` が
+  `C:\BuildTools\VC` のような `VC` ディレクトリか確認する。
+* WiX の復元が .NET SDK 不在で失敗する場合は、`dotnet.exe` を含む SDK の
+  パスを `PATH` と `repo_env` の両方に設定する。
+* シンボリックリンク権限で失敗する場合は、上記の
+  `--nowindows_enable_symlinks` を付ける。Developer Mode を有効にする必要は
+  ない。
+* `__mm_*` の未解決シンボルが x86 TIP リンクで出る場合は、ソースの
+  `base/clang_intrinsics_compat.cc` が x86 用の COFF 装飾名を含む版か確認する。
+  これはキャッシュ削除で直る種類のエラーではない。
+* 外部 protobuf などのホストツールで `_mm_*` の未解決シンボルが出る場合は、
+  `src/.bazelrc` の `--host_platform=@platforms//host` を維持する。製品の
+  ターゲットは bundled clang-cl、生成ツールはネイティブ MSVC という分離にする。
+
 #### Install Mozc
 
 After building Mozc, run the following command to install it:

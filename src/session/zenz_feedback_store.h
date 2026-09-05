@@ -125,15 +125,6 @@ class ZenzFeedbackStore {
       absl::string_view context_class,
       const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const;
 
-  std::vector<ZenzFeedbackCandidate> GetAcceptedCandidates(
-      absl::string_view key,
-      absl::string_view context_class) const;
-
-  std::vector<ZenzFeedbackCandidate> GetAcceptedCandidates(
-      absl::string_view key,
-      absl::string_view context_class,
-      const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const;
-
   std::vector<ZenzLocalPreference> GetLocalPreferences(
       absl::string_view full_key,
       absl::string_view context_class,
@@ -199,20 +190,6 @@ class ZenzFeedbackStore {
 
   void RecordLocalRejecteds(
       const std::vector<ZenzLocalPreference>& preferences);
-
-  // Transitional source-level aliases used by call sites while v4 integration
-  // is being applied.  They write v4 accepted events only; no legacy format is
-  // read or written.
-  void RecordLocalPreference(absl::string_view key,
-                             absl::string_view context_class,
-                             absl::string_view preferred_value,
-                             absl::string_view disfavored_value,
-                             absl::string_view reason =
-                                 "rejected_zenz_final_commit");
-
-  void RecordLocalPreferences(
-      const std::vector<ZenzLocalPreference>& preferences,
-      absl::string_view reason = "rejected_zenz_final_commit");
 
   // Heavy operation. Call only at safe lifecycle/management points.
   // Full and Local each get their own independent max_entries budget.

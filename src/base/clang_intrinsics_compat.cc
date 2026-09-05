@@ -13,7 +13,11 @@
 
 #if defined(__clang__) && (defined(_M_X64) || defined(_M_IX86))
 
-#define MOZKEY_CLANG_COMPAT __declspec(noinline) __attribute__((weak))
+// This translation unit is linked once through the public compatibility
+// library.  Keep the fallback definitions strong: clang's weak COFF symbols
+// are emitted as weak externals, which can leave the x86 linker unable to
+// resolve an /alternatename target.
+#define MOZKEY_CLANG_COMPAT __declspec(noinline)
 
 static_assert(sizeof(__m128i) == 16);
 
@@ -133,6 +137,22 @@ extern "C" MOZKEY_CLANG_COMPAT int mozkey_mm_movemask_epi8(__m128i value) {
   return mask;
 }
 
+// C symbols in 32-bit COFF have a leading underscore.  The unresolved
+// intrinsic names therefore have two underscores (_mm_* + decoration), while
+// the fallback symbols have one.  x64 does not add that extra decoration.
+#if defined(_M_IX86)
+#pragma comment(linker, "/alternatename:__mm_loadu_si128=_mozkey_mm_loadu_si128")
+#pragma comment(linker, "/alternatename:__mm_loadl_epi64=_mozkey_mm_loadl_epi64")
+#pragma comment(linker, "/alternatename:__mm_set1_epi8=_mozkey_mm_set1_epi8")
+#pragma comment(linker, "/alternatename:__mm_set1_epi16=_mozkey_mm_set1_epi16")
+#pragma comment(linker, "/alternatename:__mm_cmpeq_epi8=_mozkey_mm_cmpeq_epi8")
+#pragma comment(linker, "/alternatename:__mm_cmpeq_epi16=_mozkey_mm_cmpeq_epi16")
+#pragma comment(linker, "/alternatename:__mm_cmpgt_epi8=_mozkey_mm_cmpgt_epi8")
+#pragma comment(linker, "/alternatename:__mm_and_si128=_mozkey_mm_and_si128")
+#pragma comment(linker, "/alternatename:__mm_subs_epi8=_mozkey_mm_subs_epi8")
+#pragma comment(linker, "/alternatename:__mm_storeu_si128=_mozkey_mm_storeu_si128")
+#pragma comment(linker, "/alternatename:__mm_movemask_epi8=_mozkey_mm_movemask_epi8")
+#else
 #pragma comment(linker, "/alternatename:_mm_loadu_si128=mozkey_mm_loadu_si128")
 #pragma comment(linker, "/alternatename:_mm_loadl_epi64=mozkey_mm_loadl_epi64")
 #pragma comment(linker, "/alternatename:_mm_set1_epi8=mozkey_mm_set1_epi8")
@@ -144,5 +164,6 @@ extern "C" MOZKEY_CLANG_COMPAT int mozkey_mm_movemask_epi8(__m128i value) {
 #pragma comment(linker, "/alternatename:_mm_subs_epi8=mozkey_mm_subs_epi8")
 #pragma comment(linker, "/alternatename:_mm_storeu_si128=mozkey_mm_storeu_si128")
 #pragma comment(linker, "/alternatename:_mm_movemask_epi8=mozkey_mm_movemask_epi8")
+#endif
 
 #endif  // defined(__clang__) && (defined(_M_X64) || defined(_M_IX86))

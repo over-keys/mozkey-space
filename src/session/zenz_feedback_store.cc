@@ -109,6 +109,7 @@ using LocalDirections =
 struct FeedbackData {
   FeedbackCounts counts;
   std::map<std::string, LocalDirections> local_counts_by_reading;
+  size_t next_sequence = 0;
 };
 
 std::mutex g_feedback_data_cache_mutex;
@@ -353,6 +354,10 @@ bool LoadRecordsFromStream(std::istream* input, bool strict,
   std::string line;
   size_t sequence = 0;
   while (std::getline(*input, line)) {
+    // Binary streams preserve CRLF from Windows TSV editors/imports.
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
     if (line.empty()) {
       continue;
     }
@@ -368,6 +373,12 @@ bool LoadRecordsFromStream(std::istream* input, bool strict,
     }
     record.sequence = sequence++;
     records->push_back(std::move(record));
+  }
+  // Tolerating malformed rows must not hide an I/O failure. Management callers
+  // could otherwise rewrite the store using only the prefix that was readable.
+  if (input->bad() || !input->eof()) {
+    records->clear();
+    return false;
   }
   return all_valid || !strict;
 }
@@ -667,40 +678,42 @@ CanonicalLocalIdentity CanonicalizeLocalIdentity(
   return canonical;
 }
 
-std::shared_ptr<const FeedbackData> BuildFeedbackData(
+void ApplyRecordToFeedbackData(const Record& record, FeedbackData* data) {
+  const size_t sequence = data->next_sequence++;
+  if (record.kind == RecordKind::kFull) {
+    Counts& counts = data->counts[FeedbackKey(record.key, record.context_class,
+                                             record.value)];
+    if (record.action == "accepted") {
+      AddAccepted(record.count, &counts);
+    } else {
+      AddRejected(record.extra, record.count, &counts);
+    }
+    return;
+  }
+
+  const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+      record.key, record.value, record.extra);
+  // Disk replay and verified appends share the same ordered cap/floor logic.
+  // A net accepted-minus-rejected sum would change learning after saturation
+  // or rejection at zero.
+  LocalCounts& counts = data->local_counts_by_reading[local.key]
+      [{local.raw_zenz_surface, local.corrected_surface}];
+  counts.last_sequence = sequence;
+  if (record.action == "accepted") {
+    const int remaining = kMaxLocalEvidenceCount - counts.count;
+    counts.count = record.count >= remaining ? kMaxLocalEvidenceCount
+                                            : counts.count + record.count;
+  } else {
+    counts.count = record.count >= counts.count ? 0
+                                               : counts.count - record.count;
+  }
+}
+
+std::shared_ptr<FeedbackData> BuildFeedbackData(
     const std::vector<Record>& records) {
   auto data = std::make_shared<FeedbackData>();
   for (const Record& record : records) {
-    if (record.kind == RecordKind::kFull) {
-      Counts& counts =
-          data->counts[FeedbackKey(record.key, record.context_class,
-                                   record.value)];
-      if (record.action == "accepted") {
-        AddAccepted(record.count, &counts);
-      } else {
-        AddRejected(record.extra, record.count, &counts);
-      }
-      continue;
-    }
-
-    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
-        record.key, record.value, record.extra);
-    // Replay once in file order when loading the immutable snapshot. Applying
-    // the cap/floor per event is essential: a net accepted-minus-rejected sum
-    // would change learning after saturation or rejection at zero.
-    LocalCounts& counts = data->local_counts_by_reading[local.key]
-        [{local.raw_zenz_surface, local.corrected_surface}];
-    counts.last_sequence = record.sequence;
-    if (record.action == "accepted") {
-      const int remaining = kMaxLocalEvidenceCount - counts.count;
-      counts.count = record.count >= remaining
-                         ? kMaxLocalEvidenceCount
-                         : counts.count + record.count;
-    } else {
-      counts.count = record.count >= counts.count
-                         ? 0
-                         : counts.count - record.count;
-    }
+    ApplyRecordToFeedbackData(record, data.get());
   }
   return data;
 }
@@ -908,6 +921,7 @@ class ScopedFeedbackInterprocessLock {
 };
 
 struct FileStamp {
+  bool valid = true;
   bool exists = false;
   uintmax_t size = 0;
   std::filesystem::file_time_type write_time = {};
@@ -921,31 +935,35 @@ FileStamp GetFileStamp(const std::filesystem::path& path) {
   std::error_code ec;
   stamp.exists = std::filesystem::exists(path, ec);
   if (ec || !stamp.exists) {
-    return FileStamp();
+    stamp.valid = !ec;
+    return stamp;
   }
   stamp.size = std::filesystem::file_size(path, ec);
   if (ec) {
-    return FileStamp();
+    stamp.valid = false;
+    return stamp;
   }
   stamp.write_time = std::filesystem::last_write_time(path, ec);
   if (ec) {
-    return FileStamp();
+    stamp.valid = false;
+    return stamp;
   }
   return stamp;
 }
 
 [[maybe_unused]] bool SameStamp(const FileStamp& lhs, const FileStamp& rhs) {
-  return lhs.exists == rhs.exists &&
+  return lhs.valid && rhs.valid && lhs.exists == rhs.exists &&
          lhs.size == rhs.size &&
          lhs.write_time == rhs.write_time;
 }
 
 struct FeedbackDataCache {
   bool valid = false;
+  bool stamp_valid = false;
   std::filesystem::path path;
   FileStamp stamp;
   std::chrono::steady_clock::time_point next_stamp_check;
-  std::shared_ptr<const FeedbackData> data;
+  std::shared_ptr<FeedbackData> data;
 };
 
 FeedbackDataCache g_feedback_data_cache;
@@ -953,6 +971,33 @@ FeedbackDataCache g_feedback_data_cache;
 void InvalidateCache() {
   std::lock_guard<std::mutex> lock(g_feedback_data_cache_mutex);
   g_feedback_data_cache = FeedbackDataCache();
+}
+
+void UpdateCacheAfterAppend(const std::filesystem::path& path,
+                            const FileStamp& before, size_t appended_bytes,
+                            const std::vector<Record>& records) {
+  // The mutation and interprocess locks are still held. A snapshot can only be
+  // advanced if it represents exactly the file to which this append was made.
+  const FileStamp after = GetFileStamp(path);
+  std::lock_guard<std::mutex> lock(g_feedback_data_cache_mutex);
+  auto& cache = g_feedback_data_cache;
+  if (!cache.valid || !cache.stamp_valid || cache.path != path ||
+      cache.data == nullptr || !SameStamp(cache.stamp, before) ||
+      !after.valid || !after.exists || after.size < before.size ||
+      after.size - before.size != appended_bytes) {
+    cache = FeedbackDataCache();
+    return;
+  }
+  // Readers retain immutable snapshots outside the mutex. Copy only when one
+  // is in use; the normal single-session path needs no full map copy/reparse.
+  if (cache.data.use_count() != 1) {
+    cache.data = std::make_shared<FeedbackData>(*cache.data);
+  }
+  for (const Record& record : records) {
+    ApplyRecordToFeedbackData(record, cache.data.get());
+  }
+  cache.stamp = after;
+  // Do not postpone the existing deadline for discovering other-process edits.
 }
 
 bool LoadRecordsFromDisk(std::vector<Record>* records) {
@@ -965,6 +1010,9 @@ bool LoadRecordsFromDisk(std::vector<Record>* records) {
     return true;
   }
   const FileStamp stamp = GetFileStamp(path);
+  if (!stamp.valid) {
+    return false;
+  }
   if (!stamp.exists) {
     return true;
   }
@@ -993,28 +1041,34 @@ std::shared_ptr<const FeedbackData> LoadFeedbackData() {
   if (g_feedback_data_cache.valid &&
       g_feedback_data_cache.path == path &&
       g_feedback_data_cache.data != nullptr &&
+      g_feedback_data_cache.stamp_valid &&
       SameStamp(g_feedback_data_cache.stamp, stamp)) {
     g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
     return g_feedback_data_cache.data;
   }
 
   std::vector<Record> records;
-  if (stamp.exists) {
+  bool loaded = stamp.valid;
+  if (loaded && stamp.exists) {
     std::ifstream file(path, std::ios::binary);
-    if (!file) {
-      if (g_feedback_data_cache.valid &&
-          g_feedback_data_cache.path == path &&
-          g_feedback_data_cache.data != nullptr) {
-        g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
-        return g_feedback_data_cache.data;
-      }
-      records.clear();
-    } else {
-      (void)LoadRecordsFromStream(&file, false, &records);
+    loaded = file && LoadRecordsFromStream(&file, false, &records);
+  }
+  if (!loaded) {
+    // Keep the last complete snapshot (or an empty one on a cold read), but
+    // retry after the interval even if the file's stamp has not changed.
+    if (g_feedback_data_cache.path != path ||
+        g_feedback_data_cache.data == nullptr) {
+      g_feedback_data_cache.data = BuildFeedbackData({});
     }
+    g_feedback_data_cache.valid = true;
+    g_feedback_data_cache.stamp_valid = false;
+    g_feedback_data_cache.path = path;
+    g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
+    return g_feedback_data_cache.data;
   }
 
   g_feedback_data_cache.valid = true;
+  g_feedback_data_cache.stamp_valid = true;
   g_feedback_data_cache.path = path;
   g_feedback_data_cache.stamp = stamp;
   g_feedback_data_cache.next_stamp_check = now + kStampCheckInterval;
@@ -1133,6 +1187,7 @@ void AppendRecords(const std::vector<Record>& records) {
   }
 
   bool needs_boundary_newline = false;
+  const FileStamp before = GetFileStamp(path);
   if (!NeedsAppendBoundaryNewline(path, &needs_boundary_newline)) {
     return;
   }
@@ -1150,10 +1205,13 @@ void AppendRecords(const std::vector<Record>& records) {
   }
   file.write(text.data(), static_cast<std::streamsize>(text.size()));
   file.flush();
+  file.close();  // Windows finalizes the write timestamp when the handle closes.
   if (!file) {
+    InvalidateCache();
     return;
   }
-  InvalidateCache();
+  UpdateCacheAfterAppend(path, before,
+                        text.size() + (needs_boundary_newline ? 1 : 0), records);
 }
 
 [[maybe_unused]] std::filesystem::path WidePathToFilesystemPath(const std::wstring& path) {
@@ -1315,20 +1373,6 @@ std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetRankedCandidates(
   return result;
 }
 
-std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetAcceptedCandidates(
-    absl::string_view key,
-    absl::string_view context_class) const {
-  return GetAcceptedCandidates(key, context_class,
-                               ZenzFeedbackAutoBlockPolicy());
-}
-
-std::vector<ZenzFeedbackCandidate> ZenzFeedbackStore::GetAcceptedCandidates(
-    absl::string_view key,
-    absl::string_view context_class,
-    const ZenzFeedbackAutoBlockPolicy& auto_block_policy) const {
-  return GetRankedCandidates(key, context_class, auto_block_policy);
-}
-
 std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     absl::string_view full_key, absl::string_view context_class,
     size_t max_results, int min_observation_count,
@@ -1350,6 +1394,26 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     int count = 0;
     size_t last_sequence = 0;
   };
+  const auto better = [](const Candidate& lhs, const Candidate& rhs) {
+    if (lhs.key.size() != rhs.key.size()) {
+      return lhs.key.size() > rhs.key.size();
+    }
+    if (lhs.count != rhs.count) {
+      return lhs.count > rhs.count;
+    }
+    if (lhs.last_sequence != rhs.last_sequence) {
+      return lhs.last_sequence > rhs.last_sequence;
+    }
+    if (lhs.key != rhs.key) {
+      return lhs.key < rhs.key;
+    }
+    if (lhs.raw != rhs.raw) {
+      return lhs.raw < rhs.raw;
+    }
+    return lhs.corrected < rhs.corrected;
+  };
+  // Keep only the best max_results candidates, with the worst at the front.
+  // Ranking remains identical without retaining/sorting every matching rule.
   std::vector<Candidate> candidates;
 
   for (const auto& [reading, directions] : data->local_counts_by_reading) {
@@ -1367,6 +1431,9 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     // rules before ApplyLocalPreferenceRepairs can disambiguate them.
     for (const auto& [direction, counts] : directions) {
       const auto& [raw, corrected] = direction;
+      if (counts.count < threshold) {
+        continue;
+      }
       // These are necessary conditions only. Exact reading-position and
       // Mozc-surface correspondence is still checked by Session after this
       // bounded ranking step.
@@ -1378,41 +1445,28 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
                absl::string_view::npos)) {
         continue;
       }
-      if (counts.count < threshold) {
-        continue;
-      }
-
       // If the exact inverse direction is also mature globally, do not guess.
       const auto inverse = directions.find({corrected, raw});
       if (inverse != directions.end() && inverse->second.count >= threshold) {
         continue;
       }
 
-      candidates.push_back(
-          {reading, raw, corrected, counts.count, counts.last_sequence});
+      const Candidate candidate{
+          reading, raw, corrected, counts.count, counts.last_sequence};
+      if (candidates.size() < max_results) {
+        candidates.push_back(candidate);
+        std::push_heap(candidates.begin(), candidates.end(), better);
+      } else if (better(candidate, candidates.front())) {
+        std::pop_heap(candidates.begin(), candidates.end(), better);
+        candidates.back() = candidate;
+        std::push_heap(candidates.begin(), candidates.end(), better);
+      }
     }
   }
 
-  std::sort(candidates.begin(), candidates.end(),
-            [](const Candidate& lhs, const Candidate& rhs) {
-              if (lhs.key.size() != rhs.key.size()) {
-                return lhs.key.size() > rhs.key.size();
-              }
-              if (lhs.count != rhs.count) {
-                return lhs.count > rhs.count;
-              }
-              if (lhs.last_sequence != rhs.last_sequence) {
-                return lhs.last_sequence > rhs.last_sequence;
-              }
-              if (lhs.key != rhs.key) {
-                return lhs.key < rhs.key;
-              }
-              if (lhs.raw != rhs.raw) {
-                return lhs.raw < rhs.raw;
-              }
-              return lhs.corrected < rhs.corrected;
-            });
+  std::sort_heap(candidates.begin(), candidates.end(), better);
 
+  result.reserve(candidates.size());
   for (const Candidate& candidate : candidates) {
     ZenzLocalPreference preference;
     preference.key = candidate.key;
@@ -1423,9 +1477,6 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     preference.disfavored_value = candidate.raw;
     preference.observation_count = candidate.count;
     result.push_back(std::move(preference));
-    if (result.size() >= max_results) {
-      break;
-    }
   }
   return result;
 }
@@ -1769,19 +1820,6 @@ void ZenzFeedbackStore::RecordLocalRejecteds(
   AppendRecords(records);
 }
 
-void ZenzFeedbackStore::RecordLocalPreference(
-    absl::string_view key, absl::string_view context_class,
-    absl::string_view preferred_value, absl::string_view disfavored_value,
-    absl::string_view) {
-  RecordLocalAccepted(key, context_class, disfavored_value, preferred_value);
-}
-
-void ZenzFeedbackStore::RecordLocalPreferences(
-    const std::vector<ZenzLocalPreference>& preferences,
-    absl::string_view) {
-  RecordLocalAccepteds(preferences);
-}
-
 bool ZenzFeedbackStore::Maintenance(size_t max_entries) {
   max_entries =
       std::clamp(max_entries, kMinMaintenanceEntries,
@@ -2005,6 +2043,9 @@ bool ZenzFeedbackStore::MaybeMaintenance(size_t max_entries) {
       std::clamp(max_entries, kMinMaintenanceEntries, kMaxMaintenanceEntries);
   const std::filesystem::path maintenance_path = FeedbackPathForRead();
   const FileStamp current_stamp = GetFileStamp(maintenance_path);
+  if (!current_stamp.valid) {
+    return false;
+  }
   const uintmax_t growth_threshold = std::max<uintmax_t>(
       256 * 1024, static_cast<uintmax_t>(max_entries) * 512);
 
