@@ -39,7 +39,7 @@ jobs:
       - name: Run
         working-directory: ./src
         run: |
-          go install github.com/bazelbuild/buildtools/buildifier@v8.5.1
+          go install github.com/bazelbuild/buildtools/v8/buildifier@v8.5.1
           $(go env GOPATH)/bin/buildifier --mode=diff -r .
 
   source_security:
