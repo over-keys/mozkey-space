@@ -147,18 +147,13 @@ jobs:
           Write-Host "Prepared CRT redist directory:"
           Get-ChildItem $expectedDir | Select-Object FullName
 
-      - name: Prepare clang compatibility object
-        shell: pwsh
-        run: |
-          .\tools\prepare_windows_clang_compat.ps1 -OutputPath (Join-Path $env:RUNNER_TEMP 'mozkey_clang_intrinsics_compat.obj')
-
       - name: build artifacts
         shell: cmd
         working-directory: .\src
         env:
           ANDROID_NDK_HOME: ""
         run: |
-          bazelisk build --config release_build --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_linkopt=%MOZKEY_HOST_INTRINSICS_COMPAT% package
+          bazelisk build --config release_build --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 package
 
       - name: Verify interactive MSI completion dialogs
         shell: pwsh
@@ -2108,18 +2103,13 @@ jobs:
         run: |
           python build_tools/update_deps.py
 
-      - name: Prepare clang compatibility object
-        shell: pwsh
-        run: |
-          .\tools\prepare_windows_clang_compat.ps1 -OutputPath (Join-Path $env:RUNNER_TEMP 'mozkey_clang_intrinsics_compat.obj')
-
       - name: runtests
         shell: cmd
         working-directory: .\src
         env:
           ANDROID_NDK_HOME: ""
         run: |
-          bazelisk test ... -c dbg --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_linkopt=%MOZKEY_HOST_INTRINSICS_COMPAT% --build_tests_only --test_output=errors
+          bazelisk test ... -c dbg --cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --host_cxxopt=/D_CRT_USE_BUILTIN_OFFSETOF=1 --build_tests_only --test_output=errors
 
   test_arm64:
     if: ${{ false }}
