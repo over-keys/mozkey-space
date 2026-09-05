@@ -39,7 +39,10 @@ jobs:
       - name: Run
         working-directory: ./src
         run: |
-          go install github.com/bazelbuild/buildtools/v8/buildifier@v8.5.1
+          # v8.5.1 is tagged on a module whose go.mod still declares the
+          # unversioned path. Pin the release commit so Go resolves it as a
+          # pseudo-version instead of rejecting the incompatible v8 tag.
+          go install github.com/bazelbuild/buildtools/buildifier@f6a1982250030df9c2d24a675a04f150ff6aca6b
           $(go env GOPATH)/bin/buildifier --mode=diff -r .
 
   source_security:
