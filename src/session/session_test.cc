@@ -2635,6 +2635,9 @@ TEST_F(SessionTest,
   SessionTestPeer session_peer(session);
   InitSessionToPrecomposition(&session);
   EnableZenzFeedbackLearning(&session);
+  // Keep the test's manually constructed live-conversion flags consistent
+  // with the underlying EngineConverter before the next text input cancels it.
+  InitSessionToConversionWithAiueo(&session, converter.get());
   SetPendingRejectedZenzFeedbackForTest(&session_peer);
   ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
 
