@@ -59,4 +59,4 @@ Mac 側は activate/deactivate 後の次の入力で `mozkey_zenz_context_reset`
 
 MSI をインストールせずに内包 CAB から本体・設定ツール・32/64bit TIP DLL を抽出し、MSI の ProductVersion と各ファイルの実際の版番号が 3.34.6215.100 であることを確認した。公開版番号 v4.60.4 は「バージョン情報」を表示する設定ツールに埋め込まれており、本体の SHA-256 は最終ビルドの本体と一致した。インストール完了ダイアログの MSI 構造検証も成功した。検証記録は `G:\mozkey\context-fix-4.60.4-20260906\verified-payload-final\verification.json`。
 
-実機の秀丸・Windows Word・Mac Word での入力操作確認は未実施である。インストールおよび公開は行っていない。
+実機の秀丸・Windows Word・Mac Word での入力操作確認は未実施である。4.60.4 は GitHub Actions で Windows MSI と macOS Universal PKG をビルド・検証し、GitHub Release に公開済みである。
