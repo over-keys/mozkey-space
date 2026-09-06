@@ -333,7 +333,13 @@ mozc_cc_test(
     name = "com_implements_test",
     size = "small",
     srcs = ["com_implements_test.cc"],
-    copts = ["-Wno-microsoft-exception-spec"],
+    # This is a clang-cl-only warning switch.  The default host-platform test
+    # configuration uses native MSVC, which rejects clang warning names as
+    # numeric warning arguments.
+    copts = select({
+        "//:compiler_clang_cl": ["-Wno-microsoft-exception-spec"],
+        "//conditions:default": [],
+    }),
     tags = MOZC_TAGS.WIN_ONLY,
     target_compatible_with = ["@platforms//os:windows"],
     deps = [

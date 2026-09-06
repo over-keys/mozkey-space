@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "testing/gunit.h"
@@ -65,7 +67,8 @@ class ScopedFeedbackProfile {
   }
 
   ~ScopedFeedbackProfile() {
-    ZenzFeedbackStore().ClearAll();
+    if (!ok_) return;  // Never clear the real profile if isolation failed.
+    (void)ZenzFeedbackStore().ClearAll();
     if (had_old_profile_) {
       ::SetEnvironmentVariableW(L"USERPROFILE", old_profile_.c_str());
     } else {
@@ -122,7 +125,8 @@ class ScopedFeedbackProfile {
   }
 
   ~ScopedFeedbackProfile() {
-    ZenzFeedbackStore().ClearAll();
+    if (!ok_) return;
+    (void)ZenzFeedbackStore().ClearAll();
     if (had_old_home_) {
       ::setenv("HOME", old_home_.c_str(), 1);
     } else {
@@ -407,6 +411,163 @@ V4_TEST(LocalRepeatedReadingRemainsAvailableForAlignmentGate) {
   EXPECT_EQ(rules[0].disfavored_value, "歯科医");
   EXPECT_EQ(rules[0].preferred_value, "司会");
   EXPECT_EQ(rules[0].observation_count, 2);
+}
+
+V4_TEST(LocalBoundedRankingPreservesLengthCountAndRecency) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  const auto path = V4_TEMP_PATH(L"ranking.tsv");
+  {
+    std::ofstream file{std::filesystem::path(path), std::ios::binary};
+    ASSERT_TRUE(file);
+    for (int i = 0; i < 80; ++i) {
+      // All rules match, with conflicting length, evidence and recency orders.
+      file << "v4\tlocal\taccepted\t" << (i % 2 ? "しかい" : "かい")
+           << "\tempty\t歯科医\t表記" << i << '\t' << (2 + i % 3) << '\n';
+    }
+  }
+  ASSERT_TRUE(store.ImportFromFile(path, ZenzFeedbackImportMode::kReplace));
+  for (const size_t limit : {size_t{0}, size_t{1}, size_t{12}, size_t{79},
+                             size_t{80}, size_t{100}}) {
+    std::vector<int> expected;
+    for (int length = 1; length >= 0; --length) {
+      for (int count = 4; count >= 2; --count) {
+        for (int i = 79; i >= 0; --i) {
+          if (i % 2 == length && 2 + i % 3 == count) expected.push_back(i);
+        }
+      }
+    }
+    if (expected.size() > limit) expected.resize(limit);
+    const auto actual = store.GetLocalPreferences("しかい", "empty", limit, 2);
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+      EXPECT_EQ(actual[i].preferred_value, "表記" + std::to_string(expected[i]));
+      EXPECT_EQ(actual[i].context_class, "empty");
+      EXPECT_FALSE(actual[i].has_reading_begin);
+    }
+  }
+}
+
+#if defined(_WIN32)
+V4_TEST(ContendedRecordingSkipsObservationAndRecovers) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  const HANDLE handle = ::CreateMutexW(
+      nullptr, FALSE, L"Local\\MozcZenzFeedbackStoreMutationV4");
+  ASSERT_NE(handle, nullptr);
+  const std::unique_ptr<void, decltype(&::CloseHandle)> mutex(handle,
+                                                            &::CloseHandle);
+  const DWORD wait = ::WaitForSingleObject(handle, 1000);
+  ASSERT_TRUE(wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED);
+  // A separate thread is needed because Win32 mutex ownership is recursive.
+  std::thread writer([&] { store.RecordAccepted("k", "empty", "v"); });
+  writer.join();
+  EXPECT_TRUE(::ReleaseMutex(handle));
+  EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 0);
+  store.RecordAccepted("k", "empty", "v");
+  EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 1);
+}
+
+V4_TEST(CacheRetriesFailedInitialReadWithoutFileChange) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordAccepted("k", "empty", "v");  // Invalidates the cache.
+  const HANDLE handle = ::CreateFileW(
+      V4_FEEDBACK_PATH().c_str(), GENERIC_WRITE,
+      FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL, nullptr);
+  ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+  {
+    const std::unique_ptr<void, decltype(&::CloseHandle)> locked(handle,
+                                                               &::CloseHandle);
+    EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 0);
+  }
+  // Merely releasing the sharing lock does not change the file stamp.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 1);
+}
+#endif
+
+V4_TEST(ImportAcceptsCrLfAndUnterminatedFinalLine) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  const auto path = V4_TEMP_PATH(L"crlf.tsv");
+  {
+    std::ofstream file{std::filesystem::path(path), std::ios::binary};
+    ASSERT_TRUE(file);
+    file << "v4\tfull\taccepted\tk\tempty\tv\t\t1\r\n"
+         << "v4\tlocal\taccepted\tしかい\tempty\t歯科医\t視界\t2\r\n"
+         << "v4\tfull\taccepted\tk\tempty\tv\t\t1";
+  }
+  ASSERT_TRUE(store.ImportFromFile(path, ZenzFeedbackImportMode::kReplace));
+  EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 2);
+  const auto rules = store.GetLocalPreferences("しかい", "empty", 12, 2);
+  ASSERT_EQ(rules.size(), 1);
+  EXPECT_EQ(rules[0].preferred_value, "視界");
+}
+
+V4_TEST(CachedAppendDetectsExternalChanges) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordAccepted("k", "empty", "v");
+  ASSERT_EQ(store.Decide("k", "empty", "v").accepted_count, 1);
+  {
+    // Simulate another process changing the file within the stamp-cache window.
+    std::ofstream file(V4_FEEDBACK_PATH(), std::ios::binary | std::ios::app);
+    ASSERT_TRUE(file);
+    file << "v4\tfull\taccepted\tk\tempty\tv\t\t3\n";
+  }
+  store.RecordAccepted("k", "empty", "v");
+  EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 5);
+}
+
+V4_TEST(CachedLocalReplayMatchesReloadAtCapAndFloor) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  auto expect_count = [&](int count) {
+    const auto entries = store.ListLocalPreferenceEntries();
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries[0].observation_count, count);
+  };
+  const auto path = V4_TEMP_PATH(L"cap.tsv");
+  {
+    std::ofstream file{std::filesystem::path(path), std::ios::binary};
+    ASSERT_TRUE(file);
+    file << "v4\tlocal\taccepted\tりせき\tempty\t離籍\t離席\t255\n";
+  }
+  ASSERT_TRUE(store.ImportFromFile(path, ZenzFeedbackImportMode::kReplace));
+  expect_count(255);
+  store.RecordLocalAccepted("りせきします", "empty", "離籍します", "離席します");
+  store.RecordLocalRejected("りせき", "empty", "離籍", "離席");
+  expect_count(254);
+  // Maintenance invalidates the snapshot and forces replay from disk.
+  ASSERT_TRUE(store.Maintenance(1000));
+  expect_count(254);
+  ASSERT_TRUE(store.ClearAll());
+  ASSERT_TRUE(store.ListLocalPreferenceEntries().empty());
+  store.RecordLocalRejected("りせき", "empty", "離籍", "離席");
+  store.RecordLocalAccepted("りせき", "empty", "離籍", "離席");
+  expect_count(1);
+  ASSERT_TRUE(store.Maintenance(1000));
+  expect_count(1);
+}
+
+V4_TEST(MetadataFailureIsNotTreatedAsMissingStore) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordAccepted("k", "empty", "v");
+  ASSERT_EQ(store.Decide("k", "empty", "v").accepted_count, 1);
+  const auto backup = std::filesystem::path(V4_TEMP_PATH(L"backup.tsv"));
+  std::filesystem::rename(V4_FEEDBACK_PATH(), backup);
+  ASSERT_TRUE(std::filesystem::create_directory(V4_FEEDBACK_PATH()));
+  // file_size fails for directories. This must not become a successful empty
+  // load that maintenance/export can use to overwrite previously learned data.
+  EXPECT_FALSE(store.Maintenance(1000));
+  EXPECT_FALSE(store.ExportToFile(V4_TEMP_PATH(L"export.tsv")));
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  EXPECT_EQ(store.Decide("k", "empty", "v").accepted_count, 1);
+  ASSERT_TRUE(std::filesystem::remove(V4_FEEDBACK_PATH()));
+  std::filesystem::rename(backup, V4_FEEDBACK_PATH());
 }
 
 V4_TEST(TornAppendKeepsFollowingRecordParseable) {

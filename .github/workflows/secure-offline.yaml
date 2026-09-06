@@ -79,37 +79,6 @@ jobs:
           path: src/third_party_cache
           key: update_deps-${{ runner.os }}-${{ hashFiles('src/build_tools/update_deps.py') }}
 
-      - name: Pin Bazel to Visual Studio 2022
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-
-          $vs = & $vswhere `
-            -version "[17.0,18.0)" `
-            -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
-
-          if (-not $vs) {
-            throw "Visual Studio 2022 with VC tools was not found."
-          }
-
-          $vc = Join-Path $vs "VC"
-
-          if (!(Test-Path $vc)) {
-            throw "VC path not found: $vc"
-          }
-
-          "BAZEL_VS=$vs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "BAZEL_VC=$vc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-          Write-Host "Pinned BAZEL_VS=$vs"
-          Write-Host "Pinned BAZEL_VC=$vc"
-
-          Write-Host "Available CRT redist files:"
-          Get-ChildItem (Join-Path $vc "Redist\MSVC") -Recurse -Filter msvcp140.dll |
-            Select-Object FullName
-
       - name: Install dependencies
         shell: cmd
         working-directory: .\src
@@ -123,64 +92,17 @@ jobs:
           python build_tools/build_qt.py --release --confirm_license
 
       - name: Delete Qt src to save disk space
-        shell: cmd
-        working-directory: .\src
-        run: |
-
-      - name: Prepare CRT redist directory expected by WiX
         shell: pwsh
         run: |
-          $expectedDir = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Redist\MSVC\14.50.35710\x64\Microsoft.VC145.CRT"
-
-          $requiredDlls = @(
-            "msvcp140.dll",
-            "msvcp140_1.dll",
-            "msvcp140_2.dll",
-            "vcruntime140.dll",
-            "vcruntime140_1.dll"
-          )
-
-          $searchRoots = @(
-            "C:\Program Files\Microsoft Visual Studio\2022",
-            "C:\Program Files\Microsoft Visual Studio\17",
-            "C:\Program Files\Microsoft Visual Studio\18",
-            "C:\Program Files (x86)\Microsoft Visual Studio\2022",
-            "C:\Program Files (x86)\Microsoft Visual Studio\17",
-            "C:\Program Files (x86)\Microsoft Visual Studio\18"
-          ) | Where-Object { Test-Path $_ }
-
-          Write-Host "Expected CRT redist dir:"
-          Write-Host $expectedDir
-
-          Write-Host "Search roots:"
-          $searchRoots | ForEach-Object { Write-Host $_ }
-
-          New-Item -ItemType Directory -Force $expectedDir | Out-Null
-
-          foreach ($dll in $requiredDlls) {
-            $source = Get-ChildItem -Path $searchRoots -Recurse -Filter $dll -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -match "\\x64\\Microsoft\.VC[0-9]+\.CRT\\" } |
-              Sort-Object FullName -Descending |
-              Select-Object -First 1
-
-            if (-not $source) {
-              Write-Host "Available CRT directories:"
-              Get-ChildItem -Path $searchRoots -Recurse -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -match "\\x64\\Microsoft\.VC[0-9]+\.CRT$" } |
-                Select-Object FullName
-
-              throw "Required CRT DLL was not found: $dll"
-            }
-
-            $destination = Join-Path $expectedDir $dll
-            Copy-Item $source.FullName $destination -Force
-            Write-Host "Copied $dll"
-            Write-Host "  from: $($source.FullName)"
-            Write-Host "  to:   $destination"
+          $qtSource = Join-Path $env:GITHUB_WORKSPACE 'src\third_party\qt_src'
+          if (Test-Path -LiteralPath $qtSource) {
+            Remove-Item -LiteralPath $qtSource -Recurse -Force
           }
 
-          Write-Host "Prepared CRT redist directory:"
-          Get-ChildItem $expectedDir | Select-Object FullName
+      - name: Verify Windows build toolchain
+        shell: pwsh
+        run: |
+          & ".\tools\build\prepare_windows_build_env.ps1" -SourceDir ".\src" -PersistToGitHub
 
       - name: Build Windows package
         shell: cmd
@@ -188,7 +110,7 @@ jobs:
         env:
           ANDROID_NDK_HOME: ""
         run: |
-          bazelisk build --config oss_windows --config release_build package
+          bazelisk build --config oss_windows --config release_build package --verbose_failures
 
       - name: Check Bazel output network DLL imports
         shell: pwsh
@@ -232,4 +154,4 @@ jobs:
         with:
           name: Mozc64.msi
           path: src/bazel-bin/win32/installer/Mozc64.msi
-          if-no-files-found: warn
+          if-no-files-found: error

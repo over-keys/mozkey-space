@@ -214,7 +214,8 @@ constexpr uint32_t kDefaultZenzLiveCorrectionPollMsec = 24;
 constexpr uint32_t kDefaultZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMaxZenzLiveCorrectionContextLength = 128;
 // Volatile left-context continuation cache used only when the current platform
-// cannot provide authoritative Zenz preceding context.  It is never persisted.
+// cannot yet provide the preceding context including our own committed text.
+// It is never persisted.
 constexpr size_t kMaxZenzContinuationLeftContextChars = 128;
 constexpr absl::string_view kZenzContextUnavailableFeature =
     "mozkey_zenz_context_unavailable";
@@ -4004,11 +4005,11 @@ bool Session::SendKey(commands::Command* command) {
   }
 #endif  // defined(_WIN32)
 
-  // Any key Mozc returns to the application may move the caret or modify text
-  // outside Mozc's knowledge. Conservatively end left-context continuation.
+  // An uneaten non-modifier key may move the caret or modify application text.
   if (command->input().has_key() && command->output().has_consumed() &&
-      !command->output().consumed()) {
-    zenz_continuation_left_context_.clear();
+      !command->output().consumed() &&
+      !IsPureModifierKeyEvent(command->input().key())) {
+    ClearZenzContinuationContextCache();
   }
   UpdateZenzContinuationContextCacheFromOutput(*command);
   MaybeSetUndoStatus(command);
@@ -4606,8 +4607,6 @@ bool Session::SendKeyPrecompositionState(commands::Command* command) {
   // client context once a conversion starts (mainly for performance reasons).
   if (command->has_input() && command->input().has_context()) {
     *context_->mutable_client_context() = command->input().context();
-    PrepareZenzContinuationPrecedingContext(
-        context_->mutable_client_context());
 
 #if defined(_WIN32) && defined(MOZC_LEFT_CONTEXT_DEBUG)
     const commands::Context& client_context = command->input().context();
@@ -4629,6 +4628,9 @@ bool Session::SendKeyPrecompositionState(commands::Command* command) {
 #endif  // defined(_WIN32) && defined(MOZC_LEFT_CONTEXT_DEBUG)
   }
 
+  // A missing Context message is also an unavailable-native case. Do not
+  // discard our own committed tail just because the client omitted it.
+  PrepareZenzContinuationPrecedingContext(context_->mutable_client_context());
   return ExecuteCommandSequence(command_sequence, command);
 }
 
@@ -4937,6 +4939,12 @@ bool Session::MakeSureIMEOff(mozc::commands::Command* command) {
 }
 
 bool Session::EchoBack(commands::Command* command) {
+  // Windows may stop after an uneaten TEST_SEND_KEY and never call SEND_KEY.
+  // Invalidate here as well so navigation cannot replay the preceding commit.
+  if (command->input().has_key() &&
+      !IsPureModifierKeyEvent(command->input().key())) {
+    ClearZenzContinuationContextCache();
+  }
   command->mutable_output()->set_consumed(false);
   context_->mutable_converter()->Reset();
   OutputKey(command);
@@ -6788,6 +6796,12 @@ void Session::SetZenzContinuationLeftContext(absl::string_view text) {
       kMaxZenzContinuationLeftContextChars);
 }
 
+void Session::ClearZenzContinuationContextCache() {
+  zenz_continuation_left_context_.clear();
+  zenz_continuation_before_commit_.reset();
+  zenz_continuation_latest_commit_prefix_.clear();
+}
+
 void Session::PrepareZenzContinuationPrecedingContext(
     commands::Context* client_context) {
   if (client_context == nullptr) {
@@ -6796,7 +6810,7 @@ void Session::PrepareZenzContinuationPrecedingContext(
 
   if (!CanUseZenzContinuationContextCache() ||
       client_context->input_field_type() == commands::Context::PASSWORD) {
-    zenz_continuation_left_context_.clear();
+    ClearZenzContinuationContextCache();
     zenz_continuation_revision_.reset();
     return;
   }
@@ -6808,13 +6822,13 @@ void Session::PrepareZenzContinuationPrecedingContext(
   if (client_context->has_revision()) {
     if (zenz_continuation_revision_.has_value() &&
         *zenz_continuation_revision_ != client_context->revision()) {
-      zenz_continuation_left_context_.clear();
+      ClearZenzContinuationContextCache();
     }
     zenz_continuation_revision_ = client_context->revision();
   }
 
   if (HasZenzContextFeature(*client_context, kZenzContextResetFeature)) {
-    zenz_continuation_left_context_.clear();
+    ClearZenzContinuationContextCache();
   }
 
   const bool native_unavailable =
@@ -6825,18 +6839,58 @@ void Session::PrepareZenzContinuationPrecedingContext(
        client_context->has_preceding_text());
 
   if (has_authoritative_preceding) {
-    // Native context is the current-caret authority.  Never reject or compare
-    // it against an older cache: the user may have clicked into pre-existing
-    // text and legitimately started typing there.  Re-anchor the volatile
-    // cache to the native preceding context instead.
     const ZenzClientContextView view = GetZenzClientContextView(*client_context);
+    // A host can return the same (even explicitly empty) boundary after we
+    // have committed text. That snapshot does not acknowledge our insertion.
+    // Retain the known committed tail until native context catches up or the
+    // input destination changes. Never synthesize right context.
+    //
+    // Extended native acquisition is bounded to the configured Zenz left
+    // window. Once our own pending commits make the local cache longer than
+    // that window, the host can legitimately report only the trailing window
+    // of a known pre-commit snapshot. Accept that as stale only when the
+    // explicit Zenz-native field is filled to the requested limit. A shorter
+    // value may be a real caret move and must remain authoritative.
+    const auto matches_pending_native_snapshot =
+        [&](absl::string_view snapshot) {
+          if (view.preceding_text == snapshot) {
+            return true;
+          }
+          if (!client_context->has_zenz_preceding_text() ||
+              view.preceding_text.empty() || snapshot.empty()) {
+            return false;
+          }
+          const size_t native_chars = Util::CharsLen(view.preceding_text);
+          const size_t requested_chars =
+              GetZenzLiveCorrectionLeftContextLength(context_->GetConfig());
+          const size_t snapshot_chars = Util::CharsLen(snapshot);
+          if (requested_chars == 0 || native_chars != requested_chars ||
+              snapshot_chars <= native_chars) {
+            return false;
+          }
+          return Util::Utf8SubString(
+                     snapshot, snapshot_chars - native_chars, native_chars) ==
+                 view.preceding_text;
+        };
+
+    if (zenz_continuation_before_commit_.has_value() &&
+        (matches_pending_native_snapshot(*zenz_continuation_before_commit_) ||
+         matches_pending_native_snapshot(
+             zenz_continuation_latest_commit_prefix_))) {
+      client_context->set_zenz_preceding_text(zenz_continuation_left_context_);
+      return;
+    }
+
+    // Fresh native context is the caret authority, including a different
+    // non-empty document prefix. Re-anchor without appending the commit again.
     SetZenzContinuationLeftContext(view.preceding_text);
+    zenz_continuation_before_commit_.reset();
+    zenz_continuation_latest_commit_prefix_.clear();
     return;
   }
 
-  // No authoritative native preceding context is available.  Only in this
-  // case may the immediately continuous volatile cache supply Zenz's left
-  // context.  Right context is never synthesized.
+  // Without native preceding context, the still-continuous volatile cache
+  // supplies Zenz's left context. Right context is never synthesized.
   if (!zenz_continuation_left_context_.empty()) {
     client_context->set_zenz_preceding_text(
         zenz_continuation_left_context_);
@@ -6846,7 +6900,7 @@ void Session::PrepareZenzContinuationPrecedingContext(
 void Session::UpdateZenzContinuationContextCacheFromOutput(
     const commands::Command& command) {
   if (!CanUseZenzContinuationContextCache()) {
-    zenz_continuation_left_context_.clear();
+    ClearZenzContinuationContextCache();
     zenz_continuation_revision_.reset();
     return;
   }
@@ -6860,6 +6914,14 @@ void Session::UpdateZenzContinuationContextCacheFromOutput(
   // Result::STRING is text Mozkey actually inserted at the current caret.
   // Append every committed fragment, including partial commits, so the next
   // unavailable-native composition still sees the real immediate left tail.
+  if (command.output().result().cursor_offset() != 0) {
+    ClearZenzContinuationContextCache();
+    return;
+  }
+  if (!zenz_continuation_before_commit_.has_value()) {
+    zenz_continuation_before_commit_ = zenz_continuation_left_context_;
+  }
+  zenz_continuation_latest_commit_prefix_ = zenz_continuation_left_context_;
   std::string combined = zenz_continuation_left_context_;
   combined.append(command.output().result().value());
   SetZenzContinuationLeftContext(combined);
@@ -6878,7 +6940,7 @@ void Session::InvalidateZenzContinuationContextCacheForSessionCommand(
     case commands::SessionCommand::SWITCH_COMPOSITION_MODE:
     case commands::SessionCommand::TURN_ON_IME:
     case commands::SessionCommand::TURN_OFF_IME:
-      zenz_continuation_left_context_.clear();
+      ClearZenzContinuationContextCache();
       break;
     default:
       break;

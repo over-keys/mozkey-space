@@ -108,7 +108,14 @@ def find_redist_crt_dir(redist_root: pathlib.Path, arch: str) -> pathlib.Path:
     def is_valid_dir(path: pathlib.Path) -> bool:
         return path.is_dir() and all(path.joinpath(name).exists() for name in required)
 
-    # まず標準的な Microsoft.VC*.CRT を直接見る
+    if not arch_dir.is_dir():
+        raise FileNotFoundError(
+            f'Could not find CRT redistributable architecture directory: {arch_dir}'
+        )
+
+    # Prefer the standard Microsoft.VC*.CRT directories.  The toolset name
+    # changes with Visual Studio releases (for example VC143/VC145), so do
+    # not derive it from a hard-coded compiler version.
     direct_candidates = sorted(
         [p for p in arch_dir.glob('Microsoft.VC*.CRT') if is_valid_dir(p)],
         key=lambda p: p.name,
@@ -126,6 +133,7 @@ def find_redist_crt_dir(redist_root: pathlib.Path, arch: str) -> pathlib.Path:
     raise FileNotFoundError(
         f'Could not find CRT redistributable directory containing {required} under: {arch_dir}'
     )
+
 
 def run_wix4(args) -> None:
   """Run 'dotnet tool run wix build ...'.
@@ -146,18 +154,13 @@ def run_wix4(args) -> None:
   # 'VCTOOLSREDISTDIR' environment variable is the same among x86, x64 and arm64
   # architectures, so just using 'x64' should be fine here.
   vs_env = vs_util.get_vs_env_vars('x64', vcvarsall_hint)
-  redist_root = pathlib.Path(vs_env['VCTOOLSREDISTDIR']).resolve()
-  # The CRT redist subfolder is named after the platform toolset, not the
-  # MSVC compiler version: VS 2022 ships 'Microsoft.VC143.CRT' (toolset v143,
-  # MSVC 14.3x/14.4x) while VS 2026 ships 'Microsoft.VC145.CRT' (toolset
-  # v145, MSVC 14.50+). v144 was skipped. Pick the subfolder by reading the
-  # MSVC compiler minor version that vcvarsall.bat exports as
-  # 'VCTOOLSVERSION'.
-  vc_tools_minor = int(vs_env['VCTOOLSVERSION'].split('.')[1])
-  crt_subdir = (
-      'Microsoft.VC145.CRT' if vc_tools_minor >= 50 else 'Microsoft.VC143.CRT'
-  )
-  redist_64bit = redist_root.joinpath(arch).joinpath(crt_subdir)
+  try:
+    redist_root = pathlib.Path(vs_env['VCTOOLSREDISTDIR']).resolve()
+  except KeyError as exc:
+    raise RuntimeError(
+        'Visual Studio environment did not define VCTOOLSREDISTDIR.'
+    ) from exc
+  redist_64bit = find_redist_crt_dir(redist_root, arch)
   version_file = pathlib.Path(args.version_file).resolve()
   version = mozc_version.MozcVersion(version_file)
   credit_file = pathlib.Path(args.credit_file).resolve()

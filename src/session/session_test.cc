@@ -2635,6 +2635,9 @@ TEST_F(SessionTest,
   SessionTestPeer session_peer(session);
   InitSessionToPrecomposition(&session);
   EnableZenzFeedbackLearning(&session);
+  // Keep the test's manually constructed live-conversion flags consistent
+  // with the underlying EngineConverter before the next text input cancels it.
+  InitSessionToConversionWithAiueo(&session, converter.get());
   SetPendingRejectedZenzFeedbackForTest(&session_peer);
   ASSERT_TRUE(session_peer.pending_zenz_feedback_().pending);
 
@@ -7084,6 +7087,325 @@ TEST_F(SessionTest, ZenzContinuationTracksEveryCommittedResult) {
   peer.InvalidateZenzContinuationContextCacheForSessionCommand(
       commands::SessionCommand::MOVE_CURSOR);
   EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationEnterThenSpaceUsesCommittedContext) {
+  for (int native_mode = 0; native_mode < 4; ++native_mode) {
+    SCOPED_TRACE(native_mode);
+    MockEngine engine;
+    auto converter = CreateEngineConverterMock(&engine);
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_session_keymap(config::Config::MSIME);
+    config.set_use_live_conversion(false);
+    config.set_use_zenz_live_correction(true);
+    config.set_zenz_live_correction_min_key_length(2);
+    config.set_use_zenz_live_correction_right_context(true);
+    session.SetConfig(config);
+    session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+
+    commands::Command command;
+    SetSendKeyCommandWithKeyString("はのちりょうをおこなう", &command);
+    command.mutable_input()->mutable_context()->set_revision(10);
+    ASSERT_TRUE(session.SendKey(&command));
+    Segments first_segments;
+    auto* first_segment = first_segments.add_segment();
+    first_segment->set_key("はのちりょうをおこなう");
+    auto* first_candidate = first_segment->add_candidate();
+    first_candidate->key = first_candidate->content_key = "はのちりょうをおこなう";
+    first_candidate->value = first_candidate->content_value = "歯の治療を行う";
+    FillT13Ns(CreateConversionRequest(session), &first_segments);
+    EXPECT_CALL(*converter, StartConversion(_, _))
+        .WillOnce(DoAll(SetArgPointee<1>(first_segments), Return(true)));
+    ASSERT_TRUE(SendKey("Space", &session, &command));
+    ASSERT_TRUE(SendKey("Enter", &session, &command));
+    ASSERT_EQ(command.output().result().value(), "歯の治療を行う");
+    ASSERT_EQ(peer.zenz_continuation_left_context_(), "歯の治療を行う");
+
+    for (char c : std::string("shikai")) {
+      ASSERT_TRUE(SetSendKeyCommand(std::string(1, c), &command));
+      if (native_mode != 0) {
+        auto* context = command.mutable_input()->mutable_context();
+        context->set_revision(10);
+        if (native_mode == 1) {
+          context->add_experimental_features("mozkey_zenz_context_unavailable");
+          context->set_zenz_preceding_text("");
+          context->set_zenz_following_text("");
+        } else if (native_mode == 2) {
+          context->set_zenz_preceding_text("歯の治療を行う");
+          context->set_zenz_following_text("患者です");
+        } else {
+          // The host still reports the empty pre-commit boundary. Our own
+          // confirmed output must remain usable without another native read.
+          context->set_zenz_preceding_text("");
+          context->set_zenz_following_text("");
+        }
+      }
+      ASSERT_TRUE(session.SendKey(&command));
+    }
+
+    Segments segments;
+    auto* segment = segments.add_segment();
+    segment->set_key("しかい");
+    auto* candidate = segment->add_candidate();
+    candidate->key = candidate->content_key = "しかい";
+    candidate->value = candidate->content_value = "司会";
+    FillT13Ns(CreateConversionRequest(session), &segments);
+    EXPECT_CALL(*converter, StartConversion(_, _))
+        .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+    ASSERT_TRUE(SetSendKeyCommand("Space", &command));
+    ASSERT_TRUE(session.SendKey(&command));
+    ASSERT_TRUE(peer.pending_zenz_live_().pending);
+    EXPECT_EQ(peer.pending_zenz_live_().left_context, "歯の治療を行う");
+    EXPECT_EQ(peer.pending_zenz_live_().right_context,
+              native_mode == 2 ? "患者です" : "");
+  }
+}
+
+TEST_F(SessionTest, ZenzContinuationModifierDoesNotBreakCommittedContext) {
+  MockEngine engine;
+  auto converter = CreateEngineConverterMock(&engine);
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+
+  commands::Command command;
+  SetSendKeyCommandWithKeyString("歯の治療を行う", &command);
+  ASSERT_TRUE(session.SendKey(&command));
+  ASSERT_TRUE(SendKey("Enter", &session, &command));
+  ASSERT_EQ(peer.zenz_continuation_left_context_(), "歯の治療を行う");
+  // Windows probes TEST_SEND_KEY before SEND_KEY. Neither half of a pure
+  // modifier event may break continuity.
+  ASSERT_TRUE(TestSendKey("Shift", &session, &command));
+  EXPECT_EQ(peer.zenz_continuation_left_context_(), "歯の治療を行う");
+  ASSERT_TRUE(SendKey("Shift", &session, &command));
+  EXPECT_EQ(peer.zenz_continuation_left_context_(), "歯の治療を行う");
+  // A real caret movement must still break the unavailable-native fallback.
+  // Windows does not send SEND_KEY after an uneaten TEST_SEND_KEY.
+  ASSERT_TRUE(SetSendKeyCommand("Left", &command));
+  command.mutable_input()->set_type(commands::Input::TEST_SEND_KEY);
+  ASSERT_TRUE(session.TestSendKey(&command));
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+}
+
+TEST_F(SessionTest, ZenzContinuationStaleNativeDoesNotEraseOwnCommit) {
+  for (const std::string& native_before : {std::string(), std::string("今日は")}) {
+    for (bool use_extended : {false, true}) {
+      SCOPED_TRACE(native_before);
+      SCOPED_TRACE(use_extended);
+      MockEngine engine;
+      Session session(engine);
+      SessionTestPeer peer(session);
+      InitSessionToPrecomposition(&session);
+      config::Config config;
+      config::ConfigHandler::GetDefaultConfig(&config);
+      config.set_use_live_conversion(false);
+      config.set_use_zenz_live_correction(true);
+      session.SetConfig(config);
+
+      commands::Context native;
+      native.set_revision(10);
+      if (use_extended) {
+        native.set_zenz_preceding_text(native_before);
+      } else {
+        native.set_preceding_text(native_before);
+      }
+      peer.PrepareZenzContinuationPrecedingContext(&native);
+      commands::Command commit;
+      commit.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+      commit.mutable_output()->mutable_result()->set_value("歯の治療を行う");
+      peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+
+      commands::Context stale = native;
+      peer.PrepareZenzContinuationPrecedingContext(&stale);
+      EXPECT_EQ(stale.zenz_preceding_text(), native_before + "歯の治療を行う");
+      EXPECT_EQ(peer.zenz_continuation_left_context_(),
+                native_before + "歯の治療を行う");
+      EXPECT_FALSE(stale.has_zenz_following_text());
+
+      commands::Context fresh;
+      fresh.set_revision(10);
+      fresh.set_zenz_preceding_text(native_before + "歯の治療を行う");
+      peer.PrepareZenzContinuationPrecedingContext(&fresh);
+      EXPECT_EQ(fresh.zenz_preceding_text(), native_before + "歯の治療を行う");
+
+      // Once native context has caught up, a later authoritative empty field
+      // is a new caret position, not a reason to replay the confirmed text.
+      commands::Context empty;
+      empty.set_revision(10);
+      empty.set_zenz_preceding_text("");
+      peer.PrepareZenzContinuationPrecedingContext(&empty);
+      EXPECT_TRUE(empty.zenz_preceding_text().empty());
+      EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+    }
+  }
+}
+
+TEST_F(SessionTest,
+       ZenzContinuationTruncatedStaleNativeDoesNotErasePendingCommits) {
+  for (int native_mode = 0; native_mode < 3; ++native_mode) {
+    SCOPED_TRACE(native_mode);
+    MockEngine engine;
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_zenz_live_correction(true);
+    config.set_zenz_live_correction_left_context_length(4);
+    session.SetConfig(config);
+
+    commands::Context initial;
+    initial.set_revision(10);
+    initial.set_zenz_preceding_text("甲乙丙丁");
+    peer.PrepareZenzContinuationPrecedingContext(&initial);
+
+    commands::Command commit;
+    commit.mutable_output()->mutable_result()->set_type(
+        commands::Result::STRING);
+    commit.mutable_output()->mutable_result()->set_value("春夏秋冬");
+    peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+    commit.mutable_output()->mutable_result()->set_value("東西南北");
+    peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+
+    commands::Context stale;
+    stale.set_revision(10);
+    if (native_mode == 0) {
+      stale.set_zenz_preceding_text("春夏秋冬");
+    } else if (native_mode == 1) {
+      stale.set_zenz_preceding_text("秋冬");
+    } else {
+      stale.set_preceding_text("春夏秋冬");
+    }
+    peer.PrepareZenzContinuationPrecedingContext(&stale);
+    if (native_mode == 0) {
+      EXPECT_EQ(stale.zenz_preceding_text(), "甲乙丙丁春夏秋冬東西南北");
+      EXPECT_EQ(peer.zenz_continuation_left_context_(),
+                "甲乙丙丁春夏秋冬東西南北");
+    } else if (native_mode == 1) {
+      EXPECT_EQ(stale.zenz_preceding_text(), "秋冬");
+      EXPECT_EQ(peer.zenz_continuation_left_context_(), "秋冬");
+    } else {
+      EXPECT_EQ(stale.preceding_text(), "春夏秋冬");
+      EXPECT_FALSE(stale.has_zenz_preceding_text());
+      EXPECT_EQ(peer.zenz_continuation_left_context_(), "春夏秋冬");
+    }
+    EXPECT_FALSE(stale.has_zenz_following_text());
+
+    commands::Context caught_up;
+    caught_up.set_revision(10);
+    caught_up.set_zenz_preceding_text("東西南北");
+    peer.PrepareZenzContinuationPrecedingContext(&caught_up);
+    EXPECT_EQ(caught_up.zenz_preceding_text(), "東西南北");
+    EXPECT_EQ(peer.zenz_continuation_left_context_(), "東西南北");
+    EXPECT_FALSE(caught_up.has_zenz_following_text());
+
+    commands::Context moved;
+    moved.set_revision(10);
+    moved.set_zenz_preceding_text("天地玄黄");
+    peer.PrepareZenzContinuationPrecedingContext(&moved);
+    EXPECT_EQ(moved.zenz_preceding_text(), "天地玄黄");
+    EXPECT_EQ(peer.zenz_continuation_left_context_(), "天地玄黄");
+    EXPECT_FALSE(moved.has_zenz_following_text());
+  }
+}
+
+TEST_F(SessionTest, ZenzContinuationPendingCommitRespectsNewNativeAndFocus) {
+  for (int next_context = 0; next_context < 3; ++next_context) {
+    SCOPED_TRACE(next_context);
+    MockEngine engine;
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_zenz_live_correction(true);
+    session.SetConfig(config);
+    commands::Context native;
+    native.set_revision(10);
+    native.set_zenz_preceding_text("");
+    peer.PrepareZenzContinuationPrecedingContext(&native);
+    commands::Command commit;
+    commit.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+    commit.mutable_output()->mutable_result()->set_value("歯の治療を行う");
+    peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+
+    commands::Context next;
+    next.set_revision(next_context == 1 ? 11 : 10);
+    next.set_zenz_preceding_text(next_context == 0 ? "別の文章" : "");
+    if (next_context == 2) {
+      next.add_experimental_features("mozkey_zenz_context_reset");
+    }
+    peer.PrepareZenzContinuationPrecedingContext(&next);
+    EXPECT_EQ(next.zenz_preceding_text(), next_context == 0 ? "別の文章" : "");
+  }
+}
+
+TEST_F(SessionTest, ZenzContinuationCommitWithCursorOffsetBreaksFallback) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_zenz_live_correction(true);
+  session.SetConfig(config);
+  commands::Command commit;
+  commit.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+  commit.mutable_output()->mutable_result()->set_value("歯の治療を行う");
+  peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+  commit.mutable_output()->mutable_result()->set_value("（）");
+  commit.mutable_output()->mutable_result()->set_cursor_offset(-1);
+  peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+  commands::Context unavailable;
+  peer.PrepareZenzContinuationPrecedingContext(&unavailable);
+  EXPECT_TRUE(peer.zenz_continuation_left_context_().empty());
+  EXPECT_FALSE(unavailable.has_zenz_preceding_text());
+}
+
+TEST_F(SessionTest, ZenzContinuationRepeatedCommitsKeepLatestTail) {
+  for (bool always_empty : {false, true}) {
+    SCOPED_TRACE(always_empty);
+    MockEngine engine;
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_zenz_live_correction(true);
+    session.SetConfig(config);
+    commands::Context initial;
+    initial.set_revision(10);
+    initial.set_zenz_preceding_text("");
+    peer.PrepareZenzContinuationPrecedingContext(&initial);
+
+    std::string committed;
+    for (const std::string& fragment : {"歯の治療を行う", "歯科医", "です"}) {
+      commands::Command commit;
+      commit.mutable_output()->mutable_result()->set_type(commands::Result::STRING);
+      commit.mutable_output()->mutable_result()->set_value(fragment);
+      peer.UpdateZenzContinuationContextCacheFromOutput(commit);
+      commands::Context stale;
+      stale.set_revision(10);
+      // Some hosts remain empty; others expose the previous commit but not
+      // the latest one. Both must retain the actual immediate left tail.
+      stale.set_zenz_preceding_text(always_empty ? "" : committed);
+      committed.append(fragment);
+      peer.PrepareZenzContinuationPrecedingContext(&stale);
+      EXPECT_EQ(stale.zenz_preceding_text(), committed);
+      EXPECT_EQ(peer.zenz_continuation_left_context_(), committed);
+      EXPECT_FALSE(stale.has_zenz_following_text());
+    }
+  }
 }
 
 TEST_F(SessionTest, ExplicitCustomConvertCommandSchedulesZenz) {

@@ -18,8 +18,8 @@ jobs:
     name: Publish Windows MSI to GitHub Release
     runs-on: ubuntu-latest
     # The artifact may be delayed by the full Windows build. Allow the
-    # publisher to poll for up to 120 minutes, plus time for download/upload.
-    timeout-minutes: 150
+    # publisher to poll for the complete Windows job, plus download/upload.
+    timeout-minutes: 180
 
     steps:
       - name: Resolve public release version
@@ -50,8 +50,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Poll every 30 seconds for up to 120 minutes.
-          for attempt in $(seq 1 240); do
+          # Poll every 30 seconds for up to 150 minutes. The Windows build
+          # itself has a 120-minute timeout; the extra margin covers runner
+          # startup and artifact publication.
+          for attempt in $(seq 1 300); do
             runs="$(
               gh run list \
                 --repo "$GITHUB_REPOSITORY" \

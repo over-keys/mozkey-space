@@ -236,9 +236,16 @@ class Session {
 
   // Volatile Zenz-only snapshot of the immediate left context. Native
   // authoritative context re-anchors it; committed result strings extend it;
-  // it is used only while native preceding context is unavailable and input
-  // continuity has not been broken. Never persisted or logged.
+  // it is used while native preceding context is unavailable or still reports
+  // the pre-commit snapshot, and input continuity has not been broken.
+  // Never persisted or logged.
   std::string zenz_continuation_left_context_;
+  // A present value (including empty) records the left boundary before our
+  // unacknowledged commits. Repeated native snapshots must not erase them.
+  std::optional<std::string> zenz_continuation_before_commit_;
+  // Also recognize a host that has caught up through the previous commit,
+  // while it still omits the latest committed fragment.
+  std::string zenz_continuation_latest_commit_prefix_;
   std::optional<int32_t> zenz_continuation_revision_;
 
   ZenzContextAssembler zenz_context_assembler_;
@@ -328,6 +335,7 @@ class Session {
   bool HasZenzContextFeature(const commands::Context&,
                              absl::string_view) const;
   void SetZenzContinuationLeftContext(absl::string_view);
+  void ClearZenzContinuationContextCache();
   void PrepareZenzContinuationPrecedingContext(commands::Context*);
   void UpdateZenzContinuationContextCacheFromOutput(
       const commands::Command&);
