@@ -100,11 +100,11 @@ macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）�
 
 - Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
 - 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
+- macOS の Secure Event Input が有効なパスワード欄では、プライバシー保護のため surrounding text と Zenz 用の前後文脈を取得しません。Microsoft Word / Excel / PowerPoint などでは、アプリ互換性のため同様にネイティブ文脈取得を抑制する場合があります。
 
 > [!WARNING]
 > 現在の開発用 PKG は Developer ID 署名および notarization の対象外です。ダウンロードした PKG では Gatekeeper の警告やインストール拒否が発生する可能性があるため、一般配布用の正式リリースとして扱わないでください。
 > macOS が PKG のインストールを拒否した場合は、システム設定の「プライバシーとセキュリティ」で表示されるブロック通知から「このまま開く」などの許可を明示的に選択してから、PKG を再度開いてください。ここで許可しない限りインストールできません。
-- macOS の Secure Event Input が有効なパスワード欄では、プライバシー保護のため surrounding text と Zenz 用の前後文脈を取得しません。Microsoft Word / Excel / PowerPoint などでは、アプリ互換性のため同様にネイティブ文脈取得を抑制する場合があります。
 
 ### Linux について
 
