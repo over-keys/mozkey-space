@@ -770,7 +770,6 @@ mozkey-space is a fork that inherits Mozkey's functionality while extending it t
 - In addition to learning for a whole sentence, it can learn partial corrections such as `りせき / 離籍 → 離席`.
 - Learned partial corrections can be reused in other sentences, but are applied only when the current Mozc conversion result and reading support a safe determination that the same correction applies.
 - When the same reading appears multiple times or the correspondence is ambiguous, the system does not force a local correction.
-- Automatically applied corrections are not learned again for self-reinforcement; actual user actions are the basis for learning.
 
 For example, after learning this correction once:
 
@@ -784,44 +783,18 @@ the same local correction can be reused in another sentence when the corresponde
 
 - When available on Windows / macOS, text before and after the cursor is used as context for AI correction.
 - Even when the application does not provide enough context, the text most recently committed during continuous typing can be used as temporary left context.
-- Continuous context is maintained as far as possible in applications with context-acquisition constraints, such as Hidemaru and Microsoft Word.
+- Continuous context is maintained as far as possible in applications with context-acquisition constraints.
 - This temporary context is discarded when input continuity is judged to have been broken by cursor movement, a newline, a focus change, or similar actions.
-- The system does not guess or generate right context when right context cannot be obtained.
 
-### Safety measures to avoid incorrect corrections
-
-- AI results are not accepted unconditionally; the system combines the Mozc conversion result, reading, and the user's past learning when making decisions.
-- If the corresponding reading or notation cannot be identified uniquely, local learning and local correction are skipped.
-- Previously rejected corrections can be suppressed by the built-in safeguards.
-- Mozc candidates and conversion state are retained during ordinary conversion so the system can safely return from an AI correction.
-
-### Integration with Mozc learning
-
-- The system does not learn AI corrections in isolation; the notation finally committed by the user is handled consistently with Mozc's conversion history.
-- When the user fixes a mistake made by AI, that correction can inform both future AI correction and ordinary conversion.
-- Undo and correction cancellation do not leave behind uncommitted learning.
-
-### Privacy and local operation
-
-- AI correction uses a local inference environment and is not designed to send ordinary conversion strings to an external AI service.
-- Surrounding context is neither acquired nor used in password fields or Secure Event Input.
-- The behavior is aligned with Mozc privacy settings such as incognito mode and disabled history.
-
-### Distribution for Windows / macOS
-
-- Windows x64 MSI and a macOS Universal PKG containing both Apple Silicon and Intel builds are provided.
-- Distribution packages bundle the runtime and model required for local AI correction.
-- Builds verify the version, runtime, model, and installer contents, and avoid accidentally reusing stale generated files or caches.
-
-For the original changes from Mozc to Mozkey, see
-[Main additions](#mozkey-changes-from-mozc-en) below.
+For the changes added to Mozkey from Mozc, see
+[Mozc to Mozkey main additions](#mozkey-changes-from-mozc-en) below.
 
 <a id="mozkey-changes-from-mozc-en"></a>
-Main additions
+Main additions from Mozc to Mozkey
 --------------
 
-These are the main additions from the original Mozkey README. mozkey-space
-inherits them as its base feature set.
+These are the main additions from Mozc to Mozkey. mozkey-space inherits them
+as its base feature set.
 
 - Adds an option to display ambiguous romaji rules before the input is fully disambiguated
 - Adds a checkbox UI for that option to the romaji table editor
