@@ -5,7 +5,7 @@
 <h1 align="center">mozkey-space</h1>
 
 <p align="center">
-  <strong><a href="https://github.com/google/mozc">Mozc</a> をベースにした <a href="https://github.com/koyasi777/mozkey">Mozkey</a> から派生した、mozkey-space です。<br>Mozkey をベースに、通常のライブ変換だけでなく Space キーによる変換でも Zenz 補正を利用できるようにしています。</strong>
+  <strong><a href="https://github.com/google/mozc">Mozc</a> をベースにした <a href="https://github.com/koyasi777/mozkey">Mozkey</a> から派生した、mozkey-space です。Mozkey をベースに、Space キーによる通常変換でもローカル AI 補正を利用できるようにし、さらにユーザーによる修正を文章全体・局所の両方で学習して、安全に再利用できるよう拡張しています。  </strong>
 </p>
 
 <p align="center">
