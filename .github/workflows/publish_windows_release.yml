@@ -102,7 +102,7 @@ jobs:
               echo "Waiting for Windows CI push run for $RELEASE_TAG at $SOURCE_SHA"
             fi
 
-            if (( attempt == 240 )); then
+            if (( attempt == 300 )); then
               echo "Timed out waiting for the matching Windows CI artifact." >&2
               exit 1
             fi
