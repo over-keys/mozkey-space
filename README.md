@@ -90,7 +90,7 @@ Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/rele
 > [!WARNING]
 > このビルドは google/mozc の公式配布物ではありません。
 > 個人用 fork の experimental / pre-release build です。
-> MSI は署名されていないため、Windows の警告が表示される場合があります。
+> MSI は署名されていないため、Windows Defender / SmartScreen によって警告またはブロックされる場合があります。発行元を確認できないという警告だけが表示された場合は、「詳細情報」→「実行」または「実行する」でインストールを続行できます。マルウェア警告が表示された場合は実行しないでください。
 
 ### macOS について
 
@@ -732,7 +732,7 @@ Windows MSI packages are available from [Releases](https://github.com/over-keys/
 > [!WARNING]
 > This build is not an official google/mozc distribution.
 > It is an experimental / pre-release build from a personal fork.
-> The MSI is not code-signed, so Windows may show a warning.
+> The MSI is not code-signed, so Windows Defender / SmartScreen may warn about or block it. If the warning only says that the publisher cannot be verified, select **More info** → **Run anyway** to continue. Do not run it if Windows reports malware.
 
 ### macOS
 
