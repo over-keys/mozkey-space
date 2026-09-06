@@ -30,15 +30,67 @@ upstream Mozc との追従性および既存インストールとの互換性を
 
 <br>
 
-mozkey-space の変更点（Mozkey からの差分）
-------------------------------------------
+## mozkey-space の主な変更点（Mozkey からの差分）
 
-mozkey-space 固有の変更点は、元の Mozkey に対する次の差分です。
+mozkey-space は Mozkey の機能を引き継ぎつつ、特に AI 補正を通常の Space 変換でも使いやすくし、補正結果を安全に学習・再利用できるよう拡張した fork です。
 
-- 通常のライブ変換だけでなく、Space キーまたは `Convert` による通常変換でも、ローカル Zenz 補正を利用
-- ライブ変換を OFF にしていても、初回の通常変換後に Zenz 補正を開始し、通常の Mozc 候補を安全なフォールバックとして保持
-- `でs` のような、かなの後ろに残った未完成ローマ字を Space キーで補正し、最も確かな一かな候補だけを通常変換へ反映
-- 通常変換の入力経路でも、Zenz 補正の結果を既存の安全な候補・文脈処理と整合する形で扱う
+### Space 変換でも AI 補正
+
+- ライブ変換だけでなく、Space キーまたは `Convert` による通常変換でも Zenz 補正を利用できます。
+- ライブ変換を OFF にしていても、通常の Mozc 変換を行ったあとに AI 補正を適用できます。
+- AI 補正が失敗した場合や、安全に適用できない場合は、通常の Mozc の変換結果をそのまま利用します。
+- `でs` のように、かなの末尾に未完成のローマ字が残った入力についても、安全に判断できる範囲で補正します。
+
+### AI 補正の学習
+
+- AI の補正結果をユーザーが採用・修正・拒否したことを学習し、以後の変換に反映します。
+- 文章全体についての学習に加えて、`りせき / 離籍 → 離席` のような部分的な修正も学習できます。
+- 学習した部分修正は別の文章でも再利用できますが、現在の Mozc の変換結果と読みの対応から、安全に同じ修正だと判断できる場合だけ適用します。
+- 同じ読みが複数ある場合や対応が曖昧な場合には、無理に局所補正を適用しません。
+- 自動的に適用された補正を再び学習して自己強化することはなく、ユーザーの実際の操作を学習の根拠にします。
+
+例えば、
+
+`ちょっとりせきします → ちょっと離籍します → ちょっと離席します`
+
+という修正を一度学習すると、安全に対応付けられる場合には、
+
+`すみませんりせきします → すみません離席します`
+
+のような別の文章でも同じ局所修正を再利用できます。
+
+### 前後の文脈を利用した補正
+
+- Windows / macOS で取得できる場合は、カーソル前後の文章を AI 補正の文脈として利用します。
+- アプリから十分な文脈を取得できない場合でも、連続して入力している間は直前に確定した文字列を一時的な左文脈として利用できます。
+- 秀丸や Microsoft Word など、文脈取得に制約のあるアプリでも可能な範囲で連続文脈を維持します。
+- カーソル移動、改行、フォーカス変更など、入力の連続性が切れたと判断できる場合は、この一時文脈を破棄します。
+- 右文脈を取得できない場合に推測で生成することはありません。
+
+### 誤補正を避けるための安全策
+
+- AI の結果を無条件に採用せず、Mozc の変換結果、読み、ユーザーの過去の学習などを組み合わせて判断します。
+- 対応する読みや表記を一意に特定できない場合は、局所学習や局所補正を行いません。
+- 過去に明示的に拒否された補正を抑制する仕組みを備えています。
+- 通常変換時も Mozc の候補と変換状態を保持し、AI 補正から安全に戻れるようにしています。
+
+### Mozc の学習との連携
+
+- AI 補正だけを独立して覚えるのではなく、ユーザーが最終的に確定した表記を Mozc 側の変換履歴とも整合する形で扱います。
+- AI が間違えた箇所をユーザーが直した場合、その修正を次回以降の AI 補正と通常の変換の両方に活かせるようにしています。
+- Undo や補正の取り消しなどでは、確定していない学習を残さないようにしています。
+
+### プライバシーとローカル動作
+
+- AI 補正はローカルの推論環境を使用し、通常の変換文字列を外部の AI サービスへ送信することを前提としていません。
+- パスワード欄や Secure Event Input では、前後の文脈を取得・利用しません。
+- incognito / 履歴無効設定など、Mozc 側のプライバシー設定と整合するようにしています。
+
+### Windows / macOS 向け配布
+
+- Windows x64 用 MSI と、Apple Silicon / Intel の両方を含む macOS Universal PKG を提供しています。
+- 配布版にはローカル AI 補正に必要な runtime / model を同梱しています。
+- ビルド時には version、runtime、model、インストーラー内の成果物を検証し、古い生成物やキャッシュが誤って再利用されないようにしています。
 
 元の Mozc から Mozkey への変更点は、下の
 [主な追加機能](#mozkey-changes-from-mozc-ja) を参照してください。
@@ -728,16 +780,65 @@ Main branches
 - `master`: upstream tracking branch
 - `pr/*`: upstream-oriented proposal branches
 
-mozkey-space changes (delta from Mozkey)
------------------------------------------
+## Main changes in mozkey-space (delta from Mozkey)
 
-The changes specific to mozkey-space are the following additions on top of
-Mozkey:
+mozkey-space is a fork that inherits Mozkey's functionality while extending it to make AI correction especially useful during ordinary Space conversion and to learn and reuse correction results safely.
 
-- Applies local Zenz correction not only to live conversion but also to ordinary conversion started with Space or `Convert`
-- Starts the same Zenz correction path after the first ordinary conversion even when live conversion is disabled, while keeping the normal Mozc candidate as a safe fallback
-- Repairs an unfinished single-kana ASCII residual such as `でs` when Space is pressed, and applies only a unique best reading to ordinary conversion
-- Keeps the ordinary-conversion path consistent with the existing safe-candidate and context-handling rules
+### AI correction during Space conversion
+
+- Zenz correction is available not only during live conversion, but also during ordinary conversion started with the Space key or `Convert`.
+- Even when live conversion is OFF, AI correction can be applied after ordinary Mozc conversion.
+- If AI correction fails or cannot be applied safely, the normal Mozc conversion result is used unchanged.
+- Inputs with an unfinished Roman-letter suffix after kana, such as `でs`, are corrected within the range that can be judged safely.
+
+### Learning AI corrections
+
+- The system learns whether the user accepted, corrected, or rejected an AI correction and reflects that feedback in later conversions.
+- In addition to learning for a whole sentence, it can learn partial corrections such as `りせき / 離籍 → 離席`.
+- Learned partial corrections can be reused in other sentences, but are applied only when the current Mozc conversion result and reading support a safe determination that the same correction applies.
+- When the same reading appears multiple times or the correspondence is ambiguous, the system does not force a local correction.
+- Automatically applied corrections are not learned again for self-reinforcement; actual user actions are the basis for learning.
+
+For example, after learning this correction once:
+
+`ちょっとりせきします → ちょっと離籍します → ちょっと離席します`
+
+the same local correction can be reused in another sentence when the correspondence is safe:
+
+`すみませんりせきします → すみません離席します`
+
+### Context-aware correction using surrounding text
+
+- When available on Windows / macOS, text before and after the cursor is used as context for AI correction.
+- Even when the application does not provide enough context, the text most recently committed during continuous typing can be used as temporary left context.
+- Continuous context is maintained as far as possible in applications with context-acquisition constraints, such as Hidemaru and Microsoft Word.
+- This temporary context is discarded when input continuity is judged to have been broken by cursor movement, a newline, a focus change, or similar actions.
+- The system does not guess or generate right context when right context cannot be obtained.
+
+### Safety measures to avoid incorrect corrections
+
+- AI results are not accepted unconditionally; the system combines the Mozc conversion result, reading, and the user's past learning when making decisions.
+- If the corresponding reading or notation cannot be identified uniquely, local learning and local correction are skipped.
+- Previously rejected corrections can be suppressed by the built-in safeguards.
+- Mozc candidates and conversion state are retained during ordinary conversion so the system can safely return from an AI correction.
+
+### Integration with Mozc learning
+
+- The system does not learn AI corrections in isolation; the notation finally committed by the user is handled consistently with Mozc's conversion history.
+- When the user fixes a mistake made by AI, that correction can inform both future AI correction and ordinary conversion.
+- Undo and correction cancellation do not leave behind uncommitted learning.
+
+### Privacy and local operation
+
+- AI correction uses a local inference environment and is not designed to send ordinary conversion strings to an external AI service.
+- Surrounding context is neither acquired nor used in password fields or Secure Event Input.
+- The behavior is aligned with Mozc privacy settings such as incognito mode and disabled history.
+
+### Distribution for Windows / macOS
+
+- Windows x64 MSI and a macOS Universal PKG containing both Apple Silicon and Intel builds are provided.
+- Distribution packages bundle the runtime and model required for local AI correction.
+- Builds verify the version, runtime, model, and installer contents, and avoid accidentally reusing stale generated files or caches.
 
 For the original changes from Mozc to Mozkey, see
 [Main additions](#mozkey-changes-from-mozc-en) below.
