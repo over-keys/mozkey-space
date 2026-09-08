@@ -32,7 +32,7 @@ MAJOR = 3
 MINOR = 34
 
 # BUILD number used for the OSS version.
-BUILD_OSS = 6215
+BUILD_OSS = 6216
 
 # Number to be increased. This value may be replaced by other tools.
 BUILD = BUILD_OSS
@@ -44,7 +44,7 @@ REVISION = 100
 # and should match the GitHub release tag without the leading "v".
 MOZKEY_SPACE_RELEASE_VERSION_MAJOR = 4
 MOZKEY_SPACE_RELEASE_VERSION_MINOR = 80
-MOZKEY_SPACE_RELEASE_VERSION_PATCH = 1
+MOZKEY_SPACE_RELEASE_VERSION_PATCH = 2
 
 # LINT.IfChange
 DEFAULT_BUILD_LABEL_MACOS = "%d.%d.%d.%d" % (MAJOR, MINOR, BUILD, REVISION + 1)
