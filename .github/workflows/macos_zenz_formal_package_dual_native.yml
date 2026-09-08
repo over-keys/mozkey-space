@@ -377,7 +377,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "mozkey-space ${PUBLIC_VERSION}"
 
-          asset="mozkey-space_${PUBLIC_VERSION}_macos_universal_zenz.pkg"
+          asset="mozkey-space_${PUBLIC_VERSION}_macos_universal.pkg"
           checksum="${asset}.sha256"
 
           install \

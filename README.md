@@ -96,7 +96,7 @@ Windows 用の MSI は [Releases](https://github.com/over-keys/mozkey-space/rele
 
 Windows に加え、macOS でもこの fork の Zenz 文脈取得とローカル runtime を実機で検証しています。macOS では、Zenz runtime を含む PKG の build / install、`mozc_zenz_scorer` / `llama-server` の起動、およびカーソル前後の Zenz context acquisition を確認しています。
 
-macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。Universal Zenz PKG は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。GitHub Release の表示名は `mozkey-space <major.minor>`、Asset は `mozkey-space_<major.minor>_macos_universal_zenz.pkg` と SHA-256 checksum になります。PKG は、Apple Silicon と native Intel の両方で同一成果物を検証した後に公開されますが、macOS の PKG は実機検証用の experimental build として扱ってください。
+macOS 版は macOS 12.0 以降、Apple Silicon（arm64）と Intel（x86_64）を含む Universal 構成を対象にしています。Universal Zenz PKG は [Releases](https://github.com/over-keys/mozkey-space/releases) からダウンロードできます。GitHub Release の表示名は `mozkey-space <major.minor>`、Asset は `mozkey-space_<major.minor>_macos_universal.pkg` と SHA-256 checksum になります。PKG は、Apple Silicon と native Intel の両方で同一成果物を検証した後に公開されますが、macOS の PKG は実機検証用の experimental build として扱ってください。
 
 - Zenz 同梱版をビルドするには、Git 管理外の `llama-server`、GGUF model、`BUILD-CONTRACT.txt` を、指定された builder と staging script で準備する必要があります。クリーンチェックアウトだけでは Zenz runtime は生成されません。
 - 配布用 Zenz PKG のビルドでは `--define=macos_zenz_runtime=1` と `--macos_cpus=x86_64,arm64` が必要です。詳細は [macOS Zenz runtime のビルド・検証手順](src/mac/installer/zenz_runtime/README.md) を参照してください。
@@ -740,7 +740,7 @@ Windows MSI packages are available from [Releases](https://github.com/over-keys/
 
 In addition to Windows, the Zenz context / runtime path has been tested on real macOS hardware. On macOS, a Zenz-runtime-enabled PKG has been built and installed, `mozc_zenz_scorer` / `llama-server` startup has been verified, and preceding / following Zenz context acquisition has been tested.
 
-The macOS Universal Zenz PKG is available from [Releases](https://github.com/over-keys/mozkey-space/releases). The Release display name is `mozkey-space <major.minor>`, and the asset is named `mozkey-space_<major.minor>_macos_universal_zenz.pkg` with a SHA-256 checksum. It is an experimental package for real-hardware verification.
+The macOS Universal Zenz PKG is available from [Releases](https://github.com/over-keys/mozkey-space/releases). The Release display name is `mozkey-space <major.minor>`, and the asset is named `mozkey-space_<major.minor>_macos_universal.pkg` with a SHA-256 checksum. It is an experimental package for real-hardware verification.
 
 > [!WARNING]
 > The current development PKG is not Developer ID signed or notarized. Gatekeeper may warn or refuse installation, so treat it as an experimental build rather than an official general release.
