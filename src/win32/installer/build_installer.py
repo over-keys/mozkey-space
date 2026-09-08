@@ -71,6 +71,30 @@ def exec_command(args: list[str], cwd: str) -> None:
     raise ChildProcessError('\n'.join(msgs))
 
 
+def _get_msi_version(version: mozc_version.MozcVersion,
+                     branding: str) -> str:
+  """Returns the MSI product version for the selected branding.
+
+  Mozkey's user-facing release version must drive MSI upgrades.  The Mozc
+  engine version is intentionally independent and can remain unchanged across
+  Mozkey releases, which would otherwise make Windows Installer treat a new
+  Mozkey package as the same version and leave old binaries in place.
+  """
+  if branding != 'Mozc':
+    return version.GetVersionString()
+
+  msi_version = version.GetVersionInFormat(
+      '@MOZKEY_SPACE_RELEASE_VERSION_MAJOR@.'
+      '@MOZKEY_SPACE_RELEASE_VERSION_MINOR@.'
+      '@MOZKEY_SPACE_RELEASE_VERSION_PATCH@')
+  parts = msi_version.split('.')
+  if len(parts) != 3 or not all(part.isdigit() for part in parts):
+    raise ValueError(
+        f'Invalid Mozkey MSI version: {msi_version!r}. Expected MAJOR.MINOR.PATCH.'
+    )
+  return msi_version
+
+
 def verify_msi_output(msi_path: pathlib.Path,
                       verifier_path: pathlib.Path) -> None:
   """Verifies the generated MSI's user-interface contract on Windows."""
@@ -183,6 +207,7 @@ def run_wix4(args) -> None:
   wix_path = pathlib.Path(args.wix_path).resolve()
 
   branding = args.branding
+  msi_version = _get_msi_version(version, branding)
   upgrade_code = ''
   omaha_guid = ''
   omaha_client_key = ''
@@ -206,6 +231,7 @@ def run_wix4(args) -> None:
       '-nologo',
       '-arch', arch,
       '-define', f'MozcVersion={version.GetVersionString()}',
+      '-define', f'MsiVersion={msi_version}',
       '-define', f'UpgradeCode={upgrade_code}',
       '-define', f'OmahaGuid={omaha_guid}',
       '-define', f'OmahaClientKey={omaha_client_key}',
