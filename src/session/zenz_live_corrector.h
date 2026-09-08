@@ -81,6 +81,8 @@ class ZenzLiveCorrector {
   std::optional<ZenzLiveResponse> TakeResult(uint32_t generation);
 
  private:
+  friend class ZenzLiveCorrectorTestPeer;
+
   void WorkerLoop();
 
   std::unique_ptr<ZenzClient> client_;

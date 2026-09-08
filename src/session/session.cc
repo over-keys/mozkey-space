@@ -7533,25 +7533,14 @@ bool Session::AdvancePendingZenzLiveCorrection(
         command, "zenz_async_corrector_missing");
   }
 
-  std::optional<ZenzLiveResponse> response =
-      zenz_live_corrector_->TakeResult(pending_zenz_live_.generation);
-
-  if (response.has_value()) {
-    ZenzDebugOutput(absl::StrCat(
-        "[zenz] async response ok=", ZenzBool(response->ok),
-        " timeout=", ZenzBool(response->timeout),
-        " generation=", response->generation,
-        " ", ZenzRedactedTextStats("value", response->value),
-        " ", ZenzRedactedTextStats("debug", response->debug)));
-
-    return ApplyZenzLiveCorrectionResult(*response, command);
-  }
-
-  ++pending_zenz_live_.poll_count;
-
+  // For direct-display normal conversion, the presentation deadline has
+  // precedence over result availability. A response that is already queued when
+  // this callback runs after the grace window is still late from the user's
+  // perspective, so do not consume or apply it.
   if (pending_zenz_live_.defer_normal_conversion_display &&
       now >= pending_zenz_live_
                  .deferred_normal_conversion_display_deadline) {
+    ++pending_zenz_live_.poll_count;
     ZenzDebugOutput(absl::StrCat(
         "[zenz] direct-display grace expired generation=",
         pending_zenz_live_.generation,
@@ -7568,6 +7557,22 @@ bool Session::AdvancePendingZenzLiveCorrection(
     return OutputCurrentLiveConversionAfterZenzStop(
         command, "zenz_direct_display_grace_expired");
   }
+
+  std::optional<ZenzLiveResponse> response =
+      zenz_live_corrector_->TakeResult(pending_zenz_live_.generation);
+
+  if (response.has_value()) {
+    ZenzDebugOutput(absl::StrCat(
+        "[zenz] async response ok=", ZenzBool(response->ok),
+        " timeout=", ZenzBool(response->timeout),
+        " generation=", response->generation,
+        " ", ZenzRedactedTextStats("value", response->value),
+        " ", ZenzRedactedTextStats("debug", response->debug)));
+
+    return ApplyZenzLiveCorrectionResult(*response, command);
+  }
+
+  ++pending_zenz_live_.poll_count;
 
   const uint32_t async_wait_msec =
       std::max<uint32_t>(timeout_msec, kZenzLiveCorrectionAsyncWaitMsec);
