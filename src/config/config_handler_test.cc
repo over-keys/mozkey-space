@@ -84,6 +84,7 @@ void SetMozkeyProductDefaultsForTesting(Config* config) {
   config->set_use_direct_commit(false);
   config->set_direct_commit_key(kExpectedMozkeyDirectCommitKey);
   config->set_use_zenz_live_correction(true);
+  config->set_use_zenz_deferred_normal_conversion_display(false);
   config->set_zenz_live_correction_delay_msec(200);
   config->set_use_zenz_feedback_learning(true);
   config->set_use_zenz_auto_block_rejected_correction(false);
@@ -105,6 +106,7 @@ void ExpectMozkeyProductDefaults(const Config& config) {
   EXPECT_EQ(config.direct_commit_key(), kExpectedMozkeyDirectCommitKey);
 
   EXPECT_TRUE(config.use_zenz_live_correction());
+  EXPECT_FALSE(config.use_zenz_deferred_normal_conversion_display());
   EXPECT_EQ(config.zenz_live_correction_delay_msec(), 200);
   EXPECT_EQ(config.zenz_live_correction_timeout_msec(), 180);
   EXPECT_EQ(config.zenz_live_correction_min_key_length(), 2);
@@ -365,6 +367,7 @@ TEST_F(ConfigHandlerTest, GetDefaultConfig) {
   EXPECT_FALSE(output.has_use_direct_commit());
   EXPECT_FALSE(output.has_direct_commit_key());
   EXPECT_FALSE(output.has_use_zenz_live_correction());
+  EXPECT_FALSE(output.has_use_zenz_deferred_normal_conversion_display());
   EXPECT_FALSE(output.has_use_zenz_feedback_learning());
   EXPECT_FALSE(output.has_use_zenz_live_correction_right_context());
   EXPECT_FALSE(output.has_use_realtime_conversion());
