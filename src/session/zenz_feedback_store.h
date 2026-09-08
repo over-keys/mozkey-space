@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,25 @@ struct ZenzLocalPreferenceEntry {
   int opposite_effective_observation_count = 0;
 };
 
+enum class ZenzFullFeedbackAction {
+  kAccepted,
+  kRejected,
+};
+
+struct ZenzFullFeedbackObservation {
+  ZenzFullFeedbackAction action = ZenzFullFeedbackAction::kAccepted;
+  std::string key;
+  std::string context_class;
+  std::string value;
+  std::string reason;
+};
+
+struct ZenzFeedbackBatch {
+  std::optional<ZenzFullFeedbackObservation> full;
+  std::vector<ZenzLocalPreference> local_rejecteds;
+  std::vector<ZenzLocalPreference> local_accepteds;
+};
+
 class ZenzFeedbackStore {
  public:
   ZenzFeedbackDecision Decide(absl::string_view key,
@@ -174,6 +194,10 @@ class ZenzFeedbackStore {
                       absl::string_view context_class,
                       absl::string_view value,
                       absl::string_view reason);
+
+  // Coalesces all Full/Local evidence caused by one user confirmation into
+  // one best-effort append. Record order is Full, Local rejects, Local accepts.
+  void RecordBatch(const ZenzFeedbackBatch& batch);
 
   void RecordLocalAccepted(absl::string_view key,
                            absl::string_view context_class,

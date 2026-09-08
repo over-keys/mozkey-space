@@ -63,6 +63,11 @@ bool SetCloseOnExec(int fd) {
   return flags >= 0 && ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
 }
 
+bool SetNonBlocking(int fd) {
+  const int flags = ::fcntl(fd, F_GETFL, 0);
+  return flags >= 0 && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
 bool DisableSigPipe(int fd) {
 #if defined(SO_NOSIGPIPE)
   const int enabled = 1;
@@ -346,7 +351,7 @@ bool PosixZenzScorerServer::Start(std::string* error) {
 
   listen_fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (listen_fd_ < 0 || !SetCloseOnExec(listen_fd_) ||
-      !DisableSigPipe(listen_fd_)) {
+      !SetNonBlocking(listen_fd_) || !DisableSigPipe(listen_fd_)) {
     *error = listen_fd_ < 0 ? ErrnoTag("socket_create_failed")
                             : ErrnoTag("socket_configure_failed");
     Reset();
@@ -419,10 +424,14 @@ bool PosixZenzScorerServer::ServeOne(int timeout_msec,
     client_fd = ::accept(listen_fd_, nullptr, nullptr);
   } while (client_fd < 0 && errno == EINTR);
   if (client_fd < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return true;
+    }
     *error = ErrnoTag("socket_accept_failed");
     return false;
   }
-  if (!SetCloseOnExec(client_fd) || !DisableSigPipe(client_fd)) {
+  if (!SetCloseOnExec(client_fd) || !SetNonBlocking(client_fd) ||
+      !DisableSigPipe(client_fd)) {
     *error = ErrnoTag("client_configure_failed");
     ::close(client_fd);
     return false;

@@ -43,8 +43,8 @@ REVISION = 100
 # User-facing mozkey-space release version.  This is shown in the About dialog
 # and should match the GitHub release tag without the leading "v".
 MOZKEY_SPACE_RELEASE_VERSION_MAJOR = 4
-MOZKEY_SPACE_RELEASE_VERSION_MINOR = 60
-MOZKEY_SPACE_RELEASE_VERSION_PATCH = 4
+MOZKEY_SPACE_RELEASE_VERSION_MINOR = 70
+MOZKEY_SPACE_RELEASE_VERSION_PATCH = 0
 
 # LINT.IfChange
 DEFAULT_BUILD_LABEL_MACOS = "%d.%d.%d.%d" % (MAJOR, MINOR, BUILD, REVISION + 1)

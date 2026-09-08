@@ -186,6 +186,58 @@ V4_TEST(FullSemanticsRemainWeightedAndContextCompatible) {
   EXPECT_EQ(decision.total_score, 850);
 }
 
+V4_TEST(BatchPersistsFullThenLocalRejectThenLocalAccept) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+
+  ZenzFeedbackBatch batch;
+  ZenzFullFeedbackObservation full;
+  full.action = ZenzFullFeedbackAction::kRejected;
+  full.key = "しかい";
+  full.context_class = "empty";
+  full.value = "歯科医";
+  full.reason = "space_revert_zenz_to_mozc";
+  batch.full = full;
+
+  ZenzLocalPreference rejected;
+  rejected.key = "しかい";
+  rejected.context_class = "empty";
+  rejected.disfavored_value = "歯科医";
+  rejected.preferred_value = "視界";
+  batch.local_rejecteds.push_back(rejected);
+
+  ZenzLocalPreference accepted;
+  accepted.key = "しかい";
+  accepted.context_class = "empty";
+  accepted.disfavored_value = "歯科医";
+  accepted.preferred_value = "司会";
+  batch.local_accepteds.push_back(accepted);
+
+  store.RecordBatch(batch);
+
+  std::ifstream file(V4_FEEDBACK_PATH(), std::ios::binary);
+  ASSERT_TRUE(file);
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(file, line);) {
+    lines.push_back(line);
+  }
+  ASSERT_EQ(lines.size(), 3);
+  EXPECT_EQ(lines[0],
+            "v4\tfull\trejected\tしかい\tempty\t歯科医\t"
+            "space_revert_zenz_to_mozc\t1");
+  EXPECT_EQ(lines[1],
+            "v4\tlocal\trejected\tしかい\tempty\t歯科医\t視界\t1");
+  EXPECT_EQ(lines[2],
+            "v4\tlocal\taccepted\tしかい\tempty\t歯科医\t司会\t1");
+
+  EXPECT_EQ(store.Decide("しかい", "empty", "歯科医").rejected_count, 1);
+  const auto entries = store.ListLocalPreferenceEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].disfavored_value, "歯科医");
+  EXPECT_EQ(entries[0].preferred_value, "司会");
+  EXPECT_EQ(entries[0].observation_count, 1);
+}
+
 V4_TEST(FullHardRejectAndAutoBlockRemainUnchanged) {
   V4_PROFILE();
   ZenzFeedbackStore store;

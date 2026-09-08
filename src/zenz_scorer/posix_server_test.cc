@@ -127,6 +127,21 @@ TEST(PosixZenzScorerServerTest, CreatesPrivateSocketAndLock) {
   Cleanup(directory);
 }
 
+TEST(PosixZenzScorerServerTest, ServeOneWithoutPendingClientReturnsNormally) {
+  const std::string directory = MakeTestDirectory();
+  Cleanup(directory);
+  const std::string socket_path = directory + "/scorer.sock";
+
+  {
+    PosixZenzScorerServer server(socket_path, {});
+    std::string error;
+    ASSERT_TRUE(server.Start(&error)) << error;
+    EXPECT_TRUE(server.ServeOne(0, &error)) << error;
+    EXPECT_TRUE(error.empty());
+  }
+  Cleanup(directory);
+}
+
 TEST(PosixZenzScorerServerTest, ServesWireRequestWithPartialWrites) {
   const std::string directory = MakeTestDirectory();
   Cleanup(directory);

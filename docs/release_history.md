@@ -1,6 +1,30 @@
 Release History
 ===============
 
+Mozkey 4.70.0 / Mozc 3.34 / *2026-09-08*
+-------------------------------------------
+
+### 4.70 の変更内容
+
+Zenzのローカル補正経路を、WindowsとmacOSのローカルIPCおよびFeedback保存の境界で安定化しました。
+
+- Windowsのnamed pipe clientをOverlapped I/O化し、即時完了、9.5秒のabsolute transport failsafe、タイムアウト時の`CancelIoEx`とcompletion回収を正しく扱います。
+- Windows scorer、`FlushFileBuffers`、`ZenzLiveCorrector`、`CancelPending()`の既存動作は変更していません。
+- macOSのscorer listenerとaccepted socketを`O_NONBLOCK`化しました。
+- Full/Localのrejected confirmationをFull reject → Local reject → Local acceptの順で1回の`AppendRecords()`に集約し、不正なLocal recordが同じbatchの正当なFull recordを巻き込まないよう防御します。
+- Windows named pipeの正常応答・header timeout・payload timeout、およびFeedback batchの順序と意味論のテストを追加しました。
+
+Windows x64 MSIとmacOS Universal Zenz PKGはGitHub Actionsでビルド・検証します。Windows ARM64、Linux、Androidのパッケージは自動リリース成果物に含みません。
+
+### macOSへのインストール（重要）
+
+macOS PKGは実験的なパッケージです。Developer IDによる署名と公証を行っていないため、macOSによってインストールがブロックされる場合があります。
+
+インストールを拒否された場合は、「システム設定 > プライバシーとセキュリティ」を開き、ブロックされたインストーラーに表示される「このまま開く」（または同等の「Open Anyway」）を明示的に選択してから、PKGをもう一度開いてください。
+
+User-facing release version: `4.70.0`
+Mozc internal version: `3.34.6215.100`
+
 Mozkey 4.60.4 / Mozc 3.34 / *2026-09-06*
 -------------------------------------------
 

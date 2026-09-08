@@ -6266,22 +6266,27 @@ void Session::ConfirmPendingZenzFeedback() {
           " context_class=", pending_zenz_feedback_.context_class,
           " reason=", pending_zenz_feedback_.reason));
 
+      ZenzFeedbackBatch feedback_batch;
       if (displayed_raw) {
-        zenz_feedback_store_.RecordRejected(
-            pending_zenz_feedback_.key,
-            pending_zenz_feedback_.context_class,
-            pending_zenz_feedback_.raw_value,
-            pending_zenz_feedback_.reason);
+        ZenzFullFeedbackObservation full;
+        full.action = ZenzFullFeedbackAction::kRejected;
+        full.key = pending_zenz_feedback_.key;
+        full.context_class = pending_zenz_feedback_.context_class;
+        full.value = pending_zenz_feedback_.raw_value;
+        full.reason = pending_zenz_feedback_.reason;
+        feedback_batch.full = std::move(full);
       } else if (!IsExplicitZenzHardRejectReason(pending_zenz_feedback_.reason) &&
                  !pending_zenz_feedback_.raw_value.empty() &&
                  pending_zenz_feedback_.final_committed_value ==
                      pending_zenz_feedback_.raw_value) {
         // Explicitly restoring raw is positive evidence for raw, independently
         // of whether Local learning is still enabled at confirmation time.
-        zenz_feedback_store_.RecordAccepted(
-            pending_zenz_feedback_.key,
-            pending_zenz_feedback_.context_class,
-            pending_zenz_feedback_.raw_value);
+        ZenzFullFeedbackObservation full;
+        full.action = ZenzFullFeedbackAction::kAccepted;
+        full.key = pending_zenz_feedback_.key;
+        full.context_class = pending_zenz_feedback_.context_class;
+        full.value = pending_zenz_feedback_.raw_value;
+        feedback_batch.full = std::move(full);
       }
 
       int local_preference_record_count = 0;
@@ -6446,10 +6451,10 @@ void Session::ConfirmPendingZenzFeedback() {
         };
         deduplicate_rules(&rejected_local_preferences);
         if (!rejected_local_preferences.empty()) {
-          zenz_feedback_store_.RecordLocalRejecteds(
-              rejected_local_preferences);
           local_preference_record_count +=
               static_cast<int>(rejected_local_preferences.size());
+          feedback_batch.local_rejecteds =
+              std::move(rejected_local_preferences);
         }
 
         // Outside applied Local spans, learn only what the user changed from
@@ -6486,10 +6491,15 @@ void Session::ConfirmPendingZenzFeedback() {
         if (!accepted_local_preferences.empty()) {
           local_preference_record_count +=
               static_cast<int>(accepted_local_preferences.size());
-          zenz_feedback_store_.RecordLocalAccepteds(
-              accepted_local_preferences);
+          feedback_batch.local_accepteds =
+              std::move(accepted_local_preferences);
         }
       }
+
+      // One user confirmation becomes one best-effort persistence operation.
+      // Full/Local evidence generation and ordering remain otherwise unchanged.
+      zenz_feedback_store_.RecordBatch(feedback_batch);
+
       ZenzDebugOutput(absl::StrCat(
           "[zenz-feedback] local preference learning count=",
           local_preference_record_count,

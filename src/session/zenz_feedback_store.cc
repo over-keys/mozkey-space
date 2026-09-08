@@ -678,6 +678,51 @@ CanonicalLocalIdentity CanonicalizeLocalIdentity(
   return canonical;
 }
 
+Record MakeFullRecord(ZenzFullFeedbackAction action,
+                      absl::string_view key,
+                      absl::string_view context_class,
+                      absl::string_view value,
+                      absl::string_view reason) {
+  Record record;
+  record.kind = RecordKind::kFull;
+  record.action =
+      action == ZenzFullFeedbackAction::kAccepted ? "accepted" : "rejected";
+  record.key = std::string(key);
+  record.context_class = NormalizeContextClass(context_class);
+  record.value = std::string(value);
+  record.extra =
+      action == ZenzFullFeedbackAction::kRejected ? std::string(reason) : "";
+  record.count = 1;
+  return record;
+}
+
+void AppendLocalRecords(const std::vector<ZenzLocalPreference>& preferences,
+                        bool accepted, std::vector<Record>* records) {
+  if (records == nullptr) {
+    return;
+  }
+  for (const ZenzLocalPreference& preference : preferences) {
+    if (preference.key.empty() || preference.preferred_value.empty() ||
+        preference.disfavored_value.empty() ||
+        preference.preferred_value == preference.disfavored_value) {
+      continue;
+    }
+    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+        preference.key, preference.disfavored_value,
+        preference.preferred_value);
+    Record record;
+    record.kind = RecordKind::kLocal;
+    record.action = accepted ? "accepted" : "rejected";
+    record.key = local.key;
+    record.context_class =
+        NormalizeContextClass(preference.context_class);
+    record.value = local.raw_zenz_surface;
+    record.extra = local.corrected_surface;
+    record.count = 1;
+    records->push_back(std::move(record));
+  }
+}
+
 void ApplyRecordToFeedbackData(const Record& record, FeedbackData* data) {
   const size_t sequence = data->next_sequence++;
   if (record.kind == RecordKind::kFull) {
@@ -1717,29 +1762,42 @@ bool ZenzFeedbackStore::ClearAll() {
 void ZenzFeedbackStore::RecordAccepted(
     absl::string_view key, absl::string_view context_class,
     absl::string_view value) {
-  Record record;
-  record.kind = RecordKind::kFull;
-  record.action = "accepted";
-  record.key = std::string(key);
-  record.context_class = NormalizeContextClass(context_class);
-  record.value = std::string(value);
-  record.extra = "";
-  record.count = 1;
-  AppendRecords({record});
+  AppendRecords({MakeFullRecord(
+      ZenzFullFeedbackAction::kAccepted, key, context_class, value, "")});
 }
 
 void ZenzFeedbackStore::RecordRejected(
     absl::string_view key, absl::string_view context_class,
     absl::string_view value, absl::string_view reason) {
-  Record record;
-  record.kind = RecordKind::kFull;
-  record.action = "rejected";
-  record.key = std::string(key);
-  record.context_class = NormalizeContextClass(context_class);
-  record.value = std::string(value);
-  record.extra = std::string(reason);
-  record.count = 1;
-  AppendRecords({record});
+  AppendRecords({MakeFullRecord(
+      ZenzFullFeedbackAction::kRejected, key, context_class, value, reason)});
+}
+
+void ZenzFeedbackStore::RecordBatch(const ZenzFeedbackBatch& batch) {
+  std::vector<Record> records;
+  records.reserve((batch.full.has_value() ? 1 : 0) +
+                  batch.local_rejecteds.size() +
+                  batch.local_accepteds.size());
+
+  if (batch.full.has_value()) {
+    const ZenzFullFeedbackObservation& full = *batch.full;
+    records.push_back(MakeFullRecord(
+        full.action, full.key, full.context_class, full.value, full.reason));
+  }
+
+  // Ordering is part of Local replay semantics because reject floors at zero
+  // and accept saturates at the evidence cap.
+  AppendLocalRecords(batch.local_rejecteds, false, &records);
+  AppendLocalRecords(batch.local_accepteds, true, &records);
+
+  // A malformed Local observation must not suppress otherwise-valid Full
+  // evidence from the same confirmation. This preserves the previous
+  // per-record best-effort behavior while still coalescing valid records.
+  records.erase(
+      std::remove_if(records.begin(), records.end(),
+                     [](const Record& record) { return !IsSafeRecord(record); }),
+      records.end());
+  AppendRecords(records);
 }
 
 void ZenzFeedbackStore::RecordLocalAccepted(
@@ -1770,26 +1828,7 @@ void ZenzFeedbackStore::RecordLocalAccepteds(
     const std::vector<ZenzLocalPreference>& preferences) {
   std::vector<Record> records;
   records.reserve(preferences.size());
-  for (const ZenzLocalPreference& preference : preferences) {
-    if (preference.key.empty() || preference.preferred_value.empty() ||
-        preference.disfavored_value.empty() ||
-        preference.preferred_value == preference.disfavored_value) {
-      continue;
-    }
-    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
-        preference.key, preference.disfavored_value,
-        preference.preferred_value);
-    Record record;
-    record.kind = RecordKind::kLocal;
-    record.action = "accepted";
-    record.key = local.key;
-    record.context_class =
-        NormalizeContextClass(preference.context_class);
-    record.value = local.raw_zenz_surface;
-    record.extra = local.corrected_surface;
-    record.count = 1;
-    records.push_back(std::move(record));
-  }
+  AppendLocalRecords(preferences, true, &records);
   AppendRecords(records);
 }
 
@@ -1797,26 +1836,7 @@ void ZenzFeedbackStore::RecordLocalRejecteds(
     const std::vector<ZenzLocalPreference>& preferences) {
   std::vector<Record> records;
   records.reserve(preferences.size());
-  for (const ZenzLocalPreference& preference : preferences) {
-    if (preference.key.empty() || preference.preferred_value.empty() ||
-        preference.disfavored_value.empty() ||
-        preference.preferred_value == preference.disfavored_value) {
-      continue;
-    }
-    const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
-        preference.key, preference.disfavored_value,
-        preference.preferred_value);
-    Record record;
-    record.kind = RecordKind::kLocal;
-    record.action = "rejected";
-    record.key = local.key;
-    record.context_class =
-        NormalizeContextClass(preference.context_class);
-    record.value = local.raw_zenz_surface;
-    record.extra = local.corrected_surface;
-    record.count = 1;
-    records.push_back(std::move(record));
-  }
+  AppendLocalRecords(preferences, false, &records);
   AppendRecords(records);
 }
 
