@@ -1570,6 +1570,16 @@
                   </property>
                  </widget>
                 </item>
+                <item row="19" column="0" colspan="8">
+                 <widget class="QCheckBox" name="zenzDeferredNormalConversionDisplayCheckBox">
+                  <property name="toolTip">
+                   <string>Space による通常変換で、Zenz が十分速い場合は Mozc の変換結果を途中表示せず Zenz の結果を直接表示します。このモードの通常変換では Zenz 補正開始の遅延設定を使わず即時評価します。Zenz が遅い場合や採用されない場合は短時間で Mozc に戻ります。ライブ変換には影響しません。</string>
+                  </property>
+                  <property name="text">
+                   <string>Zenz 補正を直接表示（遅い場合は Mozc を使用）</string>
+                  </property>
+                 </widget>
+                </item>
                 <item row="20" column="0" colspan="3">
                  <widget class="QLabel" name="zenzLiveCorrectionProfileLabel">
                   <property name="toolTip">
@@ -3320,6 +3330,7 @@
   <tabstop>liveConversionMinKeyLengthSpinBox</tabstop>
   <tabstop>showLiveConversionRubyWindow</tabstop>
   <tabstop>zenzLiveCorrectionCheckBox</tabstop>
+  <tabstop>zenzDeferredNormalConversionDisplayCheckBox</tabstop>
   <tabstop>zenzLiveCorrectionDelaySpinBox</tabstop>
   <tabstop>zenzLiveCorrectionMinKeyLengthSpinBox</tabstop>
   <tabstop>zenzLiveCorrectionProfileLineEdit</tabstop>

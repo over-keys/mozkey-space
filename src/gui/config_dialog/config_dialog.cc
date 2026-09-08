@@ -2989,6 +2989,8 @@ void ConfigDialog::ConvertFromProto(const config::Config &config) {
                show_live_conversion_ruby_window);
 
   SET_CHECKBOX(zenzLiveCorrectionCheckBox, use_zenz_live_correction);
+  SET_CHECKBOX(zenzDeferredNormalConversionDisplayCheckBox,
+               use_zenz_deferred_normal_conversion_display);
 
   const uint32_t zenz_live_correction_delay_msec =
       config.has_zenz_live_correction_delay_msec()
@@ -3223,6 +3225,8 @@ void ConfigDialog::ConvertToProto(config::Config *config) const {
                show_live_conversion_ruby_window);
 
   GET_CHECKBOX(zenzLiveCorrectionCheckBox, use_zenz_live_correction);
+  GET_CHECKBOX(zenzDeferredNormalConversionDisplayCheckBox,
+               use_zenz_deferred_normal_conversion_display);
   config->set_zenz_live_correction_delay_msec(
       static_cast<uint32_t>(zenzLiveCorrectionDelaySpinBox->value()));
   config->set_zenz_live_correction_min_key_length(
@@ -4085,6 +4089,7 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
 void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
   const bool enabled = static_cast<bool>(state);
 
+  zenzDeferredNormalConversionDisplayCheckBox->setEnabled(enabled);
   zenzLiveCorrectionDelayLabel->setEnabled(enabled);
   zenzLiveCorrectionDelaySpinBox->setEnabled(enabled);
   zenzLiveCorrectionMinKeyLengthLabel->setEnabled(enabled);

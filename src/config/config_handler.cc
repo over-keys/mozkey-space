@@ -95,6 +95,9 @@ void ApplyMozkeyProductDefaults(Config* config) {
   if (!config->has_use_zenz_live_correction()) {
     config->set_use_zenz_live_correction(true);
   }
+  if (!config->has_use_zenz_deferred_normal_conversion_display()) {
+    config->set_use_zenz_deferred_normal_conversion_display(false);
+  }
   if (!config->has_zenz_live_correction_delay_msec()) {
     config->set_zenz_live_correction_delay_msec(200);
   }

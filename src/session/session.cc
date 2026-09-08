@@ -211,6 +211,7 @@ constexpr uint32_t kMaxLiveConversionMinKeyLength = 20;
 constexpr uint32_t kDefaultZenzLiveCorrectionDelayMsec = 1000;
 constexpr uint32_t kDefaultZenzLiveCorrectionTimeoutMsec = 180;
 constexpr uint32_t kDefaultZenzLiveCorrectionPollMsec = 24;
+constexpr uint32_t kMaxZenzDeferredNormalConversionDisplayMsec = 250;
 constexpr uint32_t kDefaultZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMaxZenzLiveCorrectionContextLength = 128;
 // Volatile left-context continuation cache used only when the current platform
@@ -2876,6 +2877,15 @@ uint32_t GetZenzLiveCorrectionTimeoutMsec(const config::Config& config) {
                   kMaxZenzLiveCorrectionTimeoutMsec);
 }
 
+uint32_t GetZenzDeferredNormalConversionDisplayMsec(
+    const config::Config& config) {
+  const uint32_t timeout_msec = GetZenzLiveCorrectionTimeoutMsec(config);
+  const uint32_t grace_msec =
+      timeout_msec + 2 * kDefaultZenzLiveCorrectionPollMsec;
+  return std::min(grace_msec,
+                  kMaxZenzDeferredNormalConversionDisplayMsec);
+}
+
 uint32_t GetZenzLiveCorrectionMinKeyLength(const config::Config& config) {
   if (!config.has_zenz_live_correction_min_key_length()) {
     return kDefaultZenzLiveCorrectionMinKeyLength;
@@ -4286,11 +4296,14 @@ bool Session::ExecuteCompositionCommand(
       const std::string composition =
           context_->composer().GetQueryForConversion();
       const std::string preedit = context_->composer().GetStringForPreedit();
+      commands::Preedit pre_conversion_preedit;
+      context_->converter().FillPreedit(context_->composer(),
+                                        &pre_conversion_preedit);
       if (!Convert(command)) {
         return false;
       }
       MaybeStartZenzCorrectionForNormalConversion(
-          composition, preedit, true, command);
+          composition, preedit, pre_conversion_preedit, true, command);
       return true;
     }
 
@@ -4298,11 +4311,14 @@ bool Session::ExecuteCompositionCommand(
       const std::string composition =
           context_->composer().GetQueryForConversion();
       const std::string preedit = context_->composer().GetStringForPreedit();
+      commands::Preedit pre_conversion_preedit;
+      context_->converter().FillPreedit(context_->composer(),
+                                        &pre_conversion_preedit);
       if (!ConvertWithoutHistory(command)) {
         return false;
       }
       MaybeStartZenzCorrectionForNormalConversion(
-          composition, preedit, false, command);
+          composition, preedit, pre_conversion_preedit, false, command);
       return true;
     }
 
@@ -5571,7 +5587,7 @@ bool Session::MaybeStartLiveConversion(commands::Command* command) {
     *command->mutable_output()->mutable_candidate_window() =
         live_conversion_suggestion_candidate_window_;
   }
-  MaybeScheduleZenzCorrection(command, true);
+  MaybeScheduleZenzCorrection(command, true, nullptr);
   return true;
 }
 
@@ -6728,6 +6744,7 @@ bool Session::HasActiveZenzCorrectionSource() const {
 
 bool Session::MaybeStartZenzCorrectionForNormalConversion(
     absl::string_view composition, absl::string_view preedit,
+    const commands::Preedit& pre_conversion_preedit,
     bool use_conversion_history, commands::Command* command) {
   const config::Config& config = context_->GetConfig();
   if (live_conversion_active_ || !config.use_zenz_live_correction() ||
@@ -6766,7 +6783,8 @@ bool Session::MaybeStartZenzCorrectionForNormalConversion(
       context_->converter(), command->output(), live_conversion_key_,
       live_conversion_value_);
 
-  if (MaybeScheduleZenzCorrection(command, use_conversion_history)) {
+  if (MaybeScheduleZenzCorrection(
+          command, use_conversion_history, &pre_conversion_preedit)) {
     return true;
   }
 
@@ -6958,7 +6976,8 @@ void Session::InvalidateZenzContinuationContextCacheForSessionCommand(
 }
 
 bool Session::MaybeScheduleZenzCorrection(
-    commands::Command* command, bool use_conversion_history) {
+    commands::Command* command, bool use_conversion_history,
+    const commands::Preedit* pre_conversion_preedit) {
   const config::Config& config = context_->GetConfig();
 
   if (!config.use_zenz_live_correction()) {
@@ -6970,6 +6989,11 @@ bool Session::MaybeScheduleZenzCorrection(
   }
 
   const bool from_live_conversion = live_conversion_active_;
+  const bool defer_normal_conversion_display =
+      !from_live_conversion &&
+      config.use_zenz_deferred_normal_conversion_display() &&
+      pre_conversion_preedit != nullptr &&
+      pre_conversion_preedit->segment_size() > 0;
   if (from_live_conversion && !config.use_live_conversion()) {
     return false;
   }
@@ -7095,6 +7119,12 @@ bool Session::MaybeScheduleZenzCorrection(
   pending_zenz_live_.prompt = prompt;
   pending_zenz_live_.protected_spans = protected_prompt.protected_spans;
   pending_zenz_live_.mozc_preedit_output = mozc_preedit_output;
+  pending_zenz_live_.defer_normal_conversion_display =
+      defer_normal_conversion_display;
+  if (defer_normal_conversion_display) {
+    pending_zenz_live_.deferred_normal_conversion_preedit_output =
+        *pre_conversion_preedit;
+  }
   pending_zenz_live_.issued_at = Clock::GetAbslTime();
   pending_zenz_live_.pending = true;
   pending_zenz_live_.submitted = false;
@@ -7116,6 +7146,15 @@ bool Session::MaybeScheduleZenzCorrection(
       " right_context_reason=", assembled_context.right.reason,
       " protected_prompt_replacements=",
       protected_prompt.placeholder_count));
+
+  if (defer_normal_conversion_display) {
+    ZenzDebugOutput("[zenz] explicit direct-display submit immediately");
+    // The physical Space command already contains the Mozc conversion output.
+    // Submit Zenz now, then replace only that output preedit with the frozen
+    // pre-conversion display. Do not call Output() a second time on this path.
+    return AdvancePendingZenzLiveCorrection(
+        command, /*refresh_output_on_submit=*/false);
+  }
 
   const uint32_t delay_msec = GetZenzLiveCorrectionDelayMsec(config);
   if (from_live_conversion && delay_msec == 0) {
@@ -7174,7 +7213,23 @@ void Session::AttachZenzLiveCorrectionPollCallback(
       pending_zenz_live_.generation);
   session_command->set_live_conversion_key(pending_zenz_live_.key);
 
-  callback->set_delay_millisec(kDefaultZenzLiveCorrectionPollMsec);
+  uint32_t delay_msec = kDefaultZenzLiveCorrectionPollMsec;
+  if (pending_zenz_live_.defer_normal_conversion_display &&
+      pending_zenz_live_.submitted) {
+    const absl::Duration remaining =
+        pending_zenz_live_.deferred_normal_conversion_display_deadline -
+        Clock::GetAbslTime();
+    if (remaining <= absl::ZeroDuration()) {
+      delay_msec = 1;
+    } else {
+      const int64_t remaining_msec =
+          absl::ToInt64Milliseconds(remaining);
+      delay_msec = std::min<uint32_t>(
+          kDefaultZenzLiveCorrectionPollMsec,
+          static_cast<uint32_t>(std::max<int64_t>(1, remaining_msec)));
+    }
+  }
+  callback->set_delay_millisec(delay_msec);
 }
 
 bool Session::IsCurrentZenzLiveCorrectionCallback(
@@ -7280,9 +7335,40 @@ bool Session::IsCurrentZenzLiveCorrectionCallback(
   return true;
 }
 
+bool Session::OutputDeferredNormalConversionWithZenzPending(
+    commands::Command* command) {
+  command->mutable_output()->set_consumed(true);
+
+  if (!pending_zenz_live_.pending ||
+      !pending_zenz_live_.defer_normal_conversion_display ||
+      pending_zenz_live_.from_live_conversion ||
+      context_->state() != ImeContext::CONVERSION ||
+      pending_zenz_live_.deferred_normal_conversion_preedit_output
+              .segment_size() == 0) {
+    OutputFromState(command);
+    return true;
+  }
+
+  // Keep server-side Mozc conversion active while showing the exact pre-Space
+  // composition. This is a short speculative presentation layer only.
+  OutputMode(command);
+  commands::Output* output = command->mutable_output();
+  *output->mutable_preedit() =
+      pending_zenz_live_.deferred_normal_conversion_preedit_output;
+  output->clear_candidate_window();
+  output->set_live_conversion(false);
+  output->set_live_conversion_pending(false);
+  output->set_zenz_live_correction_pending(true);
+  return true;
+}
+
 bool Session::OutputCurrentLiveConversionWithZenzPending(
     commands::Command* command) {
   command->mutable_output()->set_consumed(true);
+
+  if (pending_zenz_live_.defer_normal_conversion_display) {
+    return OutputDeferredNormalConversionWithZenzPending(command);
+  }
 
   if (HasActiveZenzCorrectionSource() &&
       context_->state() == ImeContext::CONVERSION) {
@@ -7384,6 +7470,11 @@ bool Session::AdvancePendingZenzLiveCorrection(
     pending_zenz_live_.issued_at = now;
     pending_zenz_live_.submitted = true;
     pending_zenz_live_.poll_count = 0;
+    if (pending_zenz_live_.defer_normal_conversion_display) {
+      pending_zenz_live_.deferred_normal_conversion_display_deadline =
+          now + absl::Milliseconds(
+                    GetZenzDeferredNormalConversionDisplayMsec(config));
+    }
 
     ZenzLiveRequest request;
     request.generation = pending_zenz_live_.generation;
@@ -7418,6 +7509,8 @@ bool Session::AdvancePendingZenzLiveCorrection(
     bool result = true;
     if (refresh_output_on_submit) {
       result = OutputCurrentLiveConversionWithZenzPending(command);
+    } else if (pending_zenz_live_.defer_normal_conversion_display) {
+      result = OutputDeferredNormalConversionWithZenzPending(command);
     } else {
       commands::Output* output = command->mutable_output();
       output->set_live_conversion(true);
@@ -7455,6 +7548,26 @@ bool Session::AdvancePendingZenzLiveCorrection(
   }
 
   ++pending_zenz_live_.poll_count;
+
+  if (pending_zenz_live_.defer_normal_conversion_display &&
+      now >= pending_zenz_live_
+                 .deferred_normal_conversion_display_deadline) {
+    ZenzDebugOutput(absl::StrCat(
+        "[zenz] direct-display grace expired generation=",
+        pending_zenz_live_.generation,
+        " poll_count=", pending_zenz_live_.poll_count,
+        " grace_msec=",
+        GetZenzDeferredNormalConversionDisplayMsec(config)));
+
+    // Missing the presentation grace is neutral evidence. Retire this Session
+    // generation and reveal Mozc. The worker may still finish an in-flight
+    // transport request, but its late result is stale and cannot affect UI or
+    // Full/Local feedback.
+    CancelPendingZenzLiveCorrection();
+    normal_conversion_zenz_active_ = false;
+    return OutputCurrentLiveConversionAfterZenzStop(
+        command, "zenz_direct_display_grace_expired");
+  }
 
   const uint32_t async_wait_msec =
       std::max<uint32_t>(timeout_msec, kZenzLiveCorrectionAsyncWaitMsec);
@@ -8673,11 +8786,14 @@ bool Session::InsertCharacter(commands::Command* command) {
     const std::string composition =
         context_->composer().GetQueryForConversion();
     const std::string preedit = context_->composer().GetStringForPreedit();
+    commands::Preedit pre_conversion_preedit;
+    context_->converter().FillPreedit(context_->composer(),
+                                      &pre_conversion_preedit);
     if (!Convert(command)) {
       return false;
     }
     MaybeStartZenzCorrectionForNormalConversion(
-        composition, preedit, true, command);
+        composition, preedit, pre_conversion_preedit, true, command);
     return true;
   }
 

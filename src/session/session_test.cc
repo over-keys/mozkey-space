@@ -119,6 +119,7 @@ class SessionTestPeer : testing::TestPeer<Session> {
   PEER_METHOD(Suggest);
   PEER_METHOD(MaybeStartLiveConversion);
   PEER_METHOD(OutputPendingLiveConversion);
+  PEER_METHOD(OutputDeferredNormalConversionWithZenzPending);
   PEER_METHOD(AttachLiveConversionSuggestionCandidateWindow);
   PEER_METHOD(AttachCachedLiveConversionSuggestionCandidateWindow);
 
@@ -3799,6 +3800,51 @@ TEST_F(SessionTest, ZenzRejectThenMozcCommitLearnsFullLocalAndMozcHistory) {
 }
 
 #endif  // defined(_WIN32)
+
+TEST_F(SessionTest,
+       DeferredNormalZenzDisplayKeepsRawPreeditAndHidesCandidates) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  commands::Command command;
+  InsertCharacterString("りせき", "aaa", &session, &command);
+  ASSERT_TRUE(command.output().has_preedit());
+  const commands::Preedit pre_conversion_preedit = command.output().preedit();
+
+  Segments mozc_segments;
+  Segment* mozc_segment = mozc_segments.add_segment();
+  mozc_segment->set_key("りせき");
+  AddCandidate("りせき", "離席", mozc_segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(mozc_segments), Return(true)));
+
+  command.Clear();
+  ASSERT_TRUE(session.Convert(&command));
+  ASSERT_EQ(session.context().state(), ImeContext::CONVERSION);
+  EXPECT_PREEDIT("離席", command);
+
+  peer.normal_conversion_zenz_active_() = true;
+  auto& pending = peer.pending_zenz_live_();
+  pending.pending = true;
+  pending.from_live_conversion = false;
+  pending.defer_normal_conversion_display = true;
+  pending.deferred_normal_conversion_preedit_output = pre_conversion_preedit;
+
+  // Make candidate-window presence explicit so the helper must remove it.
+  command.mutable_output()->mutable_candidate_window();
+
+  ASSERT_TRUE(
+      peer.OutputDeferredNormalConversionWithZenzPending(&command));
+  EXPECT_PREEDIT("りせき", command);
+  EXPECT_FALSE(command.output().has_candidate_window());
+  EXPECT_FALSE(command.output().live_conversion());
+  EXPECT_FALSE(command.output().live_conversion_pending());
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+}
 
 TEST_F(SessionTest, LiveConversionUsesDefaultMinKeyLength) {
   MockEngine engine;

@@ -180,8 +180,11 @@ class Session {
     std::string prompt;
     std::vector<ProtectedConversionSpan> protected_spans;
     commands::Preedit mozc_preedit_output;
+    commands::Preedit deferred_normal_conversion_preedit_output;
+    absl::Time deferred_normal_conversion_display_deadline;
     absl::Time issued_at;
     bool pending = false;
+    bool defer_normal_conversion_display = false;
     bool submitted = false;
     bool from_live_conversion = true;
     // Whether this conversion is allowed to consult persistent history.
@@ -330,6 +333,7 @@ class Session {
   bool HasActiveZenzCorrectionSource() const;
   bool MaybeStartZenzCorrectionForNormalConversion(
       absl::string_view composition, absl::string_view preedit,
+      const commands::Preedit& pre_conversion_preedit,
       bool use_conversion_history, commands::Command* command);
   bool CanUseZenzContinuationContextCache() const;
   bool HasZenzContextFeature(const commands::Context&,
@@ -341,14 +345,16 @@ class Session {
       const commands::Command&);
   void InvalidateZenzContinuationContextCacheForSessionCommand(
       commands::SessionCommand::CommandType);
-  bool MaybeScheduleZenzCorrection(commands::Command*,
-                                   bool use_conversion_history);
+  bool MaybeScheduleZenzCorrection(
+      commands::Command*, bool use_conversion_history,
+      const commands::Preedit* pre_conversion_preedit);
   void AttachZenzLiveCorrectionStartCallback(
       commands::Command* command, const uint32_t delay_msec) const;
   void AttachZenzLiveCorrectionPollCallback(commands::Command*) const;
   bool ApplyZenzLiveCorrection(commands::Command*);
   bool AdvancePendingZenzLiveCorrection(commands::Command*,bool);
   bool IsCurrentZenzLiveCorrectionCallback(const commands::Command&) const;
+  bool OutputDeferredNormalConversionWithZenzPending(commands::Command*);
   bool OutputCurrentLiveConversionWithZenzPending(commands::Command*);
   bool OutputCurrentLiveConversionAfterZenzStop(commands::Command*,absl::string_view);
   ZenzLiveCorrector* EnsureZenzLiveCorrector();
