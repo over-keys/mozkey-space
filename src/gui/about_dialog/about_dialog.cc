@@ -98,9 +98,7 @@ AboutDialog::AboutDialog(QWidget *parent)
 #if defined(GOOGLE_JAPANESE_INPUT_BUILD) && !defined(MOZKEY_SPACE_BUILD)
   const std::string version_info = "(" + Version::GetMozcVersion() + ")";
 #else  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
-  const std::string version_info =
-      Version::GetMozkeySpaceReleaseVersion() + "\nBuild " +
-      Version::GetMozcVersion();
+  const std::string version_info = Version::GetMozkeySpaceReleaseVersion();
 #endif  // GOOGLE_JAPANESE_INPUT_BUILD && !MOZKEY_SPACE_BUILD
   version_label->setText(QLatin1String(version_info.c_str()));
   GuiUtil::ReplaceWidgetLabels(this);
