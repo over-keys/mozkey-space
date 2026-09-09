@@ -814,9 +814,9 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
     (void)live;  // Live conversion intentionally does not gate Zenz anymore.
     zenz->setEnabled(true);
     const bool zenz_enabled = zenz->isChecked();
+    // Delay controls are owned by SelectZenzLiveCorrectionSetting(), which
+    // also accounts for direct display. Do not override their enabled state.
     const char* zenz_controls[] = {
-        "zenzLiveCorrectionDelayLabel",
-        "zenzLiveCorrectionDelaySpinBox",
         "zenzLiveCorrectionMinKeyLengthLabel",
         "zenzLiveCorrectionMinKeyLengthSpinBox",
         "zenzLiveCorrectionProfileLabel",
