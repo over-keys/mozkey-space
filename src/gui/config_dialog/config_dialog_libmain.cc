@@ -801,10 +801,13 @@ void InstallRev10ConfigDialogIntegration(mozc::gui::ConfigDialog* dialog) {
                    SLOT(EnableApplyButton()));
 
   delay_label->setText(QString::fromUtf8("Zenz 補正開始の遅延"));
-  delay_label->setToolTip(QString::fromUtf8(
-      "Mozc の変換結果が表示された後、Zenz 補正を開始するまでの待ち時間です。"));
+  delay_label->setToolTip(
+      QString::fromUtf8("Zenz "
+                        "補正を開始するまでの待ち時間です。直接表示が有効な場合"
+                        "は使用しません。"));
   delay_spin->setToolTip(QString::fromUtf8(
-      "Mozc の変換結果が表示された後、Zenz 補正を開始するまでの待ち時間です。0 ms は即時です。"));
+      "Zenz 補正を開始するまでの待ち時間です。0 ms "
+      "で即時開始します。直接表示が有効な場合は使用しません。"));
 
   auto update = [dialog, live, zenz, feedback, auto_block, full_threshold,
                  full_threshold_label, local_learning, local_threshold,
