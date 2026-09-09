@@ -4,113 +4,251 @@ on:
   release:
     types:
       - published
+  workflow_run:
+    workflows:
+      - CI for Windows
+    types:
+      - completed
 
 permissions:
   actions: read
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.release.tag_name }}
+  group: publish-windows-${{ github.event.release.tag_name || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
   publish_windows_release:
     name: Publish Windows MSI to GitHub Release
+    if: >-
+      github.event_name == 'release' ||
+      github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
-    # The artifact may be delayed by the full Windows build. Allow the
-    # publisher to poll for the complete Windows job, plus download/upload.
-    timeout-minutes: 180
+    timeout-minutes: 30
 
     steps:
-      - name: Resolve public release version
-        id: version
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-
-          if [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+(\.[0-9]+)?)$ ]]; then
-            PUBLIC_VERSION="${BASH_REMATCH[1]}"
-          else
-            echo "Release tag does not contain a public version: $RELEASE_TAG" >&2
-            exit 1
-          fi
-
-          echo "public_version=$PUBLIC_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for matching Windows CI artifact
-        id: windows_ci
+      - name: Resolve release and Windows CI rendezvous
+        id: rendezvous
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          SOURCE_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
         run: |
           set -euo pipefail
 
-          # Poll every 30 seconds for up to 150 minutes. The Windows build
-          # itself has a 120-minute timeout; the extra margin covers runner
-          # startup and artifact publication.
-          for attempt in $(seq 1 300); do
-            runs="$(
-              gh run list \
-                --repo "$GITHUB_REPOSITORY" \
-                --workflow windows.yaml \
-                --limit 50 \
-                --json databaseId,status,conclusion,headSha,headBranch
-            )"
+          pending() {
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Release and Windows CI are not both ready; the other event will retry."
+          }
 
-            run_id="$(
-              jq -r \
-                --arg sha "$SOURCE_SHA" \
-                --arg branch "$RELEASE_TAG" \
-                '[.[] | select(.headSha == $sha and .headBranch == $branch)]
-                 | sort_by(.databaseId)
-                 | last
-                 | .databaseId // empty' \
-                <<< "$runs"
-            )"
-
-            if [[ -n "$run_id" ]]; then
-              run_status="$(
-                jq -r \
-                  --arg id "$run_id" \
-                  '.[] | select((.databaseId | tostring) == $id) | .status' \
-                  <<< "$runs"
-              )"
-              run_conclusion="$(
-                jq -r \
-                  --arg id "$run_id" \
-                  '.[] | select((.databaseId | tostring) == $id) | .conclusion' \
-                  <<< "$runs"
-              )"
-
-              echo "Windows CI run $run_id: $run_status / $run_conclusion"
-
-              if [[ "$run_status" == "completed" && "$run_conclusion" == "success" ]]; then
-                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-
-              if [[ "$run_status" == "completed" && "$run_conclusion" != "" && "$run_conclusion" != "null" ]]; then
-                echo "Matching Windows CI run did not succeed: $run_conclusion" >&2
-                exit 1
-              fi
-            else
-              echo "Waiting for Windows CI push run for $RELEASE_TAG at $SOURCE_SHA"
+          validate_release_tag() {
+            local tag="$1"
+            if [[ "$tag" =~ ^v([0-9]+\.[0-9]+(\.[0-9]+)?)$ ]]; then
+              PUBLIC_VERSION="${BASH_REMATCH[1]}"
+              return 0
             fi
+            return 1
+          }
 
-            if (( attempt == 300 )); then
-              echo "Timed out waiting for the matching Windows CI artifact." >&2
+          resolve_tag_sha() {
+            local tag="$1"
+            local tag_json object_type object_sha
+
+            tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}")"
+            object_type="$(jq -r '.object.type // empty' <<<"$tag_json")"
+            object_sha="$(jq -r '.object.sha // empty' <<<"$tag_json")"
+
+            # Follow an annotated tag to its commit. The small depth limit
+            # prevents a malformed tag chain from turning into a long loop.
+            for _ in 1 2 3 4 5; do
+              case "$object_type" in
+                commit)
+                  printf '%s\n' "$object_sha"
+                  return 0
+                  ;;
+                tag)
+                  tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+                  object_type="$(jq -r '.object.type // empty' <<<"$tag_json")"
+                  object_sha="$(jq -r '.object.sha // empty' <<<"$tag_json")"
+                  ;;
+                *)
+                  echo "Tag does not resolve to a commit: ${tag}" >&2
+                  return 1
+                  ;;
+              esac
+            done
+
+            echo "Tag indirection is too deep: ${tag}" >&2
+            return 1
+          }
+
+          release_json=""
+          release_tag=""
+          run_id=""
+          expected_sha=""
+
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            release_tag="$RELEASE_EVENT_TAG"
+            if ! validate_release_tag "$release_tag"; then
+              echo "Release tag does not contain a public version: ${release_tag}" >&2
               exit 1
             fi
 
-            sleep 30
-          done
+            expected_sha="$(resolve_tag_sha "$release_tag")"
+
+            release_error="$RUNNER_TEMP/windows-release-error.log"
+            if ! release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}" 2>"$release_error")"; then
+              cat "$release_error" >&2
+              echo "Published release could not be read for ${release_tag}." >&2
+              exit 1
+            fi
+
+            release_tag_name="$(jq -r '.tag_name // empty' <<<"$release_json")"
+            release_draft="$(jq -r '.draft // empty' <<<"$release_json")"
+            release_published_at="$(jq -r '.published_at // empty' <<<"$release_json")"
+            if [[ "$release_tag_name" != "$release_tag" ||
+                  "$release_draft" != "false" ||
+                  -z "$release_published_at" ]]; then
+              echo "Release is not a published release for ${release_tag}." >&2
+              exit 1
+            fi
+
+            runs_json="$(gh api \
+              --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/windows.yaml/runs" \
+              -f event=push \
+              -f branch="$release_tag" \
+              -f per_page=100)"
+            matching_runs="$(jq -c \
+              --arg tag "$release_tag" \
+              --arg sha "$expected_sha" \
+              '[.workflow_runs[]?
+                | select(.name == "CI for Windows")
+                | select(((.path // "") | split("@")[0]) == ".github/workflows/windows.yaml")
+                | select(.event == "push")
+                | select(.head_branch == $tag and .head_sha == $sha)]' \
+              <<<"$runs_json")"
+
+            run_id="$(jq -r \
+              'map(select(.status == "completed" and .conclusion == "success"))
+               | sort_by(.id)
+               | last
+               | .id // empty' \
+              <<<"$matching_runs")"
+            if [[ -z "$run_id" ]]; then
+              if jq -e 'any(.[]; .status != "completed")' <<<"$matching_runs" >/dev/null; then
+                pending
+                exit 0
+              fi
+              if jq -e \
+                'any(.[]; .status == "completed" and (.conclusion // "") != "success")' \
+                <<<"$matching_runs" >/dev/null; then
+                echo "Matching Windows CI run for ${release_tag} did not succeed." >&2
+                exit 1
+              fi
+              pending
+              exit 0
+            fi
+          elif [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            # Manual runs and any other non-tag invocation are
+            # intentionally ignored; only tag-push runs can publish assets.
+            # The workflow_run payload has no ref type, so the tag-only
+            # Windows trigger, push check, tag ref, and SHA check are all
+            # required to keep this privileged path scoped to release tags.
+            if [[ "$WORKFLOW_RUN_REPOSITORY" != "$GITHUB_REPOSITORY" ||
+                  "$WORKFLOW_RUN_NAME" != "CI for Windows" ||
+                  "$WORKFLOW_RUN_EVENT" != "push" ||
+                  -z "$WORKFLOW_RUN_ID" ]]; then
+              pending
+              exit 0
+            fi
+
+            release_tag="$WORKFLOW_RUN_HEAD_BRANCH"
+            if ! validate_release_tag "$release_tag"; then
+              pending
+              exit 0
+            fi
+
+            # Use the triggering run ID directly, then re-read it from the
+            # API so the privileged publisher verifies the complete identity.
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${WORKFLOW_RUN_ID}")"
+            actual_run_id="$(jq -r '.id // empty' <<<"$run_json")"
+            actual_run_name="$(jq -r '.name // empty' <<<"$run_json")"
+            actual_run_path="$(jq -r '.path // empty' <<<"$run_json")"
+            actual_run_event="$(jq -r '.event // empty' <<<"$run_json")"
+            actual_run_status="$(jq -r '.status // empty' <<<"$run_json")"
+            actual_run_conclusion="$(jq -r '.conclusion // empty' <<<"$run_json")"
+            actual_head_branch="$(jq -r '.head_branch // empty' <<<"$run_json")"
+            actual_head_sha="$(jq -r '.head_sha // empty' <<<"$run_json")"
+            actual_run_workflow_file="${actual_run_path%%@*}"
+
+            if [[ "$actual_run_id" != "$WORKFLOW_RUN_ID" ||
+                  "$actual_run_name" != "CI for Windows" ||
+                  "$actual_run_workflow_file" != ".github/workflows/windows.yaml" ||
+                  "$actual_run_event" != "push" ||
+                  "$actual_run_status" != "completed" ||
+                  -z "$actual_run_conclusion" ||
+                  "$actual_run_conclusion" != "$WORKFLOW_RUN_CONCLUSION" ||
+                  "$actual_head_branch" != "$release_tag" ]]; then
+              echo "Triggering run identity or conclusion changed unexpectedly." >&2
+              exit 1
+            fi
+
+            expected_sha="$(resolve_tag_sha "$release_tag")"
+            if [[ "$actual_head_sha" != "$expected_sha" ||
+                  "$WORKFLOW_RUN_HEAD_SHA" != "$actual_head_sha" ]]; then
+              echo "Windows CI run SHA does not match tag ${release_tag}." >&2
+              exit 1
+            fi
+
+            release_error="$RUNNER_TEMP/windows-release-error.log"
+            if ! release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}" 2>"$release_error")"; then
+              if grep -q 'HTTP 404' "$release_error"; then
+                pending
+                exit 0
+              fi
+              cat "$release_error" >&2
+              exit 1
+            fi
+
+            release_tag_name="$(jq -r '.tag_name // empty' <<<"$release_json")"
+            release_draft="$(jq -r '.draft // empty' <<<"$release_json")"
+            release_published_at="$(jq -r '.published_at // empty' <<<"$release_json")"
+            if [[ "$release_tag_name" != "$release_tag" ||
+                  "$release_draft" != "false" ||
+                  -z "$release_published_at" ]]; then
+              pending
+              exit 0
+            fi
+
+            run_id="$WORKFLOW_RUN_ID"
+            if [[ "$actual_run_conclusion" != "success" ]]; then
+              echo "Windows CI run ${run_id} concluded ${actual_run_conclusion}; refusing to publish a Windows MSI for ${release_tag}." >&2
+              exit 1
+            fi
+          else
+            echo "Unsupported event: ${EVENT_NAME}" >&2
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "public_version=$PUBLIC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "Publishing Windows CI run ${run_id} for ${release_tag} at ${expected_sha}."
 
       - name: Download matching Windows MSI
+        if: steps.rendezvous.outputs.ready == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -119,18 +257,19 @@ jobs:
           set -euo pipefail
 
           gh run download \
-            "${{ steps.windows_ci.outputs.run_id }}" \
+            "${{ steps.rendezvous.outputs.run_id }}" \
             --repo "$GITHUB_REPOSITORY" \
             --name Mozc64_x64.msi \
             --dir windows-artifact
 
       - name: Upload Windows MSI and checksum to Release
+        if: steps.rendezvous.outputs.ready == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          PUBLIC_VERSION: ${{ steps.version.outputs.public_version }}
+          RELEASE_TAG: ${{ steps.rendezvous.outputs.release_tag }}
+          PUBLIC_VERSION: ${{ steps.rendezvous.outputs.public_version }}
         run: |
           set -euo pipefail
 
