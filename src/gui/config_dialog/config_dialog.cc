@@ -4087,6 +4087,8 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
   liveConversionMinKeyLengthSpinBox->setEnabled(enabled);
   showLiveConversionRubyWindow->setEnabled(enabled);
   showCandidateWindowOnInitialConversionCheckBox->setEnabled(!enabled);
+  SelectZenzLiveCorrectionSetting(
+      static_cast<int>(zenzLiveCorrectionCheckBox->isChecked()));
 }
 
 void ConfigDialog::SelectZenzLiveCorrectionSetting(int /*state*/) {
