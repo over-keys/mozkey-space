@@ -5011,8 +5011,7 @@ TEST_F(SessionTest,
   EXPECT_EQ(command.output().preedit().segment(0).value(), "本屋に行く");
 }
 
-TEST_F(SessionTest,
-       ZenzLiveCorrectionPositiveDelaySchedulesStartCallback) {
+TEST_F(SessionTest, ZenzLiveCorrectionUnsetDelayUsesProductDefault) {
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
 
@@ -5025,7 +5024,9 @@ TEST_F(SessionTest,
   config.set_live_conversion_delay_msec(0);
   config.set_live_conversion_min_key_length(2);
   config.set_use_zenz_live_correction(true);
-  config.set_zenz_live_correction_delay_msec(1);
+  // ConfigHandler normally materializes the product default. Clear the field
+  // here so Session's unset-value fallback is exercised directly.
+  config.clear_zenz_live_correction_delay_msec();
   config.set_zenz_live_correction_min_key_length(2);
   session.SetConfig(config);
 
@@ -5055,7 +5056,7 @@ TEST_F(SessionTest,
   EXPECT_EQ(command.output().callback().session_command().type(),
             commands::SessionCommand::APPLY_ZENZ_LIVE_CORRECTION);
   ASSERT_TRUE(command.output().callback().has_delay_millisec());
-  EXPECT_EQ(command.output().callback().delay_millisec(), 1);
+  EXPECT_EQ(command.output().callback().delay_millisec(), 200);
 }
 
 TEST_F(SessionTest,
