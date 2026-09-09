@@ -5542,8 +5542,18 @@ Session::BuildLiveConversionDisplaySnapshotForCurrentComposition() const {
   snapshot.key = current_key;
   snapshot.preedit = raw_preedit;
 
-  if (has_stable && StartsWithString(current_key, stable_key) &&
-      StartsWithString(raw_preedit, stable_preedit)) {
+  if (has_stable) {
+    if (!StartsWithString(current_key, stable_key) ||
+        !StartsWithString(raw_preedit, stable_preedit)) {
+      // A destructive/non-append edit cannot safely reuse the old visible
+      // surface because reading length and converted surface length need not
+      // correspond. Leave this snapshot invalid. After the new Mozc
+      // conversion is materialized, MaybeStartLiveConversion() will use that
+      // exact Mozc result as the deferred direct-display surface while Zenz is
+      // re-evaluated immediately.
+      return snapshot;
+    }
+
     const std::string suffix_key = current_key.substr(stable_key.size());
     const std::string suffix_value = raw_preedit.substr(stable_preedit.size());
 
@@ -5564,6 +5574,8 @@ Session::BuildLiveConversionDisplaySnapshotForCurrentComposition() const {
         raw_preedit, &snapshot.preedit_output);
     snapshot.preedit_output.set_cursor(Util::CharsLen(snapshot.value));
   } else {
+    // First live generation has no converted surface to preserve yet, so raw
+    // composition remains the correct deferred display.
     context_->converter().FillPreedit(
         context_->composer(), &snapshot.preedit_output);
     snapshot.value = context_->composer().GetStringForSubmission();
@@ -5756,10 +5768,22 @@ bool Session::MaybeStartLiveConversion(commands::Command* command) {
     *command->mutable_output()->mutable_candidate_window() =
         live_conversion_suggestion_candidate_window_;
   }
+  LiveConversionDisplaySnapshot direct_live_conversion_display =
+      deferred_live_conversion_display;
+  if (use_direct_live_zenz_display &&
+      !direct_live_conversion_display.valid) {
+    // The previous visible surface could not be reused safely, as with
+    // Backspace/Delete. Do not flash raw hiragana. The new Mozc conversion is
+    // already available and is the authoritative immediate display while Zenz
+    // is re-evaluated under the normal direct-live 96 ms deadline.
+    SetVisibleLiveConversionFromCurrentMozc();
+    direct_live_conversion_display = visible_live_conversion_;
+  }
+
   const bool zenz_scheduled = MaybeScheduleZenzCorrection(
       command, true, nullptr,
-      deferred_live_conversion_display.valid
-          ? &deferred_live_conversion_display
+      direct_live_conversion_display.valid
+          ? &direct_live_conversion_display
           : nullptr);
   if (!zenz_scheduled ||
       !pending_zenz_live_.defer_live_conversion_display) {
