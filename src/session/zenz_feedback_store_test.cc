@@ -170,6 +170,23 @@ TEST(ZenzFeedbackStoreV4Test, SkippedOnUnsupportedPlatform) {
 
 #if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
 
+V4_TEST(AppendPreservesRecordWithoutTrailingNewline) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+  store.RecordAccepted("first", "empty", "one");
+  const auto path = V4_FEEDBACK_PATH();
+  const auto size = std::filesystem::file_size(path);
+  ASSERT_GT(size, 0);
+  std::filesystem::resize_file(path, size - 1);
+  store.RecordAccepted("second", "empty", "two");
+  EXPECT_EQ(store.Decide("first", "empty", "one").accepted_count, 1);
+  EXPECT_EQ(store.Decide("second", "empty", "two").accepted_count, 1);
+  ASSERT_TRUE(store.ClearAll());
+  store.RecordAccepted("third", "empty", "three");
+  EXPECT_EQ(store.Decide("third", "empty", "three").accepted_count, 1);
+  EXPECT_EQ(store.Decide("first", "empty", "one").accepted_count, 0);
+}
+
 V4_TEST(FullSemanticsRemainWeightedAndContextCompatible) {
   V4_PROFILE();
   ZenzFeedbackStore store;

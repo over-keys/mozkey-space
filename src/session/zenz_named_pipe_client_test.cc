@@ -109,6 +109,54 @@ ZenzLiveRequest MakeRequest(const TestPipeName& name, uint32_t generation) {
   return request;
 }
 
+TEST(ZenzNamedPipeClientTest, StopInterruptsMissingResponseAndJoinsWorker) {
+  const TestPipeName name = MakeTestPipeName();
+  HANDLE server = CreateServerPipe(name.wide);
+  ASSERT_NE(server, INVALID_HANDLE_VALUE);
+  std::atomic<bool> received{false};
+  std::atomic<bool> done{false};
+  std::thread server_thread([&] {
+    ZenzWireRequestHeader request = {};
+    std::string prompt;
+    if (ConnectServer(server) && ReadRequest(server, &request, &prompt)) {
+      received = true;
+      for (int i = 0; i < 5000 && !done.load(); ++i) {
+        ::Sleep(1);
+      }
+    }
+    ::CloseHandle(server);
+  });
+  auto client = std::make_unique<ZenzNamedPipeClient>();
+  auto* client_ptr = client.get();
+  ZenzLiveCorrector corrector(std::move(client));
+  corrector.Submit(MakeRequest(name, 101));
+  for (int i = 0; i < 2000 && !received.load(); ++i) {
+    ::Sleep(1);
+  }
+  const auto started = std::chrono::steady_clock::now();
+  corrector.Stop();
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  done = true;
+  server_thread.join();
+  EXPECT_TRUE(received.load());
+  EXPECT_LT(elapsed, std::chrono::seconds(2));
+  EXPECT_FALSE(corrector.IsBusy());
+  EXPECT_FALSE(corrector.TakeResult(101).has_value());
+  EXPECT_TRUE(client_ptr->IsStopRequested());
+  corrector.Start();
+  EXPECT_FALSE(client_ptr->IsStopRequested());
+  corrector.Stop();
+}
+
+TEST(ZenzNamedPipeClientTest, PreCancelledRequestDoesNotLaunchOrConnect) {
+  ZenzNamedPipeClient client;
+  client.RequestStop();
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_FALSE(client.Convert(MakeRequest(MakeTestPipeName(), 102)).ok);
+  EXPECT_LT(std::chrono::steady_clock::now() - started,
+            std::chrono::seconds(1));
+}
+
 TEST(ZenzNamedPipeClientTest, ImmediateFullResponseSucceeds) {
   const TestPipeName name = MakeTestPipeName();
   HANDLE server = CreateServerPipe(name.wide);

@@ -7210,6 +7210,19 @@ void Session::InvalidateZenzContinuationContextCacheForSessionCommand(
   }
 }
 
+void Session::SkipBusyDirectLiveZenz(commands::Command* command) {
+  // Busy is neutral evidence. Do not CancelPending() here because the
+  // running or queued work belongs to an older generation.
+  ++zenz_live_generation_;
+  pending_zenz_live_ = PendingZenzLiveCorrection();
+  commands::Output* output = command->mutable_output();
+  output->set_live_conversion(true);
+  output->set_live_conversion_pending(false);
+  output->set_zenz_live_correction_pending(false);
+  output->set_zenz_live_correction_applied(false);
+  output->set_zenz_live_correction_debug("zenz_direct_live_busy");
+}
+
 bool Session::MaybeScheduleZenzCorrection(
     commands::Command* command, bool use_conversion_history,
     const commands::Preedit* pre_conversion_preedit,
@@ -7264,6 +7277,15 @@ bool Session::MaybeScheduleZenzCorrection(
   // 「ほにゃ」 -> 「本屋」. Ordinary Zenz validates against the pre-conversion
   // key and must not be allowed to restore that mistyped reading.
   if (context_->converter().CurrentConversionHasReadingCorrection()) {
+    return false;
+  }
+
+  // Avoid context/history/prompt work for a generation that will be skipped.
+  // This is advisory; TrySubmitIfIdle still makes the atomic admission
+  // decision.
+  if (defer_live_conversion_display && zenz_live_corrector_ &&
+      zenz_live_corrector_->IsBusy()) {
+    SkipBusyDirectLiveZenz(command);
     return false;
   }
 
@@ -7853,16 +7875,7 @@ bool Session::AdvancePendingZenzLiveCorrection(
             "[zenz] direct-live skipped because worker is busy generation=",
             pending_zenz_live_.generation));
 
-        // Busy is neutral evidence. Do not CancelPending() here because the
-        // running or queued work belongs to an older generation.
-        ++zenz_live_generation_;
-        pending_zenz_live_ = PendingZenzLiveCorrection();
-        commands::Output* output = command->mutable_output();
-        output->set_live_conversion(true);
-        output->set_live_conversion_pending(false);
-        output->set_zenz_live_correction_pending(false);
-        output->set_zenz_live_correction_applied(false);
-        output->set_zenz_live_correction_debug("zenz_direct_live_busy");
+        SkipBusyDirectLiveZenz(command);
         return false;
       }
 

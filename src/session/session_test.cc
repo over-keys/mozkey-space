@@ -3875,6 +3875,7 @@ TEST(ZenzLiveCorrectorTest, TrySubmitIfIdleRejectsBusyWorker) {
   ZenzLiveCorrector corrector{std::unique_ptr<ZenzClient>()};
   ZenzLiveCorrectorTestPeer peer(corrector);
   peer.SetBusyWithoutWorkerForTest(true);
+  EXPECT_TRUE(corrector.IsBusy());
 
   ZenzLiveRequest request;
   request.generation = 1;
@@ -3883,6 +3884,7 @@ TEST(ZenzLiveCorrectorTest, TrySubmitIfIdleRejectsBusyWorker) {
 
   // No worker thread was created because started_ was pre-set by the peer.
   peer.SetBusyWithoutWorkerForTest(false);
+  EXPECT_FALSE(corrector.IsBusy());
 }
 
 TEST_F(SessionTest, DeferredLiveZenzDisplayHidesInternalMozc) {
@@ -3992,6 +3994,68 @@ TEST_F(SessionTest,
   EXPECT_TRUE(peer.pending_zenz_live_().deferred_live_conversion_display.valid);
   EXPECT_EQ(peer.pending_zenz_live_().deferred_live_conversion_display.value,
             "彼は点滴で");
+}
+
+TEST_F(SessionTest, DeferredLiveBusyWorkerKeepsMozcWithoutPendingCorrection) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  // Model the composition after Backspace has shortened a previously visible
+  // Zenz-corrected live conversion.
+  commands::Command command;
+  InsertCharacterString("かれはてんてきで", "aaaaaaaa", &session, &command);
+  ASSERT_EQ(session.context().composer().GetQueryForConversion(),
+            "かれはてんてきで");
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_live_conversion_delay_msec(0);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_deferred_normal_conversion_display(true);
+  session.SetConfig(config);
+
+  auto& visible = peer.visible_live_conversion_();
+  visible.valid = true;
+  visible.key = "かれはてんてきです";
+  visible.preedit = "かれはてんてきです";
+  visible.value = "彼は天敵です";
+  auto* old_segment = visible.preedit_output.add_segment();
+  old_segment->set_key("かれはてんてきです");
+  old_segment->set_value("彼は天敵です");
+  old_segment->set_annotation(commands::Preedit::Segment::UNDERLINE);
+  visible.preedit_output.set_cursor(6);
+
+  Segments mozc_segments;
+  Segment* mozc_segment = mozc_segments.add_segment();
+  mozc_segment->set_key("かれはてんてきで");
+  AddCandidate("かれはてんてきで", "彼は点滴で", mozc_segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(mozc_segments), Return(true)));
+
+  // Model an older request that still owns the worker.
+  peer.zenz_live_corrector_() =
+      std::make_unique<ZenzLiveCorrector>(std::unique_ptr<ZenzClient>());
+
+  ZenzLiveCorrectorTestPeer corrector_peer(*peer.zenz_live_corrector_());
+  corrector_peer.SetBusyWithoutWorkerForTest(true);
+
+  command.Clear();
+  ASSERT_TRUE(peer.MaybeStartLiveConversion(&command));
+
+  EXPECT_PREEDIT("彼は点滴で", command);
+  EXPECT_TRUE(command.output().live_conversion());
+  EXPECT_FALSE(command.output().live_conversion_pending());
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(command.output().zenz_live_correction_applied());
+  EXPECT_EQ(command.output().zenz_live_correction_debug(),
+            "zenz_direct_live_busy");
+  EXPECT_FALSE(peer.pending_zenz_live_().pending);
+  corrector_peer.SetBusyWithoutWorkerForTest(false);
 }
 
 TEST_F(SessionTest,

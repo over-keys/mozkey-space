@@ -361,6 +361,7 @@ class Session {
       const commands::Command&);
   void InvalidateZenzContinuationContextCacheForSessionCommand(
       commands::SessionCommand::CommandType);
+  void SkipBusyDirectLiveZenz(commands::Command* command);
   bool MaybeScheduleZenzCorrection(
       commands::Command*, bool use_conversion_history,
       const commands::Preedit* pre_conversion_preedit,

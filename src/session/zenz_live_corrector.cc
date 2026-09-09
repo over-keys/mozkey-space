@@ -20,6 +20,9 @@ void ZenzLiveCorrector::Start() {
     return;
   }
   stop_ = false;
+  if (client_) {
+    client_->ResetStop();
+  }
   started_ = true;
   worker_ = std::thread(&ZenzLiveCorrector::WorkerLoop, this);
 }
@@ -31,6 +34,9 @@ void ZenzLiveCorrector::Stop() {
       return;
     }
     stop_ = true;
+    if (client_) {
+      client_->RequestStop();
+    }
     latest_request_.reset();
     latest_result_.reset();
   }
@@ -69,6 +75,11 @@ bool ZenzLiveCorrector::TrySubmitIfIdle(ZenzLiveRequest request) {
   }
   cv_.notify_one();
   return true;
+}
+
+bool ZenzLiveCorrector::IsBusy() {
+  std::lock_guard<std::mutex> lock(mu_);
+  return running_ || latest_request_.has_value();
 }
 
 void ZenzLiveCorrector::CancelPending() {
@@ -132,7 +143,9 @@ void ZenzLiveCorrector::WorkerLoop() {
 
       // If a newer request is already queued, this result is still stored;
       // Session will drop it by generation. Keeping it is useful for debugging.
-      latest_result_ = std::move(response);
+      if (!stop_) {
+        latest_result_ = std::move(response);
+      }
       running_ = false;
     }
   }

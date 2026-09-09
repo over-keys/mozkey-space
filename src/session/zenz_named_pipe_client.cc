@@ -82,13 +82,16 @@ DWORD RemainingMsec(Deadline deadline) {
       std::numeric_limits<DWORD>::max()));
 }
 
-bool SleepWithinDeadline(DWORD requested_msec, Deadline deadline) {
+bool SleepWithinDeadline(DWORD requested_msec, Deadline deadline,
+                         HANDLE cancellation_event) {
   const DWORD remaining = RemainingMsec(deadline);
   if (remaining == 0) {
     return false;
   }
-  ::Sleep(std::min(requested_msec, remaining));
-  return RemainingMsec(deadline) > 0;
+  return ::WaitForSingleObject(cancellation_event,
+                               std::min(requested_msec, remaining)) ==
+             WAIT_TIMEOUT &&
+         RemainingMsec(deadline) > 0;
 }
 
 void CancelAndReap(HANDLE handle, OVERLAPPED* overlapped) {
@@ -113,31 +116,30 @@ void CancelAndReap(HANDLE handle, OVERLAPPED* overlapped) {
 }
 
 PipeIoResult WaitForPendingIo(HANDLE handle, OVERLAPPED* overlapped,
-                              Deadline deadline, DWORD* transferred) {
+                              Deadline deadline, DWORD* transferred,
+                              HANDLE cancellation_event) {
   const DWORD remaining = RemainingMsec(deadline);
   if (remaining == 0) {
     CancelAndReap(handle, overlapped);
     return PipeIoResult::kTimeout;
   }
-
-  const DWORD wait = ::WaitForSingleObject(overlapped->hEvent, remaining);
-  if (wait == WAIT_OBJECT_0) {
-    return ::GetOverlappedResult(
-               handle, overlapped, transferred, FALSE)
+  const HANDLE events[] = {cancellation_event, overlapped->hEvent};
+  const DWORD wait = ::WaitForMultipleObjects(2, events, FALSE, remaining);
+  if (wait == WAIT_OBJECT_0 + 1) {
+    return ::GetOverlappedResult(handle, overlapped, transferred, FALSE)
                ? PipeIoResult::kOk
                : PipeIoResult::kError;
   }
-  if (wait == WAIT_TIMEOUT) {
-    CancelAndReap(handle, overlapped);
-    return PipeIoResult::kTimeout;
-  }
-
   CancelAndReap(handle, overlapped);
-  return PipeIoResult::kError;
+  return wait == WAIT_TIMEOUT ? PipeIoResult::kTimeout : PipeIoResult::kError;
 }
 
 PipeIoResult WriteSomeUntil(HANDLE handle, const void* data, DWORD size,
-                            Deadline deadline, DWORD* transferred) {
+                            Deadline deadline, DWORD* transferred,
+                            HANDLE cancellation_event) {
+  if (::WaitForSingleObject(cancellation_event, 0) == WAIT_OBJECT_0) {
+    return PipeIoResult::kError;
+  }
   ScopedWinHandle event(
       ::CreateEventW(nullptr, TRUE, FALSE, nullptr));
   if (event.get() == nullptr) {
@@ -157,11 +159,16 @@ PipeIoResult WriteSomeUntil(HANDLE handle, const void* data, DWORD size,
   if (::GetLastError() != ERROR_IO_PENDING) {
     return PipeIoResult::kError;
   }
-  return WaitForPendingIo(handle, &overlapped, deadline, transferred);
+  return WaitForPendingIo(handle, &overlapped, deadline, transferred,
+                          cancellation_event);
 }
 
 PipeIoResult ReadSomeUntil(HANDLE handle, void* data, DWORD size,
-                           Deadline deadline, DWORD* transferred) {
+                           Deadline deadline, DWORD* transferred,
+                           HANDLE cancellation_event) {
+  if (::WaitForSingleObject(cancellation_event, 0) == WAIT_OBJECT_0) {
+    return PipeIoResult::kError;
+  }
   ScopedWinHandle event(
       ::CreateEventW(nullptr, TRUE, FALSE, nullptr));
   if (event.get() == nullptr) {
@@ -181,17 +188,18 @@ PipeIoResult ReadSomeUntil(HANDLE handle, void* data, DWORD size,
   if (::GetLastError() != ERROR_IO_PENDING) {
     return PipeIoResult::kError;
   }
-  return WaitForPendingIo(handle, &overlapped, deadline, transferred);
+  return WaitForPendingIo(handle, &overlapped, deadline, transferred,
+                          cancellation_event);
 }
 
 PipeIoResult WriteAllUntil(HANDLE handle, const void* data, uint32_t size,
-                           Deadline deadline) {
+                           Deadline deadline, HANDLE cancellation_event) {
   const uint8_t* ptr = static_cast<const uint8_t*>(data);
   uint32_t remaining = size;
   while (remaining > 0) {
     DWORD written = 0;
-    const PipeIoResult result =
-        WriteSomeUntil(handle, ptr, remaining, deadline, &written);
+    const PipeIoResult result = WriteSomeUntil(handle, ptr, remaining, deadline,
+                                               &written, cancellation_event);
     if (result != PipeIoResult::kOk) {
       return result;
     }
@@ -205,13 +213,13 @@ PipeIoResult WriteAllUntil(HANDLE handle, const void* data, uint32_t size,
 }
 
 PipeIoResult ReadAllUntil(HANDLE handle, void* data, uint32_t size,
-                          Deadline deadline) {
+                          Deadline deadline, HANDLE cancellation_event) {
   uint8_t* ptr = static_cast<uint8_t*>(data);
   uint32_t remaining = size;
   while (remaining > 0) {
     DWORD read = 0;
-    const PipeIoResult result =
-        ReadSomeUntil(handle, ptr, remaining, deadline, &read);
+    const PipeIoResult result = ReadSomeUntil(handle, ptr, remaining, deadline,
+                                              &read, cancellation_event);
     if (result != PipeIoResult::kOk) {
       return result;
     }
@@ -372,7 +380,11 @@ bool LaunchZenzScorerIfNeeded() {
 
 HANDLE OpenPipeWithAutoLaunch(const std::wstring& pipe_name,
                               uint32_t request_timeout_msec,
-                              Deadline transport_deadline) {
+                              Deadline transport_deadline,
+                              HANDLE cancellation_event) {
+  if (::WaitForSingleObject(cancellation_event, 0) == WAIT_OBJECT_0) {
+    return INVALID_HANDLE_VALUE;
+  }
   ZenzPipeDebugOutput(
       std::wstring(L"CreateFileW begin ")
           .append(RedactedStatsWide(
@@ -404,9 +416,11 @@ HANDLE OpenPipeWithAutoLaunch(const std::wstring& pipe_name,
         Clock::now() + std::chrono::milliseconds(retry_budget_msec));
 
     int attempt = 0;
-    while (RemainingMsec(retry_deadline) > 0) {
+    while (::WaitForSingleObject(cancellation_event, 0) != WAIT_OBJECT_0 &&
+           RemainingMsec(retry_deadline) > 0) {
       ++attempt;
-      if (!SleepWithinDeadline(kColdStartRetryMsec, retry_deadline)) {
+      if (!SleepWithinDeadline(kColdStartRetryMsec, retry_deadline,
+                               cancellation_event)) {
         break;
       }
 
@@ -459,7 +473,8 @@ HANDLE OpenPipeWithAutoLaunch(const std::wstring& pipe_name,
       const DWORD wait_msec =
           std::min<DWORD>(kBusyRetryMsec,
                           RemainingMsec(transport_deadline));
-      if (wait_msec == 0) {
+      if (wait_msec == 0 ||
+          ::WaitForSingleObject(cancellation_event, 0) == WAIT_OBJECT_0) {
         break;
       }
       ::WaitNamedPipeW(pipe_name.c_str(), wait_msec);
@@ -519,6 +534,15 @@ ZenzLiveResponse ZenzNamedPipeClient::Convert(
   response.debug = "named_pipe_only_supported_on_windows";
   return response;
 #else
+  ScopedWinHandle cancellation_event(
+      ::CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (cancellation_event.get() == nullptr) {
+    response.debug = "pipe_cancellation_event_failed";
+    return response;
+  }
+  ScopedInterrupt interrupt(*this,
+                            [&] { ::SetEvent(cancellation_event.get()); });
+
   const absl::Time start = absl::Now();
   const Deadline transport_deadline =
       Clock::now() +
@@ -537,8 +561,9 @@ ZenzLiveResponse ZenzNamedPipeClient::Convert(
     return response;
   }
 
-  ScopedWinHandle pipe(OpenPipeWithAutoLaunch(
-      pipe_name, request.timeout_msec, transport_deadline));
+  ScopedWinHandle pipe(OpenPipeWithAutoLaunch(pipe_name, request.timeout_msec,
+                                              transport_deadline,
+                                              cancellation_event.get()));
 
   if (pipe.get() == INVALID_HANDLE_VALUE) {
     response.ok = false;
@@ -559,11 +584,11 @@ ZenzLiveResponse ZenzNamedPipeClient::Convert(
 
   PipeIoResult io =
       WriteAllUntil(pipe.get(), &request_header, sizeof(request_header),
-                    transport_deadline);
+                    transport_deadline, cancellation_event.get());
   if (io == PipeIoResult::kOk && !request.prompt.empty()) {
     io = WriteAllUntil(pipe.get(), request.prompt.data(),
                        static_cast<uint32_t>(request.prompt.size()),
-                       transport_deadline);
+                       transport_deadline, cancellation_event.get());
   }
 
   if (io != PipeIoResult::kOk) {
@@ -576,7 +601,7 @@ ZenzLiveResponse ZenzNamedPipeClient::Convert(
 
   ZenzWireResponseHeader response_header = {};
   io = ReadAllUntil(pipe.get(), &response_header, sizeof(response_header),
-                    transport_deadline);
+                    transport_deadline, cancellation_event.get());
   if (io != PipeIoResult::kOk) {
     response.ok = false;
     response.timeout = io == PipeIoResult::kTimeout;
@@ -604,13 +629,13 @@ ZenzLiveResponse ZenzNamedPipeClient::Convert(
   std::string value(response_header.value_size, '\0');
   if (response_header.value_size > 0) {
     io = ReadAllUntil(pipe.get(), value.data(), response_header.value_size,
-                      transport_deadline);
+                      transport_deadline, cancellation_event.get());
   }
 
   std::string debug(response_header.debug_size, '\0');
   if (io == PipeIoResult::kOk && response_header.debug_size > 0) {
     io = ReadAllUntil(pipe.get(), debug.data(), response_header.debug_size,
-                      transport_deadline);
+                      transport_deadline, cancellation_event.get());
   }
 
   if (io != PipeIoResult::kOk) {

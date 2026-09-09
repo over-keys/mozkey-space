@@ -1,11 +1,14 @@
 #define WIN32_LEAN_AND_MEAN
 
+// Windows SDK headers require Winsock and Windows types before bcrypt/sddl.
+// clang-format off
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <bcrypt.h>
 #include <sddl.h>
 #include <winhttp.h>
+// clang-format on
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +25,7 @@
 #include <vector>
 
 #include "zenz/zenz_wire_protocol.h"
+#include "zenz_scorer/synchronous_io_deadline.h"
 
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Bcrypt.lib")
@@ -1600,9 +1604,17 @@ int RunServer(const Options& options) {
       }
     }
 
-    HandleClient(pipe, options);
-
-    ::FlushFileBuffers(pipe);
+    {
+      // Allow readiness and inference their existing budgets, plus time for
+      // pipe transfer. A client that stops sending/reading cannot monopolize
+      // this single-connection server indefinitely.
+      mozc::zenz::SynchronousIoDeadline deadline(
+          std::chrono::milliseconds(3 * kMaxRequestTimeoutMsec));
+      if (deadline.valid()) {
+        HandleClient(pipe, options);
+        ::FlushFileBuffers(pipe);
+      }
+    }
     ::DisconnectNamedPipe(pipe);
     ::CloseHandle(pipe);
   }

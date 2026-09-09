@@ -850,41 +850,6 @@ bool PreparePrivateInternalFeedbackFileForWrite(
 #endif
 }
 
-bool NeedsAppendBoundaryNewline(const std::filesystem::path& path,
-                                bool* needs_newline) {
-  if (needs_newline == nullptr) {
-    return false;
-  }
-  *needs_newline = false;
-  if (path.empty()) {
-    return false;
-  }
-
-  std::error_code ec;
-  if (!std::filesystem::exists(path, ec)) {
-    return !ec;
-  }
-  const uintmax_t size = std::filesystem::file_size(path, ec);
-  if (ec) {
-    return false;
-  }
-  if (size == 0) {
-    return true;
-  }
-
-  std::ifstream tail(path, std::ios::binary);
-  if (!tail) {
-    return false;
-  }
-  tail.seekg(-1, std::ios::end);
-  char last = '\0';
-  tail.get(last);
-  if (!tail) {
-    return false;
-  }
-  *needs_newline = last != '\n';
-  return true;
-}
 
 class ScopedFeedbackInterprocessLock {
  public:
@@ -1231,13 +1196,30 @@ void AppendRecords(const std::vector<Record>& records) {
     return;
   }
 
-  bool needs_boundary_newline = false;
   const FileStamp before = GetFileStamp(path);
-  if (!NeedsAppendBoundaryNewline(path, &needs_boundary_newline)) {
+  // Inspect the append boundary through the same handle used for writing.
+  // Keep persistence synchronous and ordered; no queued observations can cross
+  // an import, clear, profile change, or privacy-setting transition.
+  std::fstream file(
+      path, std::ios::binary | std::ios::in | std::ios::out | std::ios::app);
+  if (!file) {
     return;
   }
-
-  std::ofstream file(path, std::ios::binary | std::ios::app);
+  file.seekg(0, std::ios::end);
+  const auto end = file.tellg();
+  if (end < std::streampos(0)) {
+    return;
+  }
+  bool needs_boundary_newline = false;
+  if (end > std::streampos(0)) {
+    file.seekg(-1, std::ios::end);
+    char last = 0;
+    if (!file.get(last)) {
+      return;
+    }
+    needs_boundary_newline = last != '\n';
+  }
+  file.seekp(0, std::ios::end);
   if (!file) {
     return;
   }
@@ -1249,7 +1231,6 @@ void AppendRecords(const std::vector<Record>& records) {
     file.put('\n');
   }
   file.write(text.data(), static_cast<std::streamsize>(text.size()));
-  file.flush();
   file.close();  // Windows finalizes the write timestamp when the handle closes.
   if (!file) {
     InvalidateCache();

@@ -1,13 +1,16 @@
 #ifndef MOZC_SESSION_ZENZ_LIVE_CORRECTOR_H_
 #define MOZC_SESSION_ZENZ_LIVE_CORRECTOR_H_
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
-#include <condition_variable>
-#include <mutex>
+#include <utility>
 
 #include "absl/time/time.h"
 
@@ -57,6 +60,46 @@ class ZenzClient {
   virtual bool IsAvailable() const = 0;
 
   virtual ZenzLiveResponse Convert(const ZenzLiveRequest& request) = 0;
+
+  // Sticky until the owner has joined the old worker. Transport waits must
+  // observe this flag; cancellation never closes a handle owned by that worker.
+  void RequestStop() {
+    std::lock_guard<std::mutex> lock(stop_mutex_);
+    stop_requested_.store(true);
+    if (interrupt_) {
+      interrupt_();
+    }
+  }
+  void ResetStop() { stop_requested_.store(false); }
+  bool IsStopRequested() const { return stop_requested_.load(); }
+
+  // Transport-local wakeup registration. Unregistration waits for any running
+  // callback, so captured event/pipe handles can then be closed safely.
+  class ScopedInterrupt {
+   public:
+    ScopedInterrupt(ZenzClient& client, std::function<void()> interrupt)
+        : client_(client) {
+      std::lock_guard<std::mutex> lock(client_.stop_mutex_);
+      client_.interrupt_ = std::move(interrupt);
+      if (client_.IsStopRequested()) {
+        client_.interrupt_();
+      }
+    }
+    ~ScopedInterrupt() {
+      std::lock_guard<std::mutex> lock(client_.stop_mutex_);
+      client_.interrupt_ = nullptr;
+    }
+    ScopedInterrupt(const ScopedInterrupt&) = delete;
+    ScopedInterrupt& operator=(const ScopedInterrupt&) = delete;
+
+   private:
+    ZenzClient& client_;
+  };
+
+ private:
+  std::atomic<bool> stop_requested_{false};
+  std::mutex stop_mutex_;
+  std::function<void()> interrupt_;
 };
 
 class ZenzLiveCorrector {
@@ -77,6 +120,9 @@ class ZenzLiveCorrector {
   // same mutex so two generations cannot both observe an idle worker.
   // Running or already-queued work is left untouched and returns false.
   bool TrySubmitIfIdle(ZenzLiveRequest request);
+
+  // Advisory only: admission still goes through TrySubmitIfIdle().
+  bool IsBusy();
 
   // Clears queued request/result. Running inference is not forcibly cancelled;
   // stale discard is handled by generation check.

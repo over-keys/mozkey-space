@@ -5,7 +5,7 @@ name: CI for Windows
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -79,7 +79,36 @@ jobs:
         run: |
           python build_tools/update_deps.py
 
+      - name: Identify Qt toolchain
+        id: qt-toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          try {
+            if (-not $env:ImageVersion) { throw "Runner image identity is unavailable" }
+            $vcvarsall = python -c "import sys; sys.path.insert(0, 'src/build_tools'); import vs_util; print(vs_util.get_vcvarsall('x64'))"
+            if ($LASTEXITCODE -ne 0) { throw "Qt compiler discovery failed" }
+            $buildDir = Split-Path $vcvarsall
+            $version = (Get-Content (Join-Path $buildDir 'Microsoft.VCToolsVersion.default.txt')).Trim()
+            $compiler = Get-Item (Join-Path $buildDir "..\..\Tools\MSVC\$version\bin\Hostx64\x64\cl.exe")
+            $compilerHash = (Get-FileHash $compiler.FullName -Algorithm SHA256).Hash
+            "identity=$($env:ImageVersion)-$compilerHash" >> $env:GITHUB_OUTPUT
+          } catch {
+            Write-Warning "Qt cache disabled: $_"
+            exit 0
+          }
+
+      - name: Restore compiled Qt
+        id: qt-cache
+        if: steps.qt-toolchain.outputs.identity != ''
+        uses: actions/cache@v5
+        with:
+          path: src/third_party/qt
+          # Exact matches only: runner image, compiler, and build inputs must agree.
+          key: qt-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.qt-toolchain.outputs.identity }}-${{ hashFiles('src/build_tools/build_qt.py', 'src/build_tools/update_deps.py', 'src/build_tools/vs_util.py') }}
+
       - name: Build Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
         shell: cmd
         working-directory: .\src
         run: |
