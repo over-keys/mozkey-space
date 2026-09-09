@@ -14,7 +14,7 @@ Mozkey 4.84.0 / Mozc 3.34 / *2026-09-09*
 Windows x64 MSIとmacOS Universal Zenz PKGはGitHub Actionsでビルド・検証します。
 
 User-facing release version: `4.84.0`
-Mozc internal version: `3.34.6220.100`
+Mozc internal version: `3.34.6221.100`
 
 Mozkey 4.82.0 / Mozc 3.34 / *2026-09-09*
 -------------------------------------------

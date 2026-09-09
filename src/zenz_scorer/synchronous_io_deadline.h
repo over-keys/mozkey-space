@@ -16,12 +16,18 @@ namespace mozc::zenz {
 // affect a subsequent connection or a recycled thread/handle.
 class SynchronousIoDeadline {
  public:
-  explicit SynchronousIoDeadline(std::chrono::milliseconds timeout) {
-    if (!::DuplicateHandle(::GetCurrentProcess(), ::GetCurrentThread(),
-                           ::GetCurrentProcess(), &thread_handle_, 0, FALSE,
-                           DUPLICATE_SAME_ACCESS)) {
-      return;
-    }
+  explicit SynchronousIoDeadline(std::chrono::milliseconds timeout)
+      : SynchronousIoDeadline(nullptr, timeout) {}
+
+  SynchronousIoDeadline(HANDLE io_handle,
+                        std::chrono::milliseconds timeout)
+      : io_handle_(io_handle) {
+    // CancelSynchronousIo requires THREAD_TERMINATE on the target handle.
+    // Open it explicitly instead of relying on the pseudo-handle's inherited
+    // access mask, which can be insufficient under a restricted token.
+    thread_handle_ =
+        ::OpenThread(THREAD_TERMINATE, FALSE, ::GetCurrentThreadId());
+    if (thread_handle_ == nullptr) return;
     watchdog_ = std::thread([this, timeout] {
       std::unique_lock<std::mutex> lock(mutex_);
       if (cv_.wait_for(lock, timeout, [this] { return done_; })) {
@@ -30,6 +36,9 @@ class SynchronousIoDeadline {
       // Repeat after expiry: the issuing thread may be between two I/O calls
       // when cancellation first runs. ERROR_NOT_FOUND is harmless in that gap.
       while (!done_) {
+        if (io_handle_ != nullptr) {
+          ::CancelIoEx(io_handle_, nullptr);
+        }
         ::CancelSynchronousIo(thread_handle_);
         cv_.wait_for(lock, std::chrono::milliseconds(10),
                      [this] { return done_; });
@@ -56,6 +65,9 @@ class SynchronousIoDeadline {
   bool valid() const { return thread_handle_ != nullptr; }
 
  private:
+  // The issuing thread retains ownership and keeps this handle open until the
+  // deadline object is destroyed and its watchdog has joined.
+  HANDLE io_handle_ = nullptr;
   HANDLE thread_handle_ = nullptr;
   std::mutex mutex_;
   std::condition_variable cv_;

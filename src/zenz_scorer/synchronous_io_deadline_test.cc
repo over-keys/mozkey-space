@@ -42,7 +42,7 @@ void CheckStalledPeer(bool flush) {
     }
     const auto started = std::chrono::steady_clock::now();
     {
-      SynchronousIoDeadline deadline(std::chrono::milliseconds(50));
+      SynchronousIoDeadline deadline(pipe, std::chrono::milliseconds(50));
       EXPECT_TRUE(deadline.valid());
       const BOOL ok = flush ? ::FlushFileBuffers(pipe)
                             : ::ReadFile(pipe, &byte, 1, &transferred, nullptr);

@@ -1609,6 +1609,7 @@ int RunServer(const Options& options) {
       // pipe transfer. A client that stops sending/reading cannot monopolize
       // this single-connection server indefinitely.
       mozc::zenz::SynchronousIoDeadline deadline(
+          pipe,
           std::chrono::milliseconds(3 * kMaxRequestTimeoutMsec));
       if (deadline.valid()) {
         HandleClient(pipe, options);
