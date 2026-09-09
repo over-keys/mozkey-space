@@ -114,7 +114,7 @@ jobs:
             fi
 
             release_tag_name="$(jq -r '.tag_name // empty' <<<"$release_json")"
-            release_draft="$(jq -r '.draft // empty' <<<"$release_json")"
+            release_draft="$(jq -r '.draft | tostring' <<<"$release_json")"
             release_published_at="$(jq -r '.published_at // empty' <<<"$release_json")"
             if [[ "$release_tag_name" != "$release_tag" ||
                   "$release_draft" != "false" ||
@@ -222,7 +222,7 @@ jobs:
             fi
 
             release_tag_name="$(jq -r '.tag_name // empty' <<<"$release_json")"
-            release_draft="$(jq -r '.draft // empty' <<<"$release_json")"
+            release_draft="$(jq -r '.draft | tostring' <<<"$release_json")"
             release_published_at="$(jq -r '.published_at // empty' <<<"$release_json")"
             if [[ "$release_tag_name" != "$release_tag" ||
                   "$release_draft" != "false" ||
