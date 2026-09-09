@@ -102,7 +102,7 @@ bazelisk build package --config release_build
 ### mozkey-space のローカルリリースビルド（低負荷・再現用）
 
 mozkey-space の Windows MSI は、リポジトリの `src` ディレクトリから次の
-手順で作る。このワークスペースでは、リポジトリ（`current-main-v4_1`）と
+手順で作る。このワークスペースでは、リポジトリ（`clean-a6369a2f`）と
 ビルド環境・キャッシュを分離している。特に `BAZEL_VC` は Visual Studio の
 インストール先ではなく、`VC` ディレクトリを指す必要がある。
 
@@ -250,8 +250,8 @@ Get-FileHash -Algorithm SHA256 $msi
 
 環境の配置は次のように固定する。`local-build-env` は再利用するツール類、
 `local-build-cache-bazel-windows` は再生成可能な Bazel キャッシュ、
-`local-build-v4.60.3-20260905` のような版付きディレクトリは確認済み成果物
-として扱う。旧ビルドや診断ログを同じ場所へ戻さない。
+`local-build-cache-third-party-windows` は再利用する外部ツールのアーカイブを
+置く場所とする。旧ビルドや診断ログをチェックアウト直下へ戻さない。
 
 #### Install Mozc
 

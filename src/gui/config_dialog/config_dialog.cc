@@ -505,6 +505,9 @@ ConfigDialog::ConfigDialog()
                    SLOT(SelectLiveConversionSetting(int)));
   QObject::connect(zenzLiveCorrectionCheckBox, SIGNAL(stateChanged(int)), this,
                    SLOT(SelectZenzLiveCorrectionSetting(int)));
+  QObject::connect(zenzDeferredNormalConversionDisplayCheckBox,
+                   SIGNAL(stateChanged(int)), this,
+                   SLOT(SelectZenzLiveCorrectionSetting(int)));
   QObject::connect(zenzLiveCorrectionRightContextCheckBox,
                    SIGNAL(stateChanged(int)), this,
                    SLOT(SelectZenzRightContextSetting(int)));
@@ -4086,12 +4089,14 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
   showCandidateWindowOnInitialConversionCheckBox->setEnabled(!enabled);
 }
 
-void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
-  const bool enabled = static_cast<bool>(state);
+void ConfigDialog::SelectZenzLiveCorrectionSetting(int /*state*/) {
+  const bool enabled = zenzLiveCorrectionCheckBox->isChecked();
+  const bool delay_enabled =
+      enabled && !zenzDeferredNormalConversionDisplayCheckBox->isChecked();
 
   zenzDeferredNormalConversionDisplayCheckBox->setEnabled(enabled);
-  zenzLiveCorrectionDelayLabel->setEnabled(enabled);
-  zenzLiveCorrectionDelaySpinBox->setEnabled(enabled);
+  zenzLiveCorrectionDelayLabel->setEnabled(delay_enabled);
+  zenzLiveCorrectionDelaySpinBox->setEnabled(delay_enabled);
   zenzLiveCorrectionMinKeyLengthLabel->setEnabled(enabled);
   zenzLiveCorrectionMinKeyLengthSpinBox->setEnabled(enabled);
   zenzLiveCorrectionProfileLabel->setEnabled(enabled);

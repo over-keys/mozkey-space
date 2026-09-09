@@ -418,10 +418,11 @@ message Config {
   optional uint32 zenz_live_correction_right_context_length = 1017
       [default = 24];
 
-  // For explicit Space conversion only, briefly keep the pre-conversion
-  // preedit visible while Zenz is evaluated. If Zenz is fast enough, its
-  // accepted result is shown directly; otherwise Mozc is shown and late Zenz
-  // output is ignored for that conversion. Live conversion is unaffected.
+  // Prefer direct Zenz presentation instead of first showing a transient
+  // Mozc result. Explicit conversion keeps the pre-conversion preedit for a
+  // short grace. Live conversion keeps the last client-visible live display for
+  // a shorter grace and skips Zenz immediately while the worker is busy.
+  // Late results are ignored for that generation.
   optional bool use_zenz_deferred_normal_conversion_display = 1029
       [default = false];
 

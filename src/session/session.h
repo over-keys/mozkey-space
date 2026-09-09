@@ -160,6 +160,19 @@ class Session {
   commands::Preedit live_conversion_preedit_output_;
   std::vector<ProtectedConversionSpan> live_conversion_protected_spans_;
 
+  // Last live preedit actually returned to the client. Direct-live Zenz may
+  // keep a newer Mozc conversion internal for a short presentation grace, so
+  // this must not alias live_conversion_*.
+  struct LiveConversionDisplaySnapshot {
+    bool valid = false;
+    std::string key;
+    std::string preedit;
+    std::string value;
+    commands::Preedit preedit_output;
+    commands::CandidateWindow suggestion_candidate_window;
+  };
+  LiveConversionDisplaySnapshot visible_live_conversion_;
+
   bool pending_reranked_preedit_commit_after_convert_cancel_ = false;
   std::string pending_reranked_preedit_commit_key_;
   std::string pending_reranked_preedit_commit_value_;
@@ -181,10 +194,13 @@ class Session {
     std::vector<ProtectedConversionSpan> protected_spans;
     commands::Preedit mozc_preedit_output;
     commands::Preedit deferred_normal_conversion_preedit_output;
+    LiveConversionDisplaySnapshot deferred_live_conversion_display;
     absl::Time deferred_normal_conversion_display_deadline;
+    absl::Time deferred_live_conversion_display_deadline;
     absl::Time issued_at;
     bool pending = false;
     bool defer_normal_conversion_display = false;
+    bool defer_live_conversion_display = false;
     bool submitted = false;
     bool from_live_conversion = true;
     // Whether this conversion is allowed to consult persistent history.
@@ -347,14 +363,21 @@ class Session {
       commands::SessionCommand::CommandType);
   bool MaybeScheduleZenzCorrection(
       commands::Command*, bool use_conversion_history,
-      const commands::Preedit* pre_conversion_preedit);
+      const commands::Preedit* pre_conversion_preedit,
+      const LiveConversionDisplaySnapshot* deferred_live_conversion_display);
   void AttachZenzLiveCorrectionStartCallback(
       commands::Command* command, const uint32_t delay_msec) const;
   void AttachZenzLiveCorrectionPollCallback(commands::Command*) const;
   bool ApplyZenzLiveCorrection(commands::Command*);
   bool AdvancePendingZenzLiveCorrection(commands::Command*,bool);
   bool IsCurrentZenzLiveCorrectionCallback(const commands::Command&) const;
+  LiveConversionDisplaySnapshot
+  BuildLiveConversionDisplaySnapshotForCurrentComposition() const;
+  void SetVisibleLiveConversionFromCurrentMozc();
+  void RestoreVisibleLiveConversionForEditing();
   bool OutputDeferredNormalConversionWithZenzPending(commands::Command*);
+  bool OutputDeferredLiveConversionWithZenzPending(commands::Command*);
+  bool CommitDeferredLiveConversionDisplayForSubmit(commands::Command*);
   bool OutputCurrentLiveConversionWithZenzPending(commands::Command*);
   bool OutputCurrentLiveConversionAfterZenzStop(commands::Command*,absl::string_view);
   ZenzLiveCorrector* EnsureZenzLiveCorrector();

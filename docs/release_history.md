@@ -1,6 +1,18 @@
 Release History
 ===============
 
+Mozkey 4.80.3 / Mozc 3.34 / *2026-09-09*
+-------------------------------------------
+
+### 4.80.3 の変更内容
+
+「Zenz 補正を直接表示」をライブ変換にも適用できるようにしました。入力停止後の既存の228 msデバウンスを経て、Zenz workerが空いている世代だけを即時評価します。最大96 ms（24 ms×4回）の表示猶予を設け、workerがbusyの場合や結果が遅れた場合はMozcを表示し、その世代のZenz結果は表示・学習に使用しません。待機中は直前の安定表示と現在のraw suffixを維持します。設定はdefault OFFです。
+
+Windows x64 MSIとmacOS Universal Zenz PKGはGitHub Actionsでビルド・検証します。
+
+User-facing release version: `4.80.3`
+Mozc internal version: `3.34.6217.100`
+
 Mozkey 4.80.2 / Mozc 3.34 / *2026-09-09*
 -------------------------------------------
 

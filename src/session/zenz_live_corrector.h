@@ -73,6 +73,11 @@ class ZenzLiveCorrector {
   // Latest-only submission. A queued old request is overwritten.
   void Submit(ZenzLiveRequest request);
 
+  // Direct-live admission gate. The idle check and enqueue happen under the
+  // same mutex so two generations cannot both observe an idle worker.
+  // Running or already-queued work is left untouched and returns false.
+  bool TrySubmitIfIdle(ZenzLiveRequest request);
+
   // Clears queued request/result. Running inference is not forcibly cancelled;
   // stale discard is handled by generation check.
   void CancelPending();
@@ -92,6 +97,7 @@ class ZenzLiveCorrector {
 
   bool started_ = false;
   bool stop_ = false;
+  bool running_ = false;
 
   std::optional<ZenzLiveRequest> latest_request_;
   std::optional<ZenzLiveResponse> latest_result_;
