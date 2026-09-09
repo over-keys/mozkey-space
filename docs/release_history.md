@@ -1,10 +1,10 @@
 Release History
 ===============
 
-Mozkey 4.83.0 / Mozc 3.34 / *2026-09-09*
+Mozkey 4.84.0 / Mozc 3.34 / *2026-09-09*
 -------------------------------------------
 
-### 4.83.0 の変更内容
+### 4.84.0 の変更内容
 
 設定画面で「Zenz 補正を直接表示」をオンにしたとき、「Zenz 補正開始の遅延」が正しく無効になるよう改善しました。
 設定画面を開き直したりライブ変換を切り替えたりしても、この状態が維持されます。
@@ -13,8 +13,8 @@ Mozkey 4.83.0 / Mozc 3.34 / *2026-09-09*
 
 Windows x64 MSIとmacOS Universal Zenz PKGはGitHub Actionsでビルド・検証します。
 
-User-facing release version: `4.83.0`
-Mozc internal version: `3.34.6219.100`
+User-facing release version: `4.84.0`
+Mozc internal version: `3.34.6220.100`
 
 Mozkey 4.82.0 / Mozc 3.34 / *2026-09-09*
 -------------------------------------------
