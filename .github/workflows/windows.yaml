@@ -136,6 +136,18 @@ jobs:
         run: |
           bazelisk build --config oss_windows --config release_build package --verbose_failures
 
+      - name: Test the real configuration dialog entry
+        shell: pwsh
+        working-directory: ./src
+        run: |
+          $ErrorActionPreference = "Stop"
+          $qtDir = Join-Path (Get-Location) 'third_party\qt'
+          $env:PATH = "$qtDir\bin;$env:PATH"
+          $env:QT_PLUGIN_PATH = "$qtDir\plugins"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          bazelisk test --config=oss_windows --config=release_build //gui/config_dialog:config_dialog_ui_test --test_env=PATH --test_env=QT_PLUGIN_PATH --test_env=QT_QPA_PLATFORM --test_output=errors
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify interactive MSI completion dialogs
         shell: pwsh
         run: |

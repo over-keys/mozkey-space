@@ -117,6 +117,18 @@ jobs:
             //mac:package \
             --verbose_failures
 
+      - name: Test the real configuration dialog entry
+        working-directory: ./src
+        run: |
+          bazelisk \
+            --output_user_root="$HOME/.cache/bazel_mozkey_zenz_formal_pkg" \
+            test --config=oss_macos --config=release_build \
+            //gui/config_dialog:config_dialog_ui_test \
+            --test_env=QT_QPA_PLATFORM=offscreen \
+            --test_env=QT_PLUGIN_PATH="$PWD/third_party/qt/plugins" \
+            --test_env=DYLD_FRAMEWORK_PATH="$PWD/third_party/qt/lib" \
+            --test_output=errors
+
       - name: Capture exact package artifact
         shell: /bin/zsh {0}
         run: |

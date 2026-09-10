@@ -52,7 +52,7 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
  public:
   ConfigDialog();
 
-  // REV10's local-preference controls are injected at runtime so the existing
+  // Local-preference controls are initialized with the dialog so the existing
   // .ui file does not need to be forked.  Keep pending values in base_config_:
   // ConvertToProto() starts from base_config_, which gives the dynamic controls
   // normal Apply/OK/Cancel semantics without a second config write path.
@@ -133,6 +133,7 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
 
  private:
   bool GetConfig(config::Config *config);
+  void InitializeZenzControls();
   bool SetConfig(const config::Config &config);
   void ConvertToProto(config::Config *config) const;
   void InitializeRendererAppearanceControls();

@@ -29,6 +29,7 @@
 
 load(
     "//:build_defs.bzl",
+    "mozc_cc_test",
     "mozc_infoplist_strings",
     "mozc_select",
 )
@@ -263,6 +264,31 @@ mozc_cc_qt_library(
         windows = [
             "//base/win32:winmain",
         ],
+    ),
+)
+
+# Explicitly run after Qt is built; the core-only CI test job has no Qt.
+mozc_cc_test(
+    name = "config_dialog_ui_test",
+    srcs = ["config_dialog_ui_test.cc"],
+    tags = ["manual", "nolinux"],
+    timeout = "short",
+    deps = [
+        ":config_dialog",
+        "//client",
+        "//client:client_mock",
+        "//protocol:config_cc_proto",
+        "//session:zenz_feedback_store",
+        "//testing:gunit",
+    ] + mozc_select(
+        oss_macos = [
+            "@qt_mac//:qt_mac",
+            "@qt_mac//:QtCore_mac",
+            "@qt_mac//:QtGui_mac",
+            "@qt_mac//:QtWidgets_mac",
+        ],
+        oss_windows = ["@qt_win//:qt_win"],
+        default = [],
     ),
 )
 

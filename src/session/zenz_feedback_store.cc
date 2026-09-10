@@ -778,6 +778,16 @@ std::shared_ptr<FeedbackData> BuildFeedbackData(
 }
 
 std::filesystem::path FeedbackDirectory() {
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
+  // Allow UI regression tests and diagnostic launches to use a dedicated
+  // feedback directory without changing HOME/USERPROFILE or the active IME.
+  if (const char* isolated = std::getenv("MOZKEY_ZENZ_FEEDBACK_DIRECTORY");
+      isolated != nullptr) {
+    const std::filesystem::path path(isolated);
+    // Fail closed for invalid overrides; never fall back to real user data.
+    return path.is_absolute() ? path : std::filesystem::path();
+  }
+#endif
 #if defined(_WIN32)
   // Read the process environment through Win32 rather than the CRT copy. Mozc
   // tests and some host processes update USERPROFILE with SetEnvironmentVariableW,
