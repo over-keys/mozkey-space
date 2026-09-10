@@ -1506,7 +1506,7 @@
                 <item row="18" column="0" colspan="3">
                  <widget class="QLabel" name="zenzLiveCorrectionDelayLabel">
                   <property name="toolTip">
-                   <string>ライブ変換で Zenz 補正を開始するまでの待ち時間です。Space の直接表示では使用しません。</string>
+                   <string>Zenz 補正対象の Mozc 変換が成立してから、Zenz 補正を開始するまでの待ち時間です。</string>
                   </property>
                   <property name="text">
                    <string>Zenz 補正開始の遅延</string>
@@ -1516,7 +1516,7 @@
                 <item row="18" column="3" colspan="5">
                  <widget class="QSpinBox" name="zenzLiveCorrectionDelaySpinBox">
                   <property name="toolTip">
-                   <string>ライブ変換で Zenz 補正を開始するまでの待ち時間です。0 ms で即時開始します。Space の直接表示では使用しません。</string>
+                   <string>Zenz 補正対象の Mozc 変換が成立してから、Zenz 補正を開始するまでの待ち時間です。0 ms では意図的な待機を加えず非同期で開始します。</string>
                   </property>
                   <property name="minimum">
                    <number>0</number>
@@ -1573,7 +1573,7 @@
                 <item row="17" column="0" colspan="8">
                  <widget class="QCheckBox" name="zenzDeferredNormalConversionDisplayCheckBox">
                   <property name="toolTip">
-                   <string>ライブ変換では通常の Zenz 補正開始遅延を保ったまま Mozc の中間結果を一時的に隠し、補正結果を直接表示します。Zenz が遅い場合は Mozc を表示します。</string>
+                   <string>Zenz 補正開始の遅延中から送信後最大 96 ms まで Mozc の中間結果を一時的に隠します。期限を過ぎた場合は Mozc を表示しますが、Zenz 補正処理は継続します。</string>
                   </property>
                   <property name="text">
                    <string>Zenz 補正を直接表示</string>

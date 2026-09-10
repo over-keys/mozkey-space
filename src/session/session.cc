@@ -211,10 +211,11 @@ constexpr uint32_t kMaxLiveConversionMinKeyLength = 20;
 constexpr uint32_t kDefaultZenzLiveCorrectionDelayMsec = 200;
 constexpr uint32_t kDefaultZenzLiveCorrectionTimeoutMsec = 180;
 constexpr uint32_t kDefaultZenzLiveCorrectionPollMsec = 24;
-constexpr uint32_t kMaxZenzDeferredNormalConversionDisplayMsec = 250;
 // Four normal Zenz poll intervals. This is a presentation deadline, not a
-// transport timeout and not a blocking wait in key processing.
-constexpr uint32_t kZenzDeferredLiveConversionDisplayMsec = 96;
+// transport timeout and not a blocking wait in key processing. A warm Windows
+// scorer benchmark returned 199/200 responses within 96 ms, so this remains a
+// short presentation grace rather than a result-adoption deadline.
+constexpr uint32_t kZenzDeferredDirectDisplayMsec = 96;
 constexpr uint32_t kDefaultZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMaxZenzLiveCorrectionContextLength = 128;
 // Volatile left-context continuation cache used only when the current platform
@@ -2878,15 +2879,6 @@ uint32_t GetZenzLiveCorrectionTimeoutMsec(const config::Config& config) {
   }
   return std::min(config.zenz_live_correction_timeout_msec(),
                   kMaxZenzLiveCorrectionTimeoutMsec);
-}
-
-uint32_t GetZenzDeferredNormalConversionDisplayMsec(
-    const config::Config& config) {
-  const uint32_t timeout_msec = GetZenzLiveCorrectionTimeoutMsec(config);
-  const uint32_t grace_msec =
-      timeout_msec + 2 * kDefaultZenzLiveCorrectionPollMsec;
-  return std::min(grace_msec,
-                  kMaxZenzDeferredNormalConversionDisplayMsec);
 }
 
 uint32_t GetZenzLiveCorrectionMinKeyLength(const config::Config& config) {
@@ -7362,38 +7354,32 @@ bool Session::MaybeScheduleZenzCorrection(
       " protected_prompt_replacements=",
       protected_prompt.placeholder_count));
 
-  if (defer_normal_conversion_display) {
-    ZenzDebugOutput("[zenz] explicit direct-display submit immediately");
-    // Explicit Space direct display keeps its established behavior. Live direct
-    // display must use the same Zenz schedule as ordinary live correction.
-    return AdvancePendingZenzLiveCorrection(
-        command, /*refresh_output_on_submit=*/false);
-  }
-
   const uint32_t delay_msec = GetZenzLiveCorrectionDelayMsec(config);
-  if (from_live_conversion && delay_msec == 0) {
+  if (delay_msec == 0) {
     ZenzDebugOutput("[zenz] start immediately");
-    // The current command already contains the freshly generated live
-    // conversion output from MaybeStartLiveConversion().  Do not call
-    // Output() again in the same key-event path, because PopOutput() is
-    // destructive and a second output refresh can momentarily duplicate the
-    // composition text on some TSF clients.
+    // The current command already contains the freshly generated Mozc output.
+    // Submit asynchronously without introducing a zero-delay platform callback
+    // and without performing a second destructive Output() pass.
     return AdvancePendingZenzLiveCorrection(
         command, /*refresh_output_on_submit=*/false);
   }
 
-  // Live direct display changes only the returned preedit. The Zenz start
-  // callback uses exactly the same configured delay as ordinary live correction.
+  // Direct Display is presentation-only. Both explicit and live conversions
+  // retain the same configured Zenz start delay as their non-Direct variants.
+  if (defer_normal_conversion_display) {
+    const bool result =
+        OutputDeferredNormalConversionWithZenzPending(command);
+    AttachZenzLiveCorrectionStartCallback(command, delay_msec);
+    return result;
+  }
   if (defer_live_conversion_display) {
     const bool result = OutputDeferredLiveConversionWithZenzPending(command);
     AttachZenzLiveCorrectionStartCallback(command, delay_msec);
     return result;
   }
 
-  // Explicit Space conversion returns the Mozc result first, then starts Zenz
-  // through the configured delay callback. This avoids a second destructive
-  // Output() pass in the physical Space key event while keeping the correction
-  // asynchronous.
+  // Non-Direct conversion exposes the Mozc result immediately, then starts
+  // Zenz through the same configured delay callback.
   AttachZenzLiveCorrectionStartCallback(command, delay_msec);
   commands::Output* output = command->mutable_output();
   output->set_live_conversion(from_live_conversion);
@@ -7436,7 +7422,8 @@ void Session::AttachZenzLiveCorrectionPollCallback(
   session_command->set_live_conversion_key(pending_zenz_live_.key);
 
   uint32_t delay_msec = kDefaultZenzLiveCorrectionPollMsec;
-  if (pending_zenz_live_.defer_normal_conversion_display &&
+  if ((pending_zenz_live_.defer_normal_conversion_display ||
+       pending_zenz_live_.defer_live_conversion_display) &&
       pending_zenz_live_.submitted) {
     const absl::Time deadline =
         pending_zenz_live_.defer_live_conversion_display
@@ -7723,19 +7710,18 @@ bool Session::AdvancePendingZenzLiveCorrection(
   const uint32_t timeout_msec = GetZenzLiveCorrectionTimeoutMsec(config);
 
   if (!pending_zenz_live_.submitted) {
-    // Explicit Space conversion always submits the current prompt after the
-    // configured delay.  Do not replay an old unknown surface here: unlike the
-    // stored feedback bucket, this prompt contains the current right context.
+    // The common start delay has elapsed (or is zero). Direct presentation
+    // grace starts at the actual Zenz submit time, independently of whether the
+    // source conversion was explicit or live.
     pending_zenz_live_.issued_at = now;
     pending_zenz_live_.poll_count = 0;
     if (pending_zenz_live_.defer_normal_conversion_display) {
       pending_zenz_live_.deferred_normal_conversion_display_deadline =
-          now + absl::Milliseconds(
-                    GetZenzDeferredNormalConversionDisplayMsec(config));
+          now + absl::Milliseconds(kZenzDeferredDirectDisplayMsec);
     }
     if (pending_zenz_live_.defer_live_conversion_display) {
       pending_zenz_live_.deferred_live_conversion_display_deadline =
-          now + absl::Milliseconds(kZenzDeferredLiveConversionDisplayMsec);
+          now + absl::Milliseconds(kZenzDeferredDirectDisplayMsec);
     }
 
     ZenzLiveRequest request;
@@ -7778,10 +7764,12 @@ bool Session::AdvancePendingZenzLiveCorrection(
       result = OutputDeferredLiveConversionWithZenzPending(command);
     } else {
       commands::Output* output = command->mutable_output();
-      output->set_live_conversion(true);
+      output->set_live_conversion(live_conversion_active_);
       output->set_live_conversion_pending(false);
       output->set_zenz_live_correction_pending(true);
-      AttachCachedLiveConversionSuggestionCandidateWindow(output);
+      if (live_conversion_active_) {
+        AttachCachedLiveConversionSuggestionCandidateWindow(output);
+      }
     }
     AttachZenzLiveCorrectionPollCallback(command);
     return result;
@@ -7801,10 +7789,9 @@ bool Session::AdvancePendingZenzLiveCorrection(
         command, "zenz_async_corrector_missing");
   }
 
-  // Explicit Space direct display retains its existing speculative
-  // deadline. Live direct display uses the deadline only to stop hiding Mozc;
-  // the Zenz request, result handling, and learning remain identical to ordinary
-  // live correction.
+  // Direct Display deadlines are presentation-only for both explicit and
+  // live conversion. Expiry stops hiding Mozc but never changes the pending
+  // Zenz generation, result adoption, timeout, or learning rules.
   const bool deferred_normal_expired =
       pending_zenz_live_.defer_normal_conversion_display &&
       now >= pending_zenz_live_
@@ -7816,28 +7803,19 @@ bool Session::AdvancePendingZenzLiveCorrection(
 
   if (deferred_live_expired) {
     ZenzDebugOutput(absl::StrCat(
-        "[zenz] live direct-display grace expired; reveal Mozc only",
+        "[zenz] direct-display grace expired origin=live; reveal Mozc only",
         " generation=", pending_zenz_live_.generation,
-        " grace_msec=", kZenzDeferredLiveConversionDisplayMsec));
+        " grace_msec=", kZenzDeferredDirectDisplayMsec));
     SetVisibleLiveConversionFromCurrentMozc();
     pending_zenz_live_.defer_live_conversion_display = false;
   }
 
   if (deferred_normal_expired) {
-    ++pending_zenz_live_.poll_count;
     ZenzDebugOutput(absl::StrCat(
-        "[zenz] direct-display grace expired origin=explicit",
+        "[zenz] direct-display grace expired origin=explicit; reveal Mozc only",
         " generation=", pending_zenz_live_.generation,
-        " poll_count=", pending_zenz_live_.poll_count,
-        " grace_msec=",
-        GetZenzDeferredNormalConversionDisplayMsec(config)));
-
-    // Explicit Space direct display remains speculative: a deadline miss is
-    // neutral evidence and the late result is discarded.
-    CancelPendingZenzLiveCorrection();
-    normal_conversion_zenz_active_ = false;
-    return OutputCurrentLiveConversionAfterZenzStop(
-        command, "zenz_direct_display_grace_expired");
+        " grace_msec=", kZenzDeferredDirectDisplayMsec));
+    pending_zenz_live_.defer_normal_conversion_display = false;
   }
 
   std::optional<ZenzLiveResponse> response =

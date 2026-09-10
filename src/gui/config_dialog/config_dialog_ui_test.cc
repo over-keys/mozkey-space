@@ -199,19 +199,31 @@ TEST_F(ConfigDialogUiTest, ManualWarningUsesPendingSettings) {
   }
 }
 
-TEST_F(ConfigDialogUiTest, ZenzDelayRemainsEnabledWithDirectDisplay) {
+TEST_F(ConfigDialogUiTest, ZenzDelayAvailabilityDependsOnlyOnZenz) {
   ConfigDialog settings;
+  auto* live = settings.findChild<QCheckBox*>("liveConversionCheckBox");
   auto* zenz = settings.findChild<QCheckBox*>("zenzLiveCorrectionCheckBox");
   auto* direct = settings.findChild<QCheckBox*>(
       "zenzDeferredNormalConversionDisplayCheckBox");
   auto* delay = settings.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+  ASSERT_NE(live, nullptr);
   ASSERT_NE(zenz, nullptr);
   ASSERT_NE(direct, nullptr);
   ASSERT_NE(delay, nullptr);
 
   zenz->setChecked(true);
+  live->setChecked(false);
+  direct->setChecked(false);
+  EXPECT_TRUE(delay->isEnabled());
+
   direct->setChecked(true);
   EXPECT_TRUE(delay->isEnabled());
+
+  live->setChecked(true);
+  EXPECT_TRUE(delay->isEnabled());
+
+  zenz->setChecked(false);
+  EXPECT_FALSE(delay->isEnabled());
 }
 
 TEST_F(ConfigDialogUiTest, InvalidFeedbackOverrideNeverFallsBackToUserData) {
