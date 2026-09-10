@@ -6,12 +6,17 @@ Mozkey 4.85.0 / Mozc 3.34 / *2026-09-10*
 
 ### 4.85.0 の変更内容
 
-設定画面からLocal preferenceを手動で登録・解除できるようになりました。
-手動設定は学習回数のしきい値に依存せず優先して適用され、自動のaccepted/rejectedの学習結果も保持します。
+設定画面から、よく使う読み方と変換結果の組み合わせをLocal preferenceとして手動で登録・解除できるようになりました。
+登録した内容は学習回数がまだ少ない段階でも優先して使われるため、使いたい変換をすぐに反映できます。
+
+手動で登録した内容と、自動学習で得られたaccepted/rejectedの結果はそれぞれ保持され、これまでの自動学習も継続して利用できます。
 
 既存のv4 8列TSV形式との互換性を維持しています。
 
-Windows x64 MSIとmacOS Universal Zenz PKGはGitHub Actionsでビルド・検証します。
+### 配布ファイル
+
+- Windows: x64 MSIを提供します。x64版Windows向けです。
+- macOS: Apple SiliconとIntel Macの両方で使えるUniversal Zenz PKGを提供します。
 
 User-facing release version: `4.85.0`
 Mozc internal version: `3.34.6221.100`
