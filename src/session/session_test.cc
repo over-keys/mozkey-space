@@ -4250,6 +4250,11 @@ TEST_F(SessionTest, DeferredLiveStaleCallbackKeepsVisibleSnapshot) {
   SessionTestPeer peer(session);
   InitSessionToPrecomposition(&session);
 
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  session.SetConfig(config);
+
   peer.context_()->set_state(ImeContext::CONVERSION);
   peer.live_conversion_active_() = true;
   peer.live_conversion_key_() = "りせき";
