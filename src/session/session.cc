@@ -4770,18 +4770,6 @@ bool Session::SendKeyConversionState(commands::Command* command) {
   }
 
   if (live_conversion_active_) {
-    if (key_command == keymap::ConversionState::COMMIT &&
-        CommitDeferredLiveConversionDisplayForSubmit(command)) {
-      if (command_sequence.size() == 1) {
-        return true;
-      }
-      const commands::Output visible_commit_output = command->output();
-      keymap::CommandSequence remaining_sequence(
-          command_sequence.begin() + 1, command_sequence.end());
-      return ExecuteCommandSequenceWithInitialOutput(
-          remaining_sequence, &visible_commit_output, command);
-    }
-
     // During live conversion, Backspace should edit the underlying
     // composition instead of cancelling conversion.
     if (IsPlainBackspaceKey(command->input().key())) {
@@ -4852,24 +4840,6 @@ bool Session::SendKeyConversionState(commands::Command* command) {
       ClearZenzLiveCorrectionState();
       live_conversion_active_ = false;
       Output(command);
-      return true;
-    }
-
-    // The existing Space-specific residual-romaji repair above keeps priority.
-    // Only when it does not apply do we expose the current first Mozc result.
-    // This avoids advancing to a second candidate that was never visible.
-    if (key_command == keymap::ConversionState::CONVERT_NEXT &&
-        IsPureSpaceKey(input_key) &&
-        pending_zenz_live_.pending &&
-        pending_zenz_live_.defer_live_conversion_display) {
-      SetVisibleLiveConversionFromCurrentMozc();
-      CancelPendingZenzLiveCorrection();
-      live_conversion_active_ = false;
-      context_->mutable_converter()->SetCandidateListVisible(true);
-      Output(command);
-      command->mutable_output()->set_live_conversion(false);
-      command->mutable_output()->set_live_conversion_pending(false);
-      command->mutable_output()->set_zenz_live_correction_pending(false);
       return true;
     }
 
@@ -5481,7 +5451,6 @@ void Session::ClearLiveConversionState() {
 }
 
 void Session::CancelLiveConversionForEditing() {
-  RestoreVisibleLiveConversionForEditing();
   CancelPendingLiveConversion();
 
   // Ordinary conversion must retain converter state so the current result is
@@ -5617,20 +5586,6 @@ void Session::SetVisibleLiveConversionFromCurrentMozc() {
   visible_live_conversion_.valid = true;
 }
 
-void Session::RestoreVisibleLiveConversionForEditing() {
-  if (!context_->GetConfig().use_zenz_deferred_normal_conversion_display() ||
-      !live_conversion_active_ || !visible_live_conversion_.valid) {
-    return;
-  }
-
-  live_conversion_key_ = visible_live_conversion_.key;
-  live_conversion_preedit_ = visible_live_conversion_.preedit;
-  live_conversion_value_ = visible_live_conversion_.value;
-  live_conversion_preedit_output_ = visible_live_conversion_.preedit_output;
-  live_conversion_suggestion_candidate_window_ =
-      visible_live_conversion_.suggestion_candidate_window;
-  live_conversion_protected_spans_.clear();
-}
 
 bool Session::MaybeStartLiveConversion(commands::Command* command) {
   if (!context_->GetConfig().use_live_conversion()) {
@@ -5774,8 +5729,8 @@ bool Session::MaybeStartLiveConversion(commands::Command* command) {
       !direct_live_conversion_display.valid) {
     // The previous visible surface could not be reused safely, as with
     // Backspace/Delete. Do not flash raw hiragana. The new Mozc conversion is
-    // already available and is the authoritative immediate display while Zenz
-    // is re-evaluated under the normal direct-live 96 ms deadline.
+    // already available and remains authoritative internally; direct display
+    // changes only which preedit is returned while normal Zenz scheduling runs.
     SetVisibleLiveConversionFromCurrentMozc();
     direct_live_conversion_display = visible_live_conversion_;
   }
@@ -5796,27 +5751,14 @@ bool Session::OutputPendingLiveConversion(commands::Command* command) const {
   const std::string current_key = context_->composer().GetQueryForConversion();
   const std::string raw_preedit = context_->composer().GetStringForPreedit();
 
-  const bool use_visible_snapshot =
-      context_->GetConfig().use_zenz_deferred_normal_conversion_display() &&
-      visible_live_conversion_.valid;
-  const std::string& stable_key =
-      use_visible_snapshot ? visible_live_conversion_.key : live_conversion_key_;
-  const std::string& stable_preedit =
-      use_visible_snapshot ? visible_live_conversion_.preedit
-                           : live_conversion_preedit_;
-  const std::string& stable_value =
-      use_visible_snapshot ? visible_live_conversion_.value
-                           : live_conversion_value_;
-  const commands::Preedit& stable_preedit_output =
-      use_visible_snapshot ? visible_live_conversion_.preedit_output
-                           : live_conversion_preedit_output_;
-
+  // These checks intentionally use only the authoritative internal live state.
+  // They are the same scheduling gate as direct display OFF.
   const bool has_stable_live_conversion =
-      !stable_key.empty() && !stable_preedit.empty() &&
-      !stable_value.empty() && stable_preedit_output.segment_size() > 0;
+      !live_conversion_key_.empty() &&
+      !live_conversion_preedit_.empty() &&
+      !live_conversion_value_.empty() &&
+      live_conversion_preedit_output_.segment_size() > 0;
 
-  // First composition after starting IME has no stable converted prefix yet.
-  // In that case, raw pending display is expected and should still be debounced.
   if (!has_stable_live_conversion) {
     OutputComposition(command);
 
@@ -5833,15 +5775,39 @@ bool Session::OutputPendingLiveConversion(commands::Command* command) const {
     return true;
   }
 
-  // If stable-prefix composition cannot be built safely, do not fall back to
-  // raw hiragana. The caller should immediately run live conversion instead.
-  if (!StartsWithString(current_key, stable_key) ||
-      !StartsWithString(raw_preedit, stable_preedit)) {
+  if (!StartsWithString(current_key, live_conversion_key_) ||
+      !StartsWithString(raw_preedit, live_conversion_preedit_)) {
     return false;
   }
 
-  const std::string suffix_key = current_key.substr(stable_key.size());
-  const std::string suffix_value = raw_preedit.substr(stable_preedit.size());
+  // From here down, direct display is presentation-only. Prefer the last
+  // client-visible surface when it can safely represent the same append edit;
+  // otherwise render the authoritative Mozc surface exactly as direct OFF.
+  const bool can_use_visible_snapshot =
+      context_->GetConfig().use_zenz_deferred_normal_conversion_display() &&
+      visible_live_conversion_.valid &&
+      !visible_live_conversion_.key.empty() &&
+      !visible_live_conversion_.preedit.empty() &&
+      !visible_live_conversion_.value.empty() &&
+      visible_live_conversion_.preedit_output.segment_size() > 0 &&
+      StartsWithString(current_key, visible_live_conversion_.key) &&
+      StartsWithString(raw_preedit, visible_live_conversion_.preedit);
+
+  const std::string& display_key =
+      can_use_visible_snapshot ? visible_live_conversion_.key
+                               : live_conversion_key_;
+  const std::string& display_preedit =
+      can_use_visible_snapshot ? visible_live_conversion_.preedit
+                               : live_conversion_preedit_;
+  const std::string& display_value =
+      can_use_visible_snapshot ? visible_live_conversion_.value
+                               : live_conversion_value_;
+  const commands::Preedit& display_preedit_output =
+      can_use_visible_snapshot ? visible_live_conversion_.preedit_output
+                               : live_conversion_preedit_output_;
+
+  const std::string suffix_key = current_key.substr(display_key.size());
+  const std::string suffix_value = raw_preedit.substr(display_preedit.size());
 
   OutputComposition(command);
 
@@ -5852,12 +5818,8 @@ bool Session::OutputPendingLiveConversion(commands::Command* command) const {
 
   commands::Preedit* preedit = output->mutable_preedit();
   preedit->Clear();
-
-  // Reuse the exact segment structure and annotations from the latest real
-  // live conversion. This avoids flickering between UNDERLINE and HIGHLIGHT
-  // display attributes.
-  for (int i = 0; i < stable_preedit_output.segment_size(); ++i) {
-    *preedit->add_segment() = stable_preedit_output.segment(i);
+  for (int i = 0; i < display_preedit_output.segment_size(); ++i) {
+    *preedit->add_segment() = display_preedit_output.segment(i);
   }
 
   if (!suffix_value.empty()) {
@@ -5868,10 +5830,8 @@ bool Session::OutputPendingLiveConversion(commands::Command* command) const {
   }
 
   RestorePreeditSegmentKeysForSymbolStyle(raw_preedit, preedit);
-
-  preedit->set_cursor(Util::CharsLen(stable_value) +
+  preedit->set_cursor(Util::CharsLen(display_value) +
                       Util::CharsLen(suffix_value));
-
   return true;
 }
 
@@ -5988,17 +5948,12 @@ bool Session::IgnoreStaleDelayedLiveConversion(commands::Command* command) {
     return OutputZenzLiveCorrection(zenz_live_value_, command);
   }
 
-  // Likewise, while a current direct-display generation is pending, preserve
-  // its client-visible snapshot. This check intentionally precedes platform
-  // live-setting recovery because it is a presentation invariant for both
-  // explicit and live direct-display modes.
+  // Explicit Space direct display keeps its existing speculative deadline
+  // semantics. Live direct display is handled later, after the same stale-live
+  // recovery gates used by direct display OFF.
   if (pending_zenz_live_.pending &&
       context_->state() == ImeContext::CONVERSION &&
-      (pending_zenz_live_.defer_normal_conversion_display ||
-       pending_zenz_live_.defer_live_conversion_display)) {
-    // Advance the current generation rather than merely repainting it. This
-    // preserves the deadline-before-result rule even when the callback that
-    // happened to wake us belongs to an older generation.
+      pending_zenz_live_.defer_normal_conversion_display) {
     return AdvancePendingZenzLiveCorrection(
         command, /*refresh_output_on_submit=*/true);
   }
@@ -6023,6 +5978,14 @@ bool Session::IgnoreStaleDelayedLiveConversion(commands::Command* command) {
     AttachCachedLiveConversionSuggestionCandidateWindow(
         command->mutable_output());
     return true;
+  }
+
+  // Presentation-only direct display is intentionally below the same platform
+  // and pending-live recovery gates as direct display OFF.
+  if (pending_zenz_live_.pending &&
+      context_->state() == ImeContext::CONVERSION &&
+      pending_zenz_live_.defer_live_conversion_display) {
+    return OutputDeferredLiveConversionWithZenzPending(command);
   }
 
   if (live_conversion_active_ && context_->state() == ImeContext::CONVERSION) {
@@ -7210,18 +7173,6 @@ void Session::InvalidateZenzContinuationContextCacheForSessionCommand(
   }
 }
 
-void Session::SkipBusyDirectLiveZenz(commands::Command* command) {
-  // Busy is neutral evidence. Do not CancelPending() here because the
-  // running or queued work belongs to an older generation.
-  ++zenz_live_generation_;
-  pending_zenz_live_ = PendingZenzLiveCorrection();
-  commands::Output* output = command->mutable_output();
-  output->set_live_conversion(true);
-  output->set_live_conversion_pending(false);
-  output->set_zenz_live_correction_pending(false);
-  output->set_zenz_live_correction_applied(false);
-  output->set_zenz_live_correction_debug("zenz_direct_live_busy");
-}
 
 bool Session::MaybeScheduleZenzCorrection(
     commands::Command* command, bool use_conversion_history,
@@ -7246,14 +7197,8 @@ bool Session::MaybeScheduleZenzCorrection(
   const bool direct_live_display_requested =
       from_live_conversion &&
       config.use_zenz_deferred_normal_conversion_display();
-  if (direct_live_display_requested &&
-      (deferred_live_conversion_display == nullptr ||
-       !deferred_live_conversion_display->valid)) {
-    // Direct-display ON must never silently fall back to the legacy delayed
-    // Mozc-then-Zenz presentation when a safe visible snapshot is unavailable.
-    // Keep this live generation Mozc-only instead.
-    return false;
-  }
+  // A live display snapshot is optional presentation state only. Failure to
+  // build one must never suppress or otherwise alter the ordinary Zenz request.
   const bool defer_live_conversion_display =
       direct_live_display_requested &&
       deferred_live_conversion_display != nullptr &&
@@ -7277,15 +7222,6 @@ bool Session::MaybeScheduleZenzCorrection(
   // 「ほにゃ」 -> 「本屋」. Ordinary Zenz validates against the pre-conversion
   // key and must not be allowed to restore that mistyped reading.
   if (context_->converter().CurrentConversionHasReadingCorrection()) {
-    return false;
-  }
-
-  // Avoid context/history/prompt work for a generation that will be skipped.
-  // This is advisory; TrySubmitIfIdle still makes the atomic admission
-  // decision.
-  if (defer_live_conversion_display && zenz_live_corrector_ &&
-      zenz_live_corrector_->IsBusy()) {
-    SkipBusyDirectLiveZenz(command);
     return false;
   }
 
@@ -7426,14 +7362,10 @@ bool Session::MaybeScheduleZenzCorrection(
       " protected_prompt_replacements=",
       protected_prompt.placeholder_count));
 
-  if (defer_normal_conversion_display || defer_live_conversion_display) {
-    ZenzDebugOutput(
-        defer_live_conversion_display
-            ? "[zenz] live direct-display submit immediately"
-            : "[zenz] explicit direct-display submit immediately");
-    // The physical Space command already contains the Mozc conversion output.
-    // Submit Zenz now, then replace only that output preedit with the frozen
-    // pre-conversion display. Do not call Output() a second time on this path.
+  if (defer_normal_conversion_display) {
+    ZenzDebugOutput("[zenz] explicit direct-display submit immediately");
+    // Explicit Space direct display keeps its established behavior. Live direct
+    // display must use the same Zenz schedule as ordinary live correction.
     return AdvancePendingZenzLiveCorrection(
         command, /*refresh_output_on_submit=*/false);
   }
@@ -7448,6 +7380,14 @@ bool Session::MaybeScheduleZenzCorrection(
     // composition text on some TSF clients.
     return AdvancePendingZenzLiveCorrection(
         command, /*refresh_output_on_submit=*/false);
+  }
+
+  // Live direct display changes only the returned preedit. The Zenz start
+  // callback uses exactly the same configured delay as ordinary live correction.
+  if (defer_live_conversion_display) {
+    const bool result = OutputDeferredLiveConversionWithZenzPending(command);
+    AttachZenzLiveCorrectionStartCallback(command, delay_msec);
+    return result;
   }
 
   // Explicit Space conversion returns the Mozc result first, then starts Zenz
@@ -7496,8 +7436,7 @@ void Session::AttachZenzLiveCorrectionPollCallback(
   session_command->set_live_conversion_key(pending_zenz_live_.key);
 
   uint32_t delay_msec = kDefaultZenzLiveCorrectionPollMsec;
-  if ((pending_zenz_live_.defer_normal_conversion_display ||
-       pending_zenz_live_.defer_live_conversion_display) &&
+  if (pending_zenz_live_.defer_normal_conversion_display &&
       pending_zenz_live_.submitted) {
     const absl::Time deadline =
         pending_zenz_live_.defer_live_conversion_display
@@ -7678,48 +7617,6 @@ bool Session::OutputDeferredLiveConversionWithZenzPending(
   return true;
 }
 
-bool Session::CommitDeferredLiveConversionDisplayForSubmit(
-    commands::Command* command) {
-  if (!pending_zenz_live_.pending ||
-      !pending_zenz_live_.defer_live_conversion_display ||
-      !pending_zenz_live_.from_live_conversion ||
-      !live_conversion_active_ ||
-      context_->state() != ImeContext::CONVERSION ||
-      !pending_zenz_live_.deferred_live_conversion_display.valid) {
-    return false;
-  }
-
-  const LiveConversionDisplaySnapshot display =
-      pending_zenz_live_.deferred_live_conversion_display;
-
-  visible_live_conversion_ = display;
-  live_conversion_key_ = display.key;
-  live_conversion_preedit_ = display.preedit;
-  live_conversion_value_ = display.value;
-  live_conversion_preedit_output_ = display.preedit_output;
-  live_conversion_suggestion_candidate_window_ =
-      display.suggestion_candidate_window;
-  live_conversion_protected_spans_.clear();
-
-  // Enter accepts only what is visible. Retire the speculative hidden Mozc
-  // conversion, then reuse the existing pending-display commit path so Undo
-  // restores the same displayed live state instead of the hidden Mozc surface.
-  CancelPendingZenzLiveCorrection();
-  live_conversion_active_ = false;
-  context_->mutable_converter()->Cancel();
-  SetSessionState(ImeContext::COMPOSITION, context_.get());
-
-  ++live_conversion_generation_;
-  live_conversion_pending_ = true;
-  pending_live_conversion_generation_ = live_conversion_generation_;
-  pending_live_conversion_key_ =
-      context_->composer().GetQueryForConversion();
-  pending_live_conversion_input_.Clear();
-  pending_live_conversion_suggestion_candidate_window_ =
-      display.suggestion_candidate_window;
-
-  return CommitPendingLiveConversionDisplayForSubmit(command);
-}
 
 bool Session::OutputCurrentLiveConversionWithZenzPending(
     commands::Command* command) {
@@ -7869,25 +7766,6 @@ bool Session::AdvancePendingZenzLiveCorrection(
         " ", ZenzRedactedTextStats("right_context",
                                     pending_zenz_live_.right_context)));
 
-    if (pending_zenz_live_.defer_live_conversion_display) {
-      if (!EnsureZenzLiveCorrector()->TrySubmitIfIdle(std::move(request))) {
-        ZenzDebugOutput(absl::StrCat(
-            "[zenz] direct-live skipped because worker is busy generation=",
-            pending_zenz_live_.generation));
-
-        SkipBusyDirectLiveZenz(command);
-        return false;
-      }
-
-      pending_zenz_live_.submitted = true;
-      visible_live_conversion_ =
-          pending_zenz_live_.deferred_live_conversion_display;
-      const bool result =
-          OutputDeferredLiveConversionWithZenzPending(command);
-      AttachZenzLiveCorrectionPollCallback(command);
-      return result;
-    }
-
     pending_zenz_live_.submitted = true;
     EnsureZenzLiveCorrector()->Submit(std::move(request));
 
@@ -7896,6 +7774,8 @@ bool Session::AdvancePendingZenzLiveCorrection(
       result = OutputCurrentLiveConversionWithZenzPending(command);
     } else if (pending_zenz_live_.defer_normal_conversion_display) {
       result = OutputDeferredNormalConversionWithZenzPending(command);
+    } else if (pending_zenz_live_.defer_live_conversion_display) {
+      result = OutputDeferredLiveConversionWithZenzPending(command);
     } else {
       commands::Output* output = command->mutable_output();
       output->set_live_conversion(true);
@@ -7921,9 +7801,10 @@ bool Session::AdvancePendingZenzLiveCorrection(
         command, "zenz_async_corrector_missing");
   }
 
-  // Direct-display presentation deadlines have precedence over result
-  // availability. A queued result observed only after its display deadline is
-  // still late and must not be consumed or learned.
+  // Explicit Space direct display retains its existing speculative
+  // deadline. Live direct display uses the deadline only to stop hiding Mozc;
+  // the Zenz request, result handling, and learning remain identical to ordinary
+  // live correction.
   const bool deferred_normal_expired =
       pending_zenz_live_.defer_normal_conversion_display &&
       now >= pending_zenz_live_
@@ -7932,33 +7813,31 @@ bool Session::AdvancePendingZenzLiveCorrection(
       pending_zenz_live_.defer_live_conversion_display &&
       now >= pending_zenz_live_
                  .deferred_live_conversion_display_deadline;
-  if (deferred_normal_expired || deferred_live_expired) {
+
+  if (deferred_live_expired) {
+    ZenzDebugOutput(absl::StrCat(
+        "[zenz] live direct-display grace expired; reveal Mozc only",
+        " generation=", pending_zenz_live_.generation,
+        " grace_msec=", kZenzDeferredLiveConversionDisplayMsec));
+    SetVisibleLiveConversionFromCurrentMozc();
+    pending_zenz_live_.defer_live_conversion_display = false;
+  }
+
+  if (deferred_normal_expired) {
     ++pending_zenz_live_.poll_count;
     ZenzDebugOutput(absl::StrCat(
-        "[zenz] direct-display grace expired origin=",
-        deferred_live_expired ? "live" : "explicit",
+        "[zenz] direct-display grace expired origin=explicit",
         " generation=", pending_zenz_live_.generation,
         " poll_count=", pending_zenz_live_.poll_count,
         " grace_msec=",
-        deferred_live_expired
-            ? kZenzDeferredLiveConversionDisplayMsec
-            : GetZenzDeferredNormalConversionDisplayMsec(config)));
+        GetZenzDeferredNormalConversionDisplayMsec(config)));
 
-    if (deferred_live_expired) {
-      SetVisibleLiveConversionFromCurrentMozc();
-    }
-
-    // Deadline misses are neutral Full/Local evidence. Running inference may
-    // finish later, but its generation is stale after cancellation.
+    // Explicit Space direct display remains speculative: a deadline miss is
+    // neutral evidence and the late result is discarded.
     CancelPendingZenzLiveCorrection();
-    if (deferred_normal_expired) {
-      normal_conversion_zenz_active_ = false;
-    }
+    normal_conversion_zenz_active_ = false;
     return OutputCurrentLiveConversionAfterZenzStop(
-        command,
-        deferred_live_expired
-            ? "zenz_direct_live_display_grace_expired"
-            : "zenz_direct_display_grace_expired");
+        command, "zenz_direct_display_grace_expired");
   }
 
   std::optional<ZenzLiveResponse> response =
@@ -8728,26 +8607,17 @@ Session::GetPendingLiveConversionDisplayCommitStrings() const {
   const std::string raw_preedit =
       context_->composer().GetStringForPreedit();
 
-  const bool use_visible_snapshot =
-      context_->GetConfig().use_zenz_deferred_normal_conversion_display() &&
-      visible_live_conversion_.valid;
-  const std::string& stable_key =
-      use_visible_snapshot ? visible_live_conversion_.key : live_conversion_key_;
-  const std::string& stable_preedit =
-      use_visible_snapshot ? visible_live_conversion_.preedit
-                           : live_conversion_preedit_;
-  const std::string& stable_value =
-      use_visible_snapshot ? visible_live_conversion_.value
-                           : live_conversion_value_;
-
   const bool has_stable_live_conversion =
-      !stable_key.empty() && !stable_preedit.empty() && !stable_value.empty();
+      !live_conversion_key_.empty() &&
+      !live_conversion_preedit_.empty() &&
+      !live_conversion_value_.empty() &&
+      live_conversion_preedit_output_.segment_size() > 0;
 
   if (has_stable_live_conversion &&
-      StartsWithString(key, stable_key) &&
-      StartsWithString(raw_preedit, stable_preedit)) {
-    std::string value = stable_value;
-    value.append(raw_preedit.substr(stable_preedit.size()));
+      StartsWithString(key, live_conversion_key_) &&
+      StartsWithString(raw_preedit, live_conversion_preedit_)) {
+    std::string value = live_conversion_value_;
+    value.append(raw_preedit.substr(live_conversion_preedit_.size()));
     return {key, std::move(value)};
   }
 
@@ -9509,10 +9379,6 @@ bool Session::CommitInternal(commands::Command* command,
 }
 
 bool Session::Commit(commands::Command* command) {
-  if (CommitDeferredLiveConversionDisplayForSubmit(command)) {
-    return true;
-  }
-
   ZenzDebugOutput(absl::StrCat(
       "[zenz-feedback] Commit entered live_conversion_active=",
       ZenzBool(live_conversion_active_),

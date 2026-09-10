@@ -4220,8 +4220,9 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
 
 void ConfigDialog::SelectZenzLiveCorrectionSetting(int /*state*/) {
   const bool enabled = zenzLiveCorrectionCheckBox->isChecked();
-  const bool delay_enabled =
-      enabled && !zenzDeferredNormalConversionDisplayCheckBox->isChecked();
+  // Direct display no longer changes live Zenz scheduling. Keep the delay
+  // control available because it still applies to live correction.
+  const bool delay_enabled = enabled;
 
   zenzDeferredNormalConversionDisplayCheckBox->setEnabled(enabled);
   zenzLiveCorrectionDelayLabel->setEnabled(delay_enabled);

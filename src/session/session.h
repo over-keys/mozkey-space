@@ -361,7 +361,6 @@ class Session {
       const commands::Command&);
   void InvalidateZenzContinuationContextCacheForSessionCommand(
       commands::SessionCommand::CommandType);
-  void SkipBusyDirectLiveZenz(commands::Command* command);
   bool MaybeScheduleZenzCorrection(
       commands::Command*, bool use_conversion_history,
       const commands::Preedit* pre_conversion_preedit,
@@ -375,10 +374,8 @@ class Session {
   LiveConversionDisplaySnapshot
   BuildLiveConversionDisplaySnapshotForCurrentComposition() const;
   void SetVisibleLiveConversionFromCurrentMozc();
-  void RestoreVisibleLiveConversionForEditing();
   bool OutputDeferredNormalConversionWithZenzPending(commands::Command*);
   bool OutputDeferredLiveConversionWithZenzPending(commands::Command*);
-  bool CommitDeferredLiveConversionDisplayForSubmit(commands::Command*);
   bool OutputCurrentLiveConversionWithZenzPending(commands::Command*);
   bool OutputCurrentLiveConversionAfterZenzStop(commands::Command*,absl::string_view);
   ZenzLiveCorrector* EnsureZenzLiveCorrector();

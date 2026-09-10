@@ -199,6 +199,21 @@ TEST_F(ConfigDialogUiTest, ManualWarningUsesPendingSettings) {
   }
 }
 
+TEST_F(ConfigDialogUiTest, ZenzDelayRemainsEnabledWithDirectDisplay) {
+  ConfigDialog settings;
+  auto* zenz = settings.findChild<QCheckBox*>("zenzLiveCorrectionCheckBox");
+  auto* direct = settings.findChild<QCheckBox*>(
+      "zenzDeferredNormalConversionDisplayCheckBox");
+  auto* delay = settings.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+  ASSERT_NE(zenz, nullptr);
+  ASSERT_NE(direct, nullptr);
+  ASSERT_NE(delay, nullptr);
+
+  zenz->setChecked(true);
+  direct->setChecked(true);
+  EXPECT_TRUE(delay->isEnabled());
+}
+
 TEST_F(ConfigDialogUiTest, InvalidFeedbackOverrideNeverFallsBackToUserData) {
   session::ZenzFeedbackStore store;
   ASSERT_TRUE(store.SetManualLocalPreference("よい", "よい", "良い", true));
