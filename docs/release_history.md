@@ -1,6 +1,21 @@
 Release History
 ===============
 
+Mozkey 4.85.0 / Mozc 3.34 / *2026-09-10*
+-------------------------------------------
+
+### 4.85.0 の変更内容
+
+設定画面からLocal preferenceを手動で登録・解除できるようになりました。
+手動設定は学習回数のしきい値に依存せず優先して適用され、自動のaccepted/rejectedの学習結果も保持します。
+
+既存のv4 8列TSV形式との互換性を維持しています。
+
+Windows x64 MSIとmacOS Universal Zenz PKGはGitHub Actionsでビルド・検証します。
+
+User-facing release version: `4.85.0`
+Mozc internal version: `3.34.6221.100`
+
 Mozkey 4.84.0 / Mozc 3.34 / *2026-09-09*
 -------------------------------------------
 

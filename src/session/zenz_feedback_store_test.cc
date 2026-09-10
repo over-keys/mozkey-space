@@ -255,6 +255,114 @@ V4_TEST(BatchPersistsFullThenLocalRejectThenLocalAccept) {
   EXPECT_EQ(entries[0].observation_count, 1);
 }
 
+V4_TEST(ManualLocalPreferenceBypassesThresholdWithoutChangingEvidence) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+
+  store.RecordLocalAccepted("よい", "japanese_only", "よい", "良い");
+  ASSERT_TRUE(store.SetManualLocalPreference("よい", "よい", "良い", true));
+
+  auto entries = store.ListLocalPreferenceEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].observation_count, 1);
+  EXPECT_TRUE(entries[0].manual);
+
+  auto rules = store.GetLocalPreferences(
+      "よいかも", "japanese_only", 12, 255, "よいかも", "良いかも");
+  ASSERT_EQ(rules.size(), 1);
+  EXPECT_EQ(rules[0].key, "よい");
+
+  ASSERT_TRUE(store.SetManualLocalPreference("よい", "よい", "良い", false));
+  entries = store.ListLocalPreferenceEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].observation_count, 1);
+  EXPECT_FALSE(entries[0].manual);
+  EXPECT_TRUE(store.GetLocalPreferences(
+      "よいかも", "japanese_only", 12, 2, "よいかも", "良いかも").empty());
+
+  ASSERT_TRUE(store.SetManualLocalPreference("よい", "よい", "良い", true));
+  store.RecordLocalRejected("よい", "empty", "よい", "良い");
+  entries = store.ListLocalPreferenceEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].observation_count, 0);
+  EXPECT_TRUE(entries[0].manual);
+  EXPECT_EQ(store.GetLocalPreferences(
+                "よいかも", "empty", 12, 255, "よいかも", "良いかも")
+                .size(),
+            1);
+}
+
+V4_TEST(ManualLocalPreferenceIsIdempotentCanonicalAndSurvivesMaintenance) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+
+  ASSERT_TRUE(store.SetManualLocalPreference(
+      "りせきします", "離籍します", "離席します", true));
+  ASSERT_TRUE(store.SetManualLocalPreference(
+      "りせきします", "離籍します", "離席します", true));
+
+  auto entries = store.ListLocalPreferenceEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].key, "りせき");
+  EXPECT_EQ(entries[0].disfavored_value, "離籍");
+  EXPECT_EQ(entries[0].preferred_value, "離席");
+  EXPECT_EQ(entries[0].observation_count, 0);
+  EXPECT_TRUE(entries[0].manual);
+
+  ASSERT_TRUE(store.Maintenance(100));
+  entries = store.ListLocalPreferenceEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_TRUE(entries[0].manual);
+  EXPECT_EQ(entries[0].observation_count, 0);
+
+  std::ifstream file(V4_FEEDBACK_PATH(), std::ios::binary);
+  ASSERT_TRUE(file);
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(file, line);) {
+    lines.push_back(line);
+  }
+  ASSERT_EQ(lines.size(), 1);
+  EXPECT_EQ(lines[0],
+            "v4\tlocal\tmanual\tりせき\tempty\t離籍\t離席\t1");
+
+  EXPECT_FALSE(store.SetManualLocalPreference("よ", "よ", "良", true));
+  EXPECT_FALSE(store.SetManualLocalPreference("よい", "同じ", "同じ", true));
+}
+
+V4_TEST(ManualLocalPreferenceOverridesMatureAutoInverse) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+
+  // Automatic evidence has previously learned the opposite direction.
+  store.RecordLocalAccepted("よい", "empty", "良い", "よい");
+  store.RecordLocalAccepted("よい", "empty", "良い", "よい");
+  ASSERT_TRUE(store.SetManualLocalPreference("よい", "よい", "良い", true));
+
+  const auto rules = store.GetLocalPreferences(
+      "よいかも", "empty", 12, 2, "よいかも", "良いかも");
+  ASSERT_EQ(rules.size(), 1);
+  EXPECT_EQ(rules[0].key, "よい");
+  EXPECT_EQ(rules[0].disfavored_value, "よい");
+  EXPECT_EQ(rules[0].preferred_value, "良い");
+}
+
+V4_TEST(ManualLocalPreferenceWinsBoundedCandidateSelection) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+
+  // A longer automatic rule would normally rank ahead of the shorter rule.
+  // Manual is an explicit user setting, so it must survive max_results=1.
+  store.RecordLocalAccepted("とてもよい", "empty", "とてもよい",
+                            "とても良い");
+  ASSERT_TRUE(store.SetManualLocalPreference("よい", "よい", "良い", true));
+
+  const auto rules = store.GetLocalPreferences("とてもよい", "empty", 1, 1);
+  ASSERT_EQ(rules.size(), 1);
+  EXPECT_EQ(rules[0].key, "よい");
+  EXPECT_EQ(rules[0].disfavored_value, "よい");
+  EXPECT_EQ(rules[0].preferred_value, "良い");
+}
+
 V4_TEST(FullHardRejectAndAutoBlockRemainUnchanged) {
   V4_PROFILE();
   ZenzFeedbackStore store;

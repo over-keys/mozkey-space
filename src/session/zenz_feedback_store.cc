@@ -93,6 +93,7 @@ struct LocalEvent {
   std::string raw_zenz_surface;
   std::string corrected_surface;
   bool accepted = true;
+  bool manual = false;
   int count = 1;
   size_t sequence = 0;
 };
@@ -100,6 +101,7 @@ struct LocalEvent {
 using FeedbackCounts = std::map<FeedbackKey, Counts>;
 struct LocalCounts {
   int count = 0;
+  bool manual = false;
   size_t last_sequence = 0;
 };
 
@@ -249,14 +251,22 @@ bool ContainsUnsafePersistedChar(absl::string_view s) {
 }
 
 bool IsSafeRecord(const Record& record) {
-  if ((record.action != "accepted" && record.action != "rejected") ||
-      record.key.empty() || record.value.empty() || record.count <= 0 ||
+  const bool known_action =
+      record.action == "accepted" || record.action == "rejected" ||
+      (record.kind == RecordKind::kLocal && record.action == "manual");
+  if (!known_action || record.key.empty() || record.value.empty() ||
+      record.count <= 0 ||
       !IsKnownContextClass(record.context_class)) {
     return false;
   }
 
   if (record.kind == RecordKind::kLocal) {
     if (record.extra.empty() || record.value == record.extra) {
+      return false;
+    }
+    // v4 keeps eight columns. Manual has no numeric semantics, so its count
+    // field is a fixed compatibility placeholder and must remain exactly 1.
+    if (record.action == "manual" && record.count != 1) {
       return false;
     }
   }
@@ -744,6 +754,10 @@ void ApplyRecordToFeedbackData(const Record& record, FeedbackData* data) {
   LocalCounts& counts = data->local_counts_by_reading[local.key]
       [{local.raw_zenz_surface, local.corrected_surface}];
   counts.last_sequence = sequence;
+  if (record.action == "manual") {
+    counts.manual = true;
+    return;
+  }
   if (record.action == "accepted") {
     const int remaining = kMaxLocalEvidenceCount - counts.count;
     counts.count = record.count >= remaining ? kMaxLocalEvidenceCount
@@ -1289,6 +1303,7 @@ struct LocalCompactAggregate {
   std::string raw_zenz_surface;
   std::string corrected_surface;
   int count = 0;
+  bool manual = false;
   size_t last_sequence = 0;
 };
 
@@ -1412,15 +1427,24 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
       std::clamp(min_observation_count, kMinLocalThreshold, kMaxLocalThreshold);
   const std::string current_context = NormalizeContextClass(context_class);
   const std::shared_ptr<const FeedbackData> data = LoadFeedbackData();
+  const auto is_active = [threshold](const LocalCounts& counts) {
+    return counts.manual || counts.count >= threshold;
+  };
 
   struct Candidate {
     absl::string_view key;
     absl::string_view raw;
     absl::string_view corrected;
     int count = 0;
+    bool manual = false;
     size_t last_sequence = 0;
   };
   const auto better = [](const Candidate& lhs, const Candidate& rhs) {
+    // Manual preferences are explicit user settings and must not be evicted
+    // by the bounded candidate list merely because their auto count is zero.
+    if (lhs.manual != rhs.manual) {
+      return lhs.manual > rhs.manual;
+    }
     if (lhs.key.size() != rhs.key.size()) {
       return lhs.key.size() > rhs.key.size();
     }
@@ -1457,7 +1481,7 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
     // rules before ApplyLocalPreferenceRepairs can disambiguate them.
     for (const auto& [direction, counts] : directions) {
       const auto& [raw, corrected] = direction;
-      if (counts.count < threshold) {
+      if (!is_active(counts)) {
         continue;
       }
       // These are necessary conditions only. Exact reading-position and
@@ -1473,12 +1497,13 @@ std::vector<ZenzLocalPreference> ZenzFeedbackStore::GetLocalPreferences(
       }
       // If the exact inverse direction is also mature globally, do not guess.
       const auto inverse = directions.find({corrected, raw});
-      if (inverse != directions.end() && inverse->second.count >= threshold) {
+      if (inverse != directions.end() && is_active(inverse->second) &&
+          (!counts.manual || inverse->second.manual)) {
         continue;
       }
 
       const Candidate candidate{
-          reading, raw, corrected, counts.count, counts.last_sequence};
+          reading, raw, corrected, counts.count, counts.manual, counts.last_sequence};
       if (candidates.size() < max_results) {
         candidates.push_back(candidate);
         std::push_heap(candidates.begin(), candidates.end(), better);
@@ -1516,7 +1541,7 @@ ZenzFeedbackStore::ListLocalPreferenceEntries() const {
     for (const auto& [direction, counts] : directions) {
       const auto& [raw, corrected] = direction;
       const int count = counts.count;
-      if (count == 0) {
+      if (count == 0 && !counts.manual) {
         continue;
       }
       const auto inverse = directions.find({corrected, raw});
@@ -1533,6 +1558,7 @@ ZenzFeedbackStore::ListLocalPreferenceEntries() const {
       entry.observation_count = count;
       entry.effective_observation_count = count;
       entry.opposite_effective_observation_count = opposite;
+      entry.manual = counts.manual;
       entries.push_back(std::move(entry));
     }
   }
@@ -1731,6 +1757,79 @@ bool ZenzFeedbackStore::DeleteLocalPreference(
   return WriteRecordsAtomically(records);
 }
 
+bool ZenzFeedbackStore::SetManualLocalPreference(
+    absl::string_view key, absl::string_view raw_zenz_surface,
+    absl::string_view corrected_surface, bool enabled) {
+  const CanonicalLocalIdentity local = CanonicalizeLocalIdentity(
+      key, raw_zenz_surface, corrected_surface);
+  const std::vector<absl::string_view> key_chars = LocalUtf8Chars(local.key);
+  const std::vector<absl::string_view> raw_chars =
+      LocalUtf8Chars(local.raw_zenz_surface);
+  const std::vector<absl::string_view> corrected_chars =
+      LocalUtf8Chars(local.corrected_surface);
+  constexpr size_t kMinManualLocalKeyChars = 2;
+  constexpr size_t kMaxManualLocalKeyChars = 32;
+  constexpr size_t kMaxManualLocalSurfaceChars = 64;
+  if (key_chars.size() < kMinManualLocalKeyChars ||
+      key_chars.size() > kMaxManualLocalKeyChars || raw_chars.empty() ||
+      raw_chars.size() > kMaxManualLocalSurfaceChars ||
+      corrected_chars.empty() ||
+      corrected_chars.size() > kMaxManualLocalSurfaceChars ||
+      local.raw_zenz_surface == local.corrected_surface) {
+    return false;
+  }
+
+  Record marker;
+  marker.kind = RecordKind::kLocal;
+  marker.action = "manual";
+  marker.key = local.key;
+  marker.context_class = "empty";
+  marker.value = local.raw_zenz_surface;
+  marker.extra = local.corrected_surface;
+  marker.count = 1;
+  if (!IsSafeRecord(marker)) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
+  ScopedFeedbackInterprocessLock interprocess_lock;
+  if (!interprocess_lock.ok()) {
+    return false;
+  }
+
+  std::vector<Record> records;
+  if (!LoadRecordsFromDisk(&records)) {
+    return false;
+  }
+
+  const auto is_same_manual = [&](const Record& record) {
+    if (record.kind != RecordKind::kLocal || record.action != "manual") {
+      return false;
+    }
+    const CanonicalLocalIdentity existing = CanonicalizeLocalIdentity(
+        record.key, record.value, record.extra);
+    return existing.key == local.key &&
+           existing.raw_zenz_surface == local.raw_zenz_surface &&
+           existing.corrected_surface == local.corrected_surface;
+  };
+
+  if (enabled) {
+    if (std::any_of(records.begin(), records.end(), is_same_manual)) {
+      return true;
+    }
+    records.push_back(std::move(marker));
+    return WriteRecordsAtomically(records);
+  }
+
+  const auto new_end =
+      std::remove_if(records.begin(), records.end(), is_same_manual);
+  if (new_end == records.end()) {
+    return true;
+  }
+  records.erase(new_end, records.end());
+  return WriteRecordsAtomically(records);
+}
+
 bool ZenzFeedbackStore::ClearAll() {
   std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
   ScopedFeedbackInterprocessLock interprocess_lock;
@@ -1868,6 +1967,7 @@ bool ZenzFeedbackStore::Maintenance(size_t max_entries) {
     event.raw_zenz_surface = local.raw_zenz_surface;
     event.corrected_surface = local.corrected_surface;
     event.accepted = record.action == "accepted";
+    event.manual = record.action == "manual";
     event.count = record.count;
     event.sequence = i;
     local_events[LocalKey(local.key, local.raw_zenz_surface,
@@ -1916,11 +2016,16 @@ bool ZenzFeedbackStore::Maintenance(size_t max_entries) {
   for (const auto& [key, events] : local_events) {
     const auto& [reading, raw, corrected] = key;
     int count = 0;
+    bool manual = false;
     size_t last_sequence = 0;
     std::string last_context = "empty";
     for (const LocalEvent& event : events) {
       last_sequence = event.sequence;
       last_context = event.context_class;
+      if (event.manual) {
+        manual = true;
+        continue;
+      }
       if (event.accepted) {
         const int remaining = kMaxLocalEvidenceCount - count;
         count = event.count >= remaining
@@ -1930,16 +2035,21 @@ bool ZenzFeedbackStore::Maintenance(size_t max_entries) {
         count = event.count >= count ? 0 : count - event.count;
       }
     }
-    if (count == 0) {
+    if (count == 0 && !manual) {
       continue;
     }
     local_entries.push_back(
-        {reading, last_context, raw, corrected, count, last_sequence});
+        {reading, last_context, raw, corrected, count, manual, last_sequence});
   }
 
   std::sort(local_entries.begin(), local_entries.end(),
             [](const LocalCompactAggregate& lhs,
                const LocalCompactAggregate& rhs) {
+              // Explicit user settings should not be evicted before automatic
+              // evidence when the Local maintenance budget is full.
+              if (lhs.manual != rhs.manual) {
+                return lhs.manual > rhs.manual;
+              }
               if (lhs.count != rhs.count) {
                 return lhs.count > rhs.count;
               }
@@ -2025,15 +2135,28 @@ bool ZenzFeedbackStore::Maintenance(size_t max_entries) {
     }
 
     const LocalCompactAggregate& entry = local_entries[item.index];
-    Record record;
-    record.kind = RecordKind::kLocal;
-    record.action = "accepted";
-    record.key = entry.key;
-    record.context_class = entry.context_class;
-    record.value = entry.raw_zenz_surface;
-    record.extra = entry.corrected_surface;
-    record.count = entry.count;
-    compacted.push_back(std::move(record));
+    if (entry.count > 0) {
+      Record record;
+      record.kind = RecordKind::kLocal;
+      record.action = "accepted";
+      record.key = entry.key;
+      record.context_class = entry.context_class;
+      record.value = entry.raw_zenz_surface;
+      record.extra = entry.corrected_surface;
+      record.count = entry.count;
+      compacted.push_back(std::move(record));
+    }
+    if (entry.manual) {
+      Record record;
+      record.kind = RecordKind::kLocal;
+      record.action = "manual";
+      record.key = entry.key;
+      record.context_class = entry.context_class;
+      record.value = entry.raw_zenz_surface;
+      record.extra = entry.corrected_surface;
+      record.count = 1;
+      compacted.push_back(std::move(record));
+    }
   }
 
   return WriteRecordsAtomically(compacted);

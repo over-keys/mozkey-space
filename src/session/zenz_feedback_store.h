@@ -103,6 +103,7 @@ struct ZenzLocalPreferenceEntry {
   int observation_count = 0;
   int effective_observation_count = 0;
   int opposite_effective_observation_count = 0;
+  bool manual = false;
 };
 
 enum class ZenzFullFeedbackAction {
@@ -182,6 +183,14 @@ class ZenzFeedbackStore {
                              absl::string_view context_class,
                              absl::string_view preferred_value,
                              absl::string_view disfavored_value);
+
+  [[nodiscard]]
+  // Adds or removes the manual marker for one context-independent Local rule.
+  // Automatic accepted/rejected evidence for the same rule is preserved.
+  bool SetManualLocalPreference(absl::string_view key,
+                                absl::string_view raw_zenz_surface,
+                                absl::string_view corrected_surface,
+                                bool enabled);
 
   [[nodiscard]]
   bool ClearAll();

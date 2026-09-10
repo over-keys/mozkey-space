@@ -1430,6 +1430,223 @@ std::wstring BuildRestoreDefaultImeScript() {
 }
 #endif  // _WIN32
 
+void ShowZenzManualLocalPreferenceDialog(
+    QWidget* parent, const config::Config& current_config) {
+  QDialog dialog(parent);
+  dialog.setWindowTitle(QString::fromUtf8("変換の好み"));
+  dialog.resize(650, 390);
+
+  session::ZenzFeedbackStore store;
+  QVBoxLayout* root_layout = new QVBoxLayout(&dialog);
+
+  QLabel* description_label = new QLabel(
+      QString::fromUtf8(
+          "手動で指定した局所的な変換の好みを管理します。"
+          "手動設定に学習数はなく、登録直後から有効です。"
+          "ただし強制置換ではなく、読み、Zenz 表記、現在の Mozc 表記が"
+          "安全に対応すると確認できた場合だけ使用されます。"),
+      &dialog);
+  description_label->setWordWrap(true);
+  root_layout->addWidget(description_label);
+
+  if (!current_config.use_zenz_feedback_learning() ||
+      !current_config.use_zenz_local_preference_learning()) {
+    QLabel* disabled_label = new QLabel(
+        QString::fromUtf8(
+            "現在は局所学習が無効です。設定は保存できますが、"
+            "局所学習を有効にするまで変換には使用されません。"),
+        &dialog);
+    disabled_label->setWordWrap(true);
+    root_layout->addWidget(disabled_label);
+  }
+
+  QGroupBox* add_group =
+      new QGroupBox(QString::fromUtf8("変換の好みを追加"), &dialog);
+  QGridLayout* add_layout = new QGridLayout(add_group);
+  QLineEdit* key_edit = new QLineEdit(add_group);
+  QLineEdit* raw_edit = new QLineEdit(add_group);
+  QLineEdit* preferred_edit = new QLineEdit(add_group);
+  key_edit->setMaxLength(32);
+  raw_edit->setMaxLength(64);
+  preferred_edit->setMaxLength(64);
+  key_edit->setPlaceholderText(QString::fromUtf8("よい"));
+  raw_edit->setPlaceholderText(QString::fromUtf8("よい"));
+  preferred_edit->setPlaceholderText(QString::fromUtf8("良い"));
+  QPushButton* add_button =
+      new QPushButton(QString::fromUtf8("追加"), add_group);
+
+  add_layout->addWidget(new QLabel(QString::fromUtf8("読み"), add_group),
+                        0, 0);
+  add_layout->addWidget(new QLabel(QString::fromUtf8("Zenz 表記"), add_group),
+                        0, 1);
+  add_layout->addWidget(
+      new QLabel(QString::fromUtf8("好みの表記"), add_group), 0, 2);
+  add_layout->addWidget(key_edit, 1, 0);
+  add_layout->addWidget(raw_edit, 1, 1);
+  add_layout->addWidget(preferred_edit, 1, 2);
+  add_layout->addWidget(add_button, 1, 3);
+  root_layout->addWidget(add_group);
+
+  QTableWidget* table = new QTableWidget(&dialog);
+  table->setColumnCount(3);
+  table->setHorizontalHeaderLabels(
+      QStringList() << QString::fromUtf8("読み")
+                    << QString::fromUtf8("Zenz 表記")
+                    << QString::fromUtf8("好みの表記"));
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  table->horizontalHeader()->setStretchLastSection(true);
+  root_layout->addWidget(table);
+
+  QLabel* status_label = new QLabel(&dialog);
+  root_layout->addWidget(status_label);
+
+  QHBoxLayout* button_layout = new QHBoxLayout;
+  QPushButton* delete_button =
+      new QPushButton(QString::fromUtf8("選択項目を削除"), &dialog);
+  QDialogButtonBox* close_buttons =
+      new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+  if (QPushButton* close_button =
+          close_buttons->button(QDialogButtonBox::Close)) {
+    close_button->setText(QString::fromUtf8("閉じる"));
+  }
+  button_layout->addWidget(delete_button);
+  button_layout->addStretch();
+  button_layout->addWidget(close_buttons);
+  root_layout->addLayout(button_layout);
+
+  auto reload_table = [&]() {
+    const std::vector<session::ZenzLocalPreferenceEntry> entries =
+        store.ListLocalPreferenceEntries();
+    table->setRowCount(0);
+
+    int manual_count = 0;
+    for (const session::ZenzLocalPreferenceEntry& entry : entries) {
+      if (!entry.manual) {
+        continue;
+      }
+      const int row = table->rowCount();
+      table->insertRow(row);
+      const QString key = ToQString(entry.key);
+      const QString raw = ToQString(entry.disfavored_value);
+      const QString preferred = ToQString(entry.preferred_value);
+      SetTableItem(table, row, 0, key);
+      SetTableItem(table, row, 1, raw);
+      SetTableItem(table, row, 2, preferred);
+      table->item(row, 0)->setData(Qt::UserRole, key);
+      table->item(row, 1)->setData(Qt::UserRole, raw);
+      table->item(row, 2)->setData(Qt::UserRole, preferred);
+      ++manual_count;
+    }
+
+    table->resizeColumnsToContents();
+    status_label->setText(
+        QString::fromUtf8("手動設定 %1 件").arg(manual_count));
+    delete_button->setEnabled(table->currentRow() >= 0);
+  };
+
+  QObject::connect(table, &QTableWidget::itemSelectionChanged,
+                   &dialog, [&]() {
+                     delete_button->setEnabled(table->currentRow() >= 0);
+                   });
+
+  QObject::connect(add_button, &QPushButton::clicked,
+                   &dialog, [&]() {
+                     const QString key = key_edit->text();
+                     const QString raw = raw_edit->text();
+                     const QString preferred = preferred_edit->text();
+                     const int key_chars = key.toUcs4().size();
+                     const int raw_chars = raw.toUcs4().size();
+                     const int preferred_chars = preferred.toUcs4().size();
+                     if (key_chars < 2 || key_chars > 32 || raw_chars < 1 ||
+                         raw_chars > 64 || preferred_chars < 1 ||
+                         preferred_chars > 64 || raw == preferred ||
+                         key.trimmed() != key || raw.trimmed() != raw ||
+                         preferred.trimmed() != preferred) {
+                       ShowJapaneseCritical(
+                           &dialog, dialog.windowTitle(),
+                           QString::fromUtf8(
+                               "入力内容を確認してください。\n"
+                               "読みは 2 文字以上 32 文字以内、各表記は "
+                               "1 文字以上 64 文字以内で、Zenz 表記と"
+                               "好みの表記は異なる必要があります。"
+                               "先頭または末尾の空白は使用できません。"));
+                       return;
+                     }
+
+                     if (!store.SetManualLocalPreference(
+                             key.toUtf8().constData(), raw.toUtf8().constData(),
+                             preferred.toUtf8().constData(), true)) {
+                       ShowJapaneseCritical(
+                           &dialog, dialog.windowTitle(),
+                           QString::fromUtf8(
+                               "変換の好みを保存できませんでした。"
+                               "入力内容を確認してください。"));
+                       return;
+                     }
+
+                     key_edit->clear();
+                     raw_edit->clear();
+                     preferred_edit->clear();
+                     key_edit->setFocus();
+                     reload_table();
+                   });
+
+  QObject::connect(delete_button, &QPushButton::clicked,
+                   &dialog, [&]() {
+                     const int row = table->currentRow();
+                     if (row < 0) {
+                       return;
+                     }
+                     const QString key =
+                         table->item(row, 0)->data(Qt::UserRole).toString();
+                     const QString raw =
+                         table->item(row, 1)->data(Qt::UserRole).toString();
+                     const QString preferred =
+                         table->item(row, 2)->data(Qt::UserRole).toString();
+
+                     QMessageBox message_box(&dialog);
+                     message_box.setWindowTitle(dialog.windowTitle());
+                     message_box.setIcon(QMessageBox::Warning);
+                     message_box.setText(
+                         QString::fromUtf8("選択した手動設定を削除しますか？"));
+                     message_box.setInformativeText(
+                         QString::fromUtf8(
+                             "読み: %1\nZenz 表記: %2\n好みの表記: %3\n\n"
+                             "自動 Local 学習の回数は削除されません。")
+                             .arg(key, raw, preferred));
+                     QPushButton* confirm =
+                         message_box.addButton(QString::fromUtf8("削除"),
+                                               QMessageBox::DestructiveRole);
+                     QPushButton* cancel =
+                         message_box.addButton(QString::fromUtf8("キャンセル"),
+                                               QMessageBox::RejectRole);
+                     message_box.setDefaultButton(cancel);
+                     message_box.exec();
+                     if (message_box.clickedButton() != confirm) {
+                       return;
+                     }
+
+                     if (!store.SetManualLocalPreference(
+                             key.toUtf8().constData(), raw.toUtf8().constData(),
+                             preferred.toUtf8().constData(), false)) {
+                       ShowJapaneseCritical(
+                           &dialog, dialog.windowTitle(),
+                           QString::fromUtf8(
+                               "手動設定を削除できませんでした。"));
+                       return;
+                     }
+                     reload_table();
+                   });
+
+  QObject::connect(close_buttons, &QDialogButtonBox::rejected,
+                   &dialog, &QDialog::reject);
+
+  reload_table();
+  dialog.exec();
+}
+
 void ShowZenzFeedbackManagementDialog(QWidget* parent,
                                       const config::Config& current_config) {
   QDialog dialog(parent);
@@ -1454,10 +1671,16 @@ void ShowZenzFeedbackManagementDialog(QWidget* parent,
   QLabel* description_label = new QLabel(
       QString::fromUtf8(
           "Zenz 補正の学習データを管理します。"
-          "ここでは、補正結果として保存された読みと候補の記録を"
-          "安全に確認・削除できます。"),
+          "読み全体の記録は下の一覧で、手動の局所設定は"
+          "「変換の好み...」から確認・追加・削除できます。"),
       &dialog);
   description_label->setWordWrap(true);
+
+  QPushButton* manual_preferences_button =
+      new QPushButton(QString::fromUtf8("変換の好み..."), &dialog);
+  manual_preferences_button->setFixedWidth(112);
+  manual_preferences_button->setToolTip(
+      QString::fromUtf8("手動の局所的な変換の好みを確認・追加・削除します"));
 
   QPushButton* details_button =
       new QPushButton(QString::fromUtf8("詳しく..."), &dialog);
@@ -1466,6 +1689,7 @@ void ShowZenzFeedbackManagementDialog(QWidget* parent,
       "状態ラベル、Zenz 学習の記録条件、通常の変換履歴との違いを表示します"));
 
   description_layout->addWidget(description_label, 1);
+  description_layout->addWidget(manual_preferences_button, 0, Qt::AlignTop);
   description_layout->addWidget(details_button, 0, Qt::AlignTop);
   root_layout->addWidget(description_widget);
 
@@ -1640,6 +1864,8 @@ void ShowZenzFeedbackManagementDialog(QWidget* parent,
     const QString filter = search_edit->text();
     const std::vector<session::ZenzFeedbackEntry> entries =
         store.ListEntries(auto_block_policy);
+    const std::vector<session::ZenzLocalPreferenceEntry> local_entries =
+        store.ListLocalPreferenceEntries();
 
     table->setRowCount(0);
 
@@ -1682,13 +1908,16 @@ void ShowZenzFeedbackManagementDialog(QWidget* parent,
                   .arg(auto_block_policy.reject_threshold)
             : QString::fromUtf8(" / 自動ブロック OFF");
     status_label->setText(
-        QString::fromUtf8("表示 %1 件 / 全 %2 件%3")
+        QString::fromUtf8(
+            "読み全体: 表示 %1 件 / 全 %2 件 / Local %3 件%4")
             .arg(visible_count)
             .arg(static_cast<int>(entries.size()))
+            .arg(static_cast<int>(local_entries.size()))
             .arg(auto_block_status));
 
-    export_button->setEnabled(!entries.empty());
-    clear_button->setEnabled(!entries.empty());
+    const bool has_any_data = !entries.empty() || !local_entries.empty();
+    export_button->setEnabled(has_any_data);
+    clear_button->setEnabled(has_any_data);
     update_selection_buttons();
   };
 
@@ -1699,6 +1928,13 @@ void ShowZenzFeedbackManagementDialog(QWidget* parent,
 
   QObject::connect(search_edit, &QLineEdit::textChanged,
                    &dialog, [&](const QString&) {
+                     reload_table();
+                   });
+
+  QObject::connect(manual_preferences_button, &QPushButton::clicked,
+                   &dialog, [&]() {
+                     ShowZenzManualLocalPreferenceDialog(
+                         &dialog, current_config);
                      reload_table();
                    });
 
