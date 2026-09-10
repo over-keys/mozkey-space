@@ -270,9 +270,12 @@ mozc_cc_qt_library(
 # Explicitly run after Qt is built; the core-only CI test job has no Qt.
 mozc_cc_test(
     name = "config_dialog_ui_test",
-    srcs = ["config_dialog_ui_test.cc"],
-    tags = ["manual", "nolinux"],
     timeout = "short",
+    srcs = ["config_dialog_ui_test.cc"],
+    tags = [
+        "manual",
+        "nolinux",
+    ],
     deps = [
         ":config_dialog",
         "//client",
@@ -281,6 +284,7 @@ mozc_cc_test(
         "//session:zenz_feedback_store",
         "//testing:gunit",
     ] + mozc_select(
+        default = [],
         oss_macos = [
             "@qt_mac//:qt_mac",
             "@qt_mac//:QtCore_mac",
@@ -288,7 +292,6 @@ mozc_cc_test(
             "@qt_mac//:QtWidgets_mac",
         ],
         oss_windows = ["@qt_win//:qt_win"],
-        default = [],
     ),
 )
 
