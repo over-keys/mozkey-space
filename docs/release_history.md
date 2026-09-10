@@ -18,6 +18,18 @@ Mozkey 4.85.0 / Mozc 3.34 / *2026-09-10*
 - Windows: x64 MSIを提供します。x64版Windows向けです。
 - macOS: Apple SiliconとIntel Macの両方で使えるUniversal Zenz PKGを提供します。
 
+### Windowsへのインストール（重要）
+
+Windows版MSIはコード署名されていないため、環境によってはWindows Defender / SmartScreenに警告またはブロックされる場合があります。
+
+発行元を確認できないという警告だけが表示された場合は、「詳細情報」→「実行」または「実行する」を選択してインストールを続行してください。マルウェア警告が表示された場合は実行しないでください。
+
+### macOSへのインストール（重要）
+
+macOS版PKGはDeveloper ID署名・公証を行っていないため、macOSにインストールを止められる場合があります。
+
+その場合は、「システム設定」→「プライバシーとセキュリティ」を開き、ブロックされたインストーラーの「このまま開く」（または「Open Anyway」）を選んで明示的に承認してください。承認後、PKGをもう一度開きます。この承認を行わない限り、macOS版はインストールできません。
+
 User-facing release version: `4.85.0`
 Mozc internal version: `3.34.6221.100`
 
