@@ -10,14 +10,50 @@
 namespace mozc::zenz {
 namespace {
 
+bool ConnectOverlappedPipe(HANDLE pipe) {
+  HANDLE event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (event == nullptr) {
+    return false;
+  }
+
+  OVERLAPPED overlapped = {};
+  overlapped.hEvent = event;
+  if (::ConnectNamedPipe(pipe, &overlapped)) {
+    ::CloseHandle(event);
+    return true;
+  }
+
+  const DWORD error = ::GetLastError();
+  if (error == ERROR_PIPE_CONNECTED) {
+    ::CloseHandle(event);
+    return true;
+  }
+  if (error != ERROR_IO_PENDING ||
+      ::WaitForSingleObject(event, 2000) != WAIT_OBJECT_0) {
+    ::CancelIoEx(pipe, &overlapped);
+    DWORD ignored = 0;
+    ::GetOverlappedResult(pipe, &overlapped, &ignored, TRUE);
+    ::CloseHandle(event);
+    return false;
+  }
+
+  DWORD ignored = 0;
+  const bool connected =
+      ::GetOverlappedResult(pipe, &overlapped, &ignored, FALSE);
+  ::CloseHandle(event);
+  return connected;
+}
+
 void CheckStalledPeer(bool flush) {
   static std::atomic<int> sequence{0};
   const std::wstring name = L"\\\\.\\pipe\\mozc_deadline_test_" +
                             std::to_wstring(::GetCurrentProcessId()) + L"_" +
                             std::to_wstring(sequence.fetch_add(1));
-  HANDLE pipe =
-      ::CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX,
-                         PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
+  const DWORD pipe_access =
+      PIPE_ACCESS_DUPLEX | (flush ? 0 : FILE_FLAG_OVERLAPPED);
+  HANDLE pipe = ::CreateNamedPipeW(
+      name.c_str(), pipe_access, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0,
+      nullptr);
   ASSERT_NE(pipe, INVALID_HANDLE_VALUE);
   std::atomic<bool> done{false};
   std::thread peer([&] {
@@ -31,28 +67,56 @@ void CheckStalledPeer(bool flush) {
       ::CloseHandle(client);
     }
   });
-  const bool connected = ::ConnectNamedPipe(pipe, nullptr) ||
-                         ::GetLastError() == ERROR_PIPE_CONNECTED;
+  const bool connected = flush ? (::ConnectNamedPipe(pipe, nullptr) ||
+                                  ::GetLastError() == ERROR_PIPE_CONNECTED)
+                               : ConnectOverlappedPipe(pipe);
   EXPECT_TRUE(connected);
   if (connected) {
     char byte = 'x';
-    DWORD transferred = 0;
     if (flush) {
+      DWORD transferred = 0;
       EXPECT_TRUE(::WriteFile(pipe, &byte, 1, &transferred, nullptr));
     }
     const auto started = std::chrono::steady_clock::now();
-    {
+    if (flush) {
       SynchronousIoDeadline deadline(pipe, std::chrono::milliseconds(50));
       EXPECT_TRUE(deadline.valid());
-      const BOOL ok = flush ? ::FlushFileBuffers(pipe)
-                            : ::ReadFile(pipe, &byte, 1, &transferred, nullptr);
+      const BOOL ok = ::FlushFileBuffers(pipe);
       const DWORD error = ::GetLastError();
       EXPECT_FALSE(ok);
       EXPECT_EQ(error, ERROR_OPERATION_ABORTED);
-      if (!flush) {
-        // Cancellation must also cover an I/O issued after the first timeout.
-        EXPECT_FALSE(::ReadFile(pipe, &byte, 1, &transferred, nullptr));
-        EXPECT_EQ(::GetLastError(), ERROR_OPERATION_ABORTED);
+    } else {
+      HANDLE event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      EXPECT_NE(event, nullptr);
+      if (event != nullptr) {
+        OVERLAPPED overlapped = {};
+        overlapped.hEvent = event;
+        SynchronousIoDeadline deadline(pipe, std::chrono::milliseconds(50));
+        EXPECT_TRUE(deadline.valid());
+        const BOOL started_read =
+            ::ReadFile(pipe, &byte, 1, nullptr, &overlapped);
+        const DWORD read_error = ::GetLastError();
+        if (started_read || read_error != ERROR_IO_PENDING) {
+          ADD_FAILURE() << "ReadFile did not start an overlapped operation: "
+                        << read_error;
+        } else {
+          const DWORD wait = ::WaitForSingleObject(event, 2000);
+          EXPECT_EQ(wait, WAIT_OBJECT_0);
+          if (wait == WAIT_OBJECT_0) {
+            DWORD transferred = 0;
+            const BOOL completed =
+                ::GetOverlappedResult(pipe, &overlapped, &transferred, FALSE);
+            const DWORD error = ::GetLastError();
+            EXPECT_FALSE(completed);
+            EXPECT_EQ(error, ERROR_OPERATION_ABORTED);
+          } else {
+            ::CancelIoEx(pipe, &overlapped);
+            DWORD transferred = 0;
+            ::GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
+            ADD_FAILURE() << "overlapped read was not cancelled in time";
+          }
+        }
+        ::CloseHandle(event);
       }
     }
     EXPECT_LT(std::chrono::steady_clock::now() - started,
@@ -64,7 +128,9 @@ void CheckStalledPeer(bool flush) {
   ::CloseHandle(pipe);
 }
 
-TEST(SynchronousIoDeadlineTest, CancelsStalledRead) { CheckStalledPeer(false); }
+TEST(SynchronousIoDeadlineTest, CancelsStalledOverlappedRead) {
+  CheckStalledPeer(false);
+}
 
 TEST(SynchronousIoDeadlineTest, CancelsUnreadResponseFlush) {
   CheckStalledPeer(true);
