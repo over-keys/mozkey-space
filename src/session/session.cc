@@ -3708,6 +3708,27 @@ bool Session::SendCommand(commands::Command* command) {
   HandlePendingDirectCommitLearningForSessionCommand(session_command.type());
   HandlePendingZenzFeedbackForSessionCommand(session_command.type());
 
+  // Physical conversion-state keys already invalidate a pending ordinary
+  // conversion Zenz request before changing Mozc candidates. Candidate-window
+  // actions arrive as SessionCommands instead, so mirror that rule here.
+  // Keep this list intentionally narrow: internal APPLY_* callbacks must never
+  // cancel the request they are meant to advance.
+  if (normal_conversion_zenz_active_ &&
+      pending_zenz_live_.pending &&
+      !pending_zenz_live_.from_live_conversion) {
+    switch (session_command.type()) {
+      case commands::SessionCommand::SELECT_CANDIDATE:
+      case commands::SessionCommand::SUBMIT_CANDIDATE:
+      case commands::SessionCommand::HIGHLIGHT_CANDIDATE:
+      case commands::SessionCommand::CONVERT_PREV_PAGE:
+      case commands::SessionCommand::CONVERT_NEXT_PAGE:
+        ClearZenzLiveCorrectionState();
+        break;
+      default:
+        break;
+    }
+  }
+
   bool result = false;
   if (session_command.type() ==
       commands::SessionCommand::SWITCH_COMPOSITION_MODE) {
@@ -5940,14 +5961,13 @@ bool Session::IgnoreStaleDelayedLiveConversion(commands::Command* command) {
     return OutputZenzLiveCorrection(zenz_live_value_, command);
   }
 
-  // Explicit Space direct display keeps its existing speculative deadline
-  // semantics. Live direct display is handled later, after the same stale-live
-  // recovery gates used by direct display OFF.
+  // A stale delayed-live callback must never advance the current
+  // normal-conversion Zenz request. Direct Display is presentation-only, so
+  // preserve the held surface while the request keeps its original start time.
   if (pending_zenz_live_.pending &&
       context_->state() == ImeContext::CONVERSION &&
       pending_zenz_live_.defer_normal_conversion_display) {
-    return AdvancePendingZenzLiveCorrection(
-        command, /*refresh_output_on_submit=*/true);
+    return OutputDeferredNormalConversionWithZenzPending(command);
   }
 
 #if defined(_WIN32)

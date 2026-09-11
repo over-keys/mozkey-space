@@ -4369,6 +4369,90 @@ TEST_F(SessionTest, DeferredLiveGraceDeadlineOnlyEndsPresentationDeferral) {
   EXPECT_EQ(peer.zenz_live_visible_generation_(), kGeneration);
 }
 
+TEST_F(SessionTest, DeferredNormalStaleCallbackDoesNotAdvanceZenzStart) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  peer.context_()->set_state(ImeContext::CONVERSION);
+  peer.normal_conversion_zenz_active_() = true;
+  peer.zenz_live_generation_() = 13;
+
+  auto& pending = peer.pending_zenz_live_();
+  pending.pending = true;
+  pending.submitted = false;
+  pending.from_live_conversion = false;
+  pending.defer_normal_conversion_display = true;
+  pending.generation = 13;
+  pending.key = "りせき";
+  pending.mozc_value = "離席";
+
+  auto* visible_segment =
+      pending.deferred_normal_conversion_preedit_output.add_segment();
+  visible_segment->set_key("りせき");
+  visible_segment->set_value("りせき");
+  visible_segment->set_annotation(commands::Preedit::Segment::UNDERLINE);
+  pending.deferred_normal_conversion_preedit_output.set_cursor(3);
+
+  commands::Command command;
+  ASSERT_TRUE(peer.IgnoreStaleDelayedLiveConversion(&command));
+
+  EXPECT_PREEDIT("りせき", command);
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+  EXPECT_TRUE(peer.pending_zenz_live_().pending);
+  EXPECT_FALSE(peer.pending_zenz_live_().submitted);
+  EXPECT_EQ(peer.pending_zenz_live_().generation, 13);
+  EXPECT_EQ(peer.zenz_live_generation_(), 13);
+  EXPECT_FALSE(command.output().has_callback());
+}
+
+TEST_F(SessionTest,
+       CandidateSessionCommandsInvalidatePendingNormalZenzCorrection) {
+  constexpr commands::SessionCommand::CommandType kCommands[] = {
+      commands::SessionCommand::SELECT_CANDIDATE,
+      commands::SessionCommand::SUBMIT_CANDIDATE,
+      commands::SessionCommand::HIGHLIGHT_CANDIDATE,
+      commands::SessionCommand::CONVERT_PREV_PAGE,
+      commands::SessionCommand::CONVERT_NEXT_PAGE,
+  };
+
+  for (const commands::SessionCommand::CommandType type : kCommands) {
+    SCOPED_TRACE(static_cast<int>(type));
+
+    MockEngine engine;
+    std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToConversionWithAiueo(&session, converter.get());
+
+    peer.context_()->set_state(ImeContext::CONVERSION);
+    peer.normal_conversion_zenz_active_() = true;
+    peer.zenz_live_generation_() = 21;
+
+    auto& pending = peer.pending_zenz_live_();
+    pending.pending = true;
+    pending.submitted = false;
+    pending.from_live_conversion = false;
+    pending.generation = 21;
+    pending.key = "りせき";
+    pending.mozc_value = "離席";
+
+    commands::Command command;
+    command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+    commands::SessionCommand* session_command =
+        command.mutable_input()->mutable_command();
+    session_command->set_type(type);
+    session_command->set_id(0);
+
+    session.SendCommand(&command);
+
+    EXPECT_FALSE(peer.pending_zenz_live_().pending);
+    EXPECT_FALSE(peer.normal_conversion_zenz_active_());
+    EXPECT_GT(peer.zenz_live_generation_(), 21);
+  }
+}
+
 TEST_F(SessionTest, DeferredLiveStaleCallbackKeepsVisibleSnapshot) {
   MockEngine engine;
   Session session(engine);
