@@ -1767,6 +1767,40 @@ bool ZenzFeedbackStore::DeleteLocalPreference(
   return WriteRecordsAtomically(records);
 }
 
+bool ZenzFeedbackStore::SetManualHardReject(
+    absl::string_view key, absl::string_view context_class,
+    absl::string_view value) {
+  Record marker = MakeFullRecord(ZenzFullFeedbackAction::kRejected, key,
+                                 context_class, value, "hard_reject");
+  if (!IsSafeRecord(marker)) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> mutation_lock(g_feedback_mutation_mutex);
+  ScopedFeedbackInterprocessLock interprocess_lock;
+  if (!interprocess_lock.ok()) {
+    return false;
+  }
+
+  std::vector<Record> records;
+  if (!LoadRecordsFromDisk(&records)) {
+    return false;
+  }
+
+  const auto is_same_hard_reject = [&](const Record& record) {
+    return record.kind == RecordKind::kFull &&
+           record.action == "rejected" && record.key == marker.key &&
+           record.context_class == marker.context_class &&
+           record.value == marker.value && IsHardRejectReason(record.extra);
+  };
+  if (std::any_of(records.begin(), records.end(), is_same_hard_reject)) {
+    return true;
+  }
+
+  records.push_back(std::move(marker));
+  return WriteRecordsAtomically(records);
+}
+
 bool ZenzFeedbackStore::SetManualLocalPreference(
     absl::string_view key, absl::string_view raw_zenz_surface,
     absl::string_view corrected_surface, bool enabled) {

@@ -32,7 +32,7 @@ MAJOR = 3
 MINOR = 34
 
 # BUILD number used for the OSS version.
-BUILD_OSS = 6224
+BUILD_OSS = 6225
 
 # Number to be increased. This value may be replaced by other tools.
 BUILD = BUILD_OSS
@@ -43,7 +43,7 @@ REVISION = 100
 # User-facing mozkey-space release version.  This is shown in the About dialog
 # and should match the GitHub release tag without the leading "v".
 MOZKEY_SPACE_RELEASE_VERSION_MAJOR = 4
-MOZKEY_SPACE_RELEASE_VERSION_MINOR = 88
+MOZKEY_SPACE_RELEASE_VERSION_MINOR = 89
 MOZKEY_SPACE_RELEASE_VERSION_PATCH = 0
 
 # LINT.IfChange

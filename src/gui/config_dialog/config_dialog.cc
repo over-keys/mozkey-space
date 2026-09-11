@@ -1699,7 +1699,6 @@ void ShowZenzFeedbackManagementDialog(
       1, static_cast<int>(current_config.zenz_local_preference_threshold()));
   const int max_entries = std::clamp(
       static_cast<int>(current_config.zenz_feedback_max_entries()), 100, 20000);
-  (void)store.Maintenance(static_cast<size_t>(max_entries));
   session::ZenzFeedbackAutoBlockPolicy auto_block_policy;
   auto_block_policy.enabled =
       current_config.use_zenz_auto_block_rejected_correction();
@@ -1827,10 +1826,11 @@ void ShowZenzFeedbackManagementDialog(
     block_full->setEnabled(full_row >= 0 && !full_hard_rejected);
   };
 
+  std::vector<session::ZenzFeedbackEntry> full_entries;
+  std::vector<session::ZenzLocalPreferenceEntry> local_entries;
+
   auto reload = [&]() {
     const QString filter = search->text();
-    const auto full_entries = store.ListEntries(auto_block_policy);
-    const auto local_entries = store.ListLocalPreferenceEntries();
     full_table->setRowCount(0);
     local_table->setRowCount(0);
     int visible_full = 0;
@@ -1916,9 +1916,15 @@ void ShowZenzFeedbackManagementDialog(
     update_selection_buttons();
   };
 
+  auto refresh = [&]() {
+    full_entries = store.ListEntries(auto_block_policy);
+    local_entries = store.ListLocalPreferenceEntries();
+    reload();
+  };
+
   QObject::connect(manual_preferences, &QPushButton::clicked, &dialog, [&]() {
     ShowZenzManualLocalPreferenceDialog(&dialog, current_config);
-    reload();
+    refresh();
   });
 
   QObject::connect(details, &QPushButton::clicked, &dialog, [&]() {
@@ -1985,10 +1991,14 @@ void ShowZenzFeedbackManagementDialog(
             QMessageBox::Cancel) != QMessageBox::Yes) {
       return;
     }
-    store.RecordRejected(key.toUtf8().constData(),
-                         context.toUtf8().constData(),
-                         value.toUtf8().constData(), "hard_reject");
-    reload();
+    if (!store.SetManualHardReject(key.toUtf8().constData(),
+                                   context.toUtf8().constData(),
+                                   value.toUtf8().constData())) {
+      ShowJapaneseCritical(
+          &dialog, dialog.windowTitle(),
+          QString::fromUtf8("全文フィードバックをブロックできませんでした。"));
+    }
+    refresh();
   });
 
   QObject::connect(delete_full, &QPushButton::clicked, &dialog, [&]() {
@@ -2003,7 +2013,7 @@ void ShowZenzFeedbackManagementDialog(
       ShowJapaneseCritical(&dialog, dialog.windowTitle(),
                 QString::fromUtf8("全文フィードバックを削除できませんでした。"));
     }
-    reload();
+    refresh();
   });
 
   QObject::connect(delete_local, &QPushButton::clicked, &dialog, [&]() {
@@ -2018,7 +2028,7 @@ void ShowZenzFeedbackManagementDialog(
       ShowJapaneseCritical(&dialog, dialog.windowTitle(),
                 QString::fromUtf8("局所表記を削除できませんでした。"));
     }
-    reload();
+    refresh();
   });
 
   QObject::connect(export_button, &QPushButton::clicked, &dialog, [&]() {
@@ -2027,7 +2037,6 @@ void ShowZenzFeedbackManagementDialog(
         QStringLiteral("zenz_feedback_v4.tsv"),
         QString::fromUtf8("TSV ファイル (*.tsv);;すべてのファイル (*)"));
     if (path.isEmpty()) return;
-    (void)store.Maintenance(static_cast<size_t>(max_entries));
     if (!store.ExportToFile(path.toStdWString())) {
       ShowJapaneseCritical(&dialog, dialog.windowTitle(),
                 QString::fromUtf8("Zenz 学習データをエクスポートできませんでした。"));
@@ -2061,7 +2070,7 @@ void ShowZenzFeedbackManagementDialog(
       return;
     }
     (void)store.Maintenance(static_cast<size_t>(max_entries));
-    reload();
+    refresh();
   });
 
   QObject::connect(clear_button, &QPushButton::clicked, &dialog, [&]() {
@@ -2076,10 +2085,10 @@ void ShowZenzFeedbackManagementDialog(
       ShowJapaneseCritical(&dialog, dialog.windowTitle(),
                 QString::fromUtf8("Zenz 学習データを削除できませんでした。"));
     }
-    reload();
+    refresh();
   });
 
-  reload();
+  refresh();
   dialog.exec();
 }
 

@@ -383,6 +383,21 @@ V4_TEST(FullHardRejectAndAutoBlockRemainUnchanged) {
             ZenzFeedbackAction::kReject);
 }
 
+V4_TEST(ManualHardRejectIsIdempotentAndPersistent) {
+  V4_PROFILE();
+  ZenzFeedbackStore store;
+
+  ASSERT_TRUE(store.SetManualHardReject("hard", "empty", "v"));
+  ASSERT_TRUE(store.SetManualHardReject("hard", "empty", "v"));
+
+  const auto entries = store.ListEntries();
+  ASSERT_EQ(entries.size(), 1);
+  EXPECT_EQ(entries[0].rejected_count, 1);
+  EXPECT_TRUE(entries[0].hard_rejected);
+  EXPECT_EQ(store.Decide("hard", "empty", "v").action,
+            ZenzFeedbackAction::kReject);
+}
+
 V4_TEST(LocalCountIsThresholdIndependentAndRejectDecrements) {
   V4_PROFILE();
   ZenzFeedbackStore store;

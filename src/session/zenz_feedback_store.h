@@ -185,6 +185,13 @@ class ZenzFeedbackStore {
                              absl::string_view disfavored_value);
 
   [[nodiscard]]
+  // Persists an explicit Full hard reject as a management operation and
+  // reports lock or I/O failures to the caller.
+  bool SetManualHardReject(absl::string_view key,
+                           absl::string_view context_class,
+                           absl::string_view value);
+
+  [[nodiscard]]
   // Adds or removes the manual marker for one context-independent Local rule.
   // Automatic accepted/rejected evidence for the same rule is preserved.
   bool SetManualLocalPreference(absl::string_view key,
