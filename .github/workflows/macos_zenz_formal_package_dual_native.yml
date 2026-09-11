@@ -1,10 +1,10 @@
 name: macOS Zenz formal package dual-native validation
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
-  release:
-    types:
-      - published
 
 permissions:
   contents: read
@@ -353,54 +353,3 @@ jobs:
           tail -n 300 \
             formal-package/intel-verify/packaged-scorer.log \
             2>/dev/null || true
-
-  publish_macos_release:
-    name: Publish macOS PKG to GitHub Release
-    if: github.event_name == 'release' && github.event.action == 'published'
-    needs: verify_same_package_on_native_intel
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download verified Universal PKG
-        uses: actions/download-artifact@v6
-        with:
-          name: mozkey-zenz-formal-universal-package
-          path: formal-package
-
-      - name: Upload macOS PKG and checksum to Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-
-          if [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+(\.[0-9]+)?)$ ]]; then
-            PUBLIC_VERSION="${BASH_REMATCH[1]}"
-          else
-            echo "Release tag does not contain a public version: $RELEASE_TAG" >&2
-            exit 1
-          fi
-
-          gh release edit \
-            "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "mozkey-space ${PUBLIC_VERSION}"
-
-          asset="mozkey-space_${PUBLIC_VERSION}_macos_universal.pkg"
-          checksum="${asset}.sha256"
-
-          install \
-            -m 0644 \
-            formal-package/Mozc_Zenz_Universal_formal_dev.pkg \
-            "$asset"
-          sha256sum "$asset" > "$checksum"
-
-          gh release upload \
-            --repo "$GITHUB_REPOSITORY" \
-            "$RELEASE_TAG" \
-            "$asset" \
-            "$checksum" \
-            --clobber
