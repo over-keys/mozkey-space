@@ -2148,27 +2148,10 @@ TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
   pending.from_live_conversion = true;
   pending.use_conversion_history = true;
 
-  // Deliberately expose only one coarse full-sentence reverse segment. The
-  // strict Local path cannot split out "りせき" from this alignment.
-  Segments raw_reverse;
-  Segment* segment = raw_reverse.add_segment();
-  segment->set_key(raw_zenz);
-  segment->add_candidate()->value = key;
-
-  Segments mozc_reverse;
-  segment = mozc_reverse.add_segment();
-  segment->set_key(mozc_value);
-  segment->add_candidate()->value = key;
-
-  EXPECT_CALL(*converter, StartReverseConversion(_, raw_zenz))
-      .WillOnce(DoAll(SetArgPointee<0>(raw_reverse), Return(true)));
-  EXPECT_CALL(*converter, StartReverseConversion(_, mozc_value))
-      .Times(2)
-      .WillRepeatedly(DoAll(SetArgPointee<0>(mozc_reverse), Return(true)));
-  // Mature Local application must not reverse-read the local surfaces again.
-  // Learning already proved the direction; current Mozc is the contextual gate.
-  EXPECT_CALL(*converter, StartReverseConversion(_, "離席")).Times(0);
-  EXPECT_CALL(*converter, StartReverseConversion(_, "離籍")).Times(0);
+  // Local application is independent of reverse-conversion segmentation.
+  // The repaired value equals Mozc here, so later reading validation also has
+  // no reason to invoke reverse conversion.
+  EXPECT_CALL(*converter, StartReverseConversion(_, _)).Times(0);
 
   ZenzLiveResponse response;
   response.generation = 8;
@@ -2190,6 +2173,9 @@ TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
   EXPECT_EQ(applied.disfavored_value, "離籍");
   ASSERT_TRUE(applied.has_reading_begin);
   EXPECT_EQ(applied.reading_begin, std::string("すみません").size());
+  EXPECT_TRUE(applied.has_text_spans);
+  EXPECT_EQ(applied.raw_zenz_span.char_begin, 5);
+  EXPECT_EQ(applied.raw_zenz_span.char_end, 7);
 
   // Auto application is not new Local evidence.
   const std::vector<ZenzLocalPreference> active =
@@ -2205,7 +2191,7 @@ TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
 }
 
 TEST_F(SessionTest,
-       LocalV4NoAlignmentFallbackMatchesMozcAndOverridesPositiveFull) {
+       LocalV4TextAlignmentIgnoresReverseSegmentationAndOverridesPositiveFull) {
 #if defined(_WIN32)
   for (const bool existing_full : {false, true}) {
     SCOPED_TRACE(::testing::Message() << "existing_full=" << existing_full);
@@ -2259,14 +2245,9 @@ TEST_F(SessionTest,
     pending.from_live_conversion = true;
     pending.use_conversion_history = true;
 
-    // Simulate the real failure mode: neither full phrase has a usable unique
-    // reverse alignment. Application must not reverse-read the local surfaces.
-    EXPECT_CALL(*converter, StartReverseConversion(_, raw_zenz))
-        .WillOnce(Return(false));
-    EXPECT_CALL(*converter, StartReverseConversion(_, mozc_value))
-        .WillOnce(Return(false));
-    EXPECT_CALL(*converter, StartReverseConversion(_, "計量化")).Times(0);
-    EXPECT_CALL(*converter, StartReverseConversion(_, "軽量化")).Times(0);
+    // The original reverse-segmentation failure is irrelevant to Local
+    // application now. Surface correspondence is established by text alignment.
+    EXPECT_CALL(*converter, StartReverseConversion(_, _)).Times(0);
 
     ZenzLiveResponse response;
     response.generation = 9;
@@ -2288,6 +2269,9 @@ TEST_F(SessionTest,
     EXPECT_EQ(applied.disfavored_value, "計量化");
     ASSERT_TRUE(applied.has_reading_begin);
     EXPECT_EQ(applied.reading_begin, 0);
+    EXPECT_TRUE(applied.has_text_spans);
+    EXPECT_EQ(applied.raw_zenz_span.char_begin, 0);
+    EXPECT_EQ(applied.raw_zenz_span.char_end, 3);
   }
 #else
   GTEST_SKIP()
@@ -2296,8 +2280,7 @@ TEST_F(SessionTest,
 #endif
 }
 
-TEST_F(SessionTest,
-       LocalV4RepeatedReadingRoutesEachOccurrenceByCurrentMozcSurface) {
+TEST_F(SessionTest, LocalV4RepeatedReadingIsConservativelySkipped) {
 #if defined(_WIN32)
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
@@ -2322,8 +2305,8 @@ TEST_F(SessionTest,
   const std::string raw_zenz = "歯科医と歯科医";
   const std::string mozc_value = "司会と視界";
 
-  // Both directions are mature for the same reading/raw pair. The current
-  // Mozc surface, not a global Local winner, must route each occurrence.
+  // A repeated reading is deliberately not used as a positional anchor. Text
+  // alignment may locate surfaces, but the reading remains eligibility-only.
   for (int i = 0; i < 2; ++i) {
     session_peer.zenz_feedback_store_().RecordLocalAccepted(
         "しかい", "empty", "歯科医", "司会");
@@ -2369,11 +2352,10 @@ TEST_F(SessionTest,
   segment->set_key("視界");
   segment->add_candidate()->value = "しかい";
 
+  // Local is skipped before any application-time reverse alignment. The raw
+  // candidate still goes through the ordinary whole-candidate reading check.
   EXPECT_CALL(*converter, StartReverseConversion(_, raw_zenz))
-      .WillOnce(DoAll(SetArgPointee<0>(raw_reverse), Return(true)));
-  EXPECT_CALL(*converter, StartReverseConversion(_, mozc_value))
-      .Times(2)
-      .WillRepeatedly(DoAll(SetArgPointee<0>(mozc_reverse), Return(true)));
+      .WillRepeatedly(DoAll(SetArgPointee<0>(raw_reverse), Return(true)));
 
   ZenzLiveResponse response;
   response.generation = 7;
@@ -2384,28 +2366,9 @@ TEST_F(SessionTest,
 
   commands::Command command;
   ASSERT_TRUE(session_peer.ApplyZenzLiveCorrectionResult(response, &command));
-  EXPECT_PREEDIT(mozc_value, command);
-  EXPECT_EQ(session_peer.zenz_live_value_(), mozc_value);
-  ASSERT_EQ(session_peer.zenz_live_applied_local_preferences_().size(), 2);
-
-  const size_t second_begin = std::string("しかいと").size();
-  bool saw_first = false;
-  bool saw_second = false;
-  for (const ZenzLocalPreference& applied :
-       session_peer.zenz_live_applied_local_preferences_()) {
-    ASSERT_TRUE(applied.has_reading_begin);
-    if (applied.reading_begin == 0) {
-      saw_first = true;
-      EXPECT_EQ(applied.preferred_value, "司会");
-      EXPECT_EQ(applied.disfavored_value, "歯科医");
-    } else if (applied.reading_begin == second_begin) {
-      saw_second = true;
-      EXPECT_EQ(applied.preferred_value, "視界");
-      EXPECT_EQ(applied.disfavored_value, "歯科医");
-    }
-  }
-  EXPECT_TRUE(saw_first);
-  EXPECT_TRUE(saw_second);
+  EXPECT_PREEDIT(raw_zenz, command);
+  EXPECT_EQ(session_peer.zenz_live_value_(), raw_zenz);
+  EXPECT_TRUE(session_peer.zenz_live_applied_local_preferences_().empty());
 #else
   GTEST_SKIP()
       << "This feedback-persistence test currently has Windows-only test "
@@ -3433,7 +3396,7 @@ TEST_F(SessionTest, LocalV4FallbackRejectsSurfacesAtAnotherReadingPosition) {
   }
 }
 
-TEST_F(SessionTest, LocalV4CoarseFallbackPreservesUnrelatedDifferences) {
+TEST_F(SessionTest, LocalV4TextAlignmentPreservesUnrelatedDifferences) {
   struct TestCase {
     std::string key;
     std::string raw;
@@ -3445,9 +3408,10 @@ TEST_F(SessionTest, LocalV4CoarseFallbackPreservesUnrelatedDifferences) {
        "離席して解凍します", "離席して回答します"},
       {"かいとうしてりせき", "回答して離籍", "解凍して離席",
        "回答して離席"},
-      // Neither surrounding phrase can be tied to the reading literally.
+      // Text alignment also repairs an interior Local without literal kana
+      // anchors, while preserving the unrelated Zenz spelling of 回答.
       {"かいとうしてりせきしてさいよう", "回答して離籍して採用",
-       "解凍して離席して採用", "回答して離籍して採用"},
+       "解凍して離席して採用", "回答して離席して採用"},
   };
   for (const TestCase& test : cases) {
     SCOPED_TRACE(test.raw);

@@ -68,13 +68,20 @@ struct ZenzFeedbackEntry {
   std::string reason = "feedback_neutral";
 };
 
+struct ZenzLocalTextSpan {
+  size_t char_begin = 0;
+  size_t char_end = 0;
+  size_t byte_begin = 0;
+  size_t byte_end = 0;
+};
+
 // Local v4.1 rule:
 //   minimal safe reading + raw Zenz surface + corrected surface
 //
 // context_class is retained only as event provenance/current-use metadata. It
 // is not part of Local rule identity or threshold counting. Contextual safety
-// is enforced at application time by unique reading/surface alignment and the
-// current Mozc preferred surface.
+// is enforced at application time by bounded Unicode text alignment between the
+// current raw Zenz and Mozc surfaces; the stored reading is an eligibility gate.
 // preferred_value is the corrected surface.
 // disfavored_value is the raw Zenz surface.
 // observation_count is the global current evidence count after ordered replay.
@@ -89,10 +96,15 @@ struct ZenzLocalPreference {
 
   // Transient application metadata. These fields are never part of Local
   // identity, persistence, threshold counting, import/export, or compaction.
-  // They let a rule applied to repeated readings be attributed to the exact
-  // reading occurrence if the user later edits or rejects that repair.
   size_t reading_begin = 0;
   bool has_reading_begin = false;
+
+  // Text ownership recorded only for the current application. Appending these
+  // fields preserves existing aggregate initializers and the persisted schema.
+  ZenzLocalTextSpan raw_zenz_span;
+  ZenzLocalTextSpan mozc_span;
+  ZenzLocalTextSpan displayed_span;
+  bool has_text_spans = false;
 };
 
 struct ZenzLocalPreferenceEntry {

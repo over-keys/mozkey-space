@@ -70,6 +70,27 @@ mozc_cc_test(
 )
 
 mozc_cc_library(
+    name = "zenz_local_alignment",
+    srcs = ["zenz_local_alignment.cc"],
+    hdrs = ["zenz_local_alignment.h"],
+    deps = [
+        ":zenz_feedback_store",
+        "//base/strings:unicode",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+mozc_cc_test(
+    name = "zenz_local_alignment_test",
+    size = "small",
+    srcs = ["zenz_local_alignment_test.cc"],
+    deps = [
+        ":zenz_local_alignment",
+        "//testing:gunit_main",
+    ],
+)
+
+mozc_cc_library(
     name = "zenz_adoption_policy",
     srcs = ["zenz_adoption_policy.cc"],
     hdrs = ["zenz_adoption_policy.h"],
@@ -180,6 +201,7 @@ mozc_cc_library(
         ":zenz_context_assembler",
         ":zenz_context_sanitizer",
         ":zenz_feedback_store",
+        ":zenz_local_alignment",
         ":zenz_prompt_builder",
         ":zenz_text_privacy_analyzer",
         "//base:clock",
