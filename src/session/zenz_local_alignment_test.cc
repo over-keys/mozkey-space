@@ -316,6 +316,26 @@ TEST(ZenzLocalAlignmentTest, FeedbackKeepsPreservedLocalNeutral) {
   EXPECT_FALSE(decisions[0].validated_third_value.has_value());
 }
 
+TEST(ZenzLocalAlignmentTest,
+     FeedbackCanRejectOneLocalWhileKeepingAnotherNeutral) {
+  ZenzLocalPreference first = Preference("x", "a", "c");
+  first.displayed_span = ZenzLocalTextSpan{0, 1, 0, 1};
+  first.has_text_spans = true;
+
+  ZenzLocalPreference second = Preference("y", "e", "f");
+  second.displayed_span = ZenzLocalTextSpan{2, 3, 2, 3};
+  second.has_text_spans = true;
+
+  const auto decisions =
+      ClassifyAppliedLocalFeedback("c#f", "a#f", {first, second}, {});
+
+  ASSERT_EQ(decisions.size(), 2);
+  EXPECT_TRUE(decisions[0].rejected);
+  EXPECT_FALSE(decisions[0].validated_third_value.has_value());
+  EXPECT_FALSE(decisions[1].rejected);
+  EXPECT_FALSE(decisions[1].validated_third_value.has_value());
+}
+
 TEST(ZenzLocalAlignmentTest, AlignedSurfacePairSetRejectsCrossingPairs) {
   const auto first = FindUniqueOptimalSurfacePair("ab", "ba", "a", "a");
   const auto second = FindUniqueOptimalSurfacePair("ab", "ba", "b", "b");

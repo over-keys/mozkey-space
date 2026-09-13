@@ -3314,6 +3314,82 @@ TEST_F(SessionTest, RepeatedLocalAcceptsDoNotChangeFullScoresOrAutoBlockRaw) {
   }
 }
 
+TEST_F(SessionTest, LocalV4LearningNarrowsEachCoarseChangedBlock) {
+#if defined(_WIN32)
+  MockEngine engine;
+  auto converter = CreateRecordingExternalLearningConverter(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  EnableZenzFeedbackLearning(&session);
+
+  const std::string key = "けいりょうかのけんとう";
+  const std::string raw = "計量化の検討";
+  const std::string preferred = "軽量化の検討";
+
+  peer.context_()->set_state(ImeContext::CONVERSION);
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = peer.zenz_live_key_() = key;
+  peer.live_conversion_value_() = peer.zenz_live_mozc_value_() = preferred;
+  peer.zenz_live_visible_generation_() = 1;
+  peer.zenz_live_value_() = peer.zenz_live_raw_value_() = raw;
+  peer.zenz_live_context_class_() = "empty";
+  peer.SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  peer.context_()->set_state(ImeContext::PRECOMPOSITION);
+
+  EXPECT_CALL(*converter, StartReverseConversion(_, _))
+      .WillRepeatedly([&](Segments* out, absl::string_view text) {
+        out->Clear();
+        auto add = [&](absl::string_view surface,
+                       absl::string_view reading) {
+          auto* segment = out->add_segment();
+          segment->set_key(std::string(surface));
+          segment->add_candidate()->value = std::string(reading);
+        };
+        if (text == preferred) {
+          add("軽量化の", "けいりょうかの");
+          add("検討", "けんとう");
+          return true;
+        }
+        if (text == raw) {
+          add("計量", "けいりょう");
+          add("化の", "かの");
+          add("検討", "けんとう");
+          return true;
+        }
+        if (text == "軽量化" || text == "計量化") {
+          add(text, "けいりょうか");
+          return true;
+        }
+        ADD_FAILURE() << "Unexpected reverse reading: " << text;
+        return false;
+      });
+
+  commands::Command command;
+  auto* result = command.mutable_output()->mutable_result();
+  result->set_type(commands::Result::STRING);
+  result->set_key(key);
+  result->set_value(preferred);
+  peer.ObservePendingZenzFeedbackCommittedResult(command, "test");
+  peer.ConfirmPendingZenzFeedback();
+
+  const auto local =
+      peer.zenz_feedback_store_().GetLocalPreferences(key, "empty", 12, 1);
+  ASSERT_EQ(local.size(), 1);
+  EXPECT_EQ(local[0].key, "けいりょうか");
+  EXPECT_EQ(local[0].disfavored_value, "計量化");
+  EXPECT_EQ(local[0].preferred_value, "軽量化");
+  EXPECT_EQ(local[0].observation_count, 1);
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
+
 TEST_F(SessionTest, LocalV4FallbackRejectsSurfacesAtAnotherReadingPosition) {
   // Check both the raw and Mozc gates, independently of reverse granularity.
   for (const bool misplaced_raw : {false, true}) {
@@ -3394,6 +3470,85 @@ TEST_F(SessionTest, LocalV4FallbackRejectsSurfacesAtAnotherReadingPosition) {
       }
     }
   }
+}
+
+TEST_F(SessionTest,
+       LocalV4DoesNotExemptUnrelatedDifferenceInsideLongMozcHistory) {
+#if defined(_WIN32)
+  MockEngine engine;
+  auto converter = CreateEngineConverterMock(&engine);
+  ScopedUserProfileForZenzFeedbackSessionTest profile;
+  ASSERT_TRUE(profile.ok());
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  const std::string key = "けいりょうかのよちがある";
+  const std::string raw = "計量化の余地がある";
+  const std::string mozc = "軽量化の余地が有る";
+  const std::string locally_repaired = "軽量化の余地がある";
+
+  commands::Command command;
+  const std::string input_chars(Util::CharsLen(key), 'a');
+  InsertCharacterString(key, input_chars, &session, &command);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_feedback_learning(true);
+  config.set_use_zenz_local_preference_learning(true);
+  config.set_use_zenz_synthetic_candidate(true);
+  config.set_zenz_local_preference_threshold(2);
+  session.SetConfig(config);
+
+  Segments segments;
+  auto* segment = segments.add_segment();
+  segment->set_key(key);
+  AddCandidate(key, mozc, segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+  EXPECT_CALL(*converter, HasUserSegmentHistoryPreference(key, mozc))
+      .WillRepeatedly(Return(true));
+  ASSERT_TRUE(session.Convert(&command));
+
+  for (int i = 0; i < 2; ++i) {
+    peer.zenz_feedback_store_().RecordLocalAccepted(
+        "けいりょうか", "empty", "計量化", "軽量化");
+  }
+
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = peer.live_conversion_preedit_() = key;
+  peer.live_conversion_value_() = mozc;
+
+  auto& pending = peer.pending_zenz_live_();
+  pending.generation = 1;
+  pending.key = pending.symbol_style_source = key;
+  pending.mozc_value = mozc;
+  pending.context_class = "empty";
+  pending.pending = pending.from_live_conversion =
+      pending.use_conversion_history = true;
+
+  ZenzLiveResponse response;
+  response.generation = 1;
+  response.key = key;
+  response.value = raw;
+  response.ok = true;
+  response.timeout = false;
+
+  command.Clear();
+  ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+  EXPECT_PREEDIT(mozc, command);
+  EXPECT_NE(locally_repaired, mozc);
+  EXPECT_EQ(command.output().zenz_live_correction_debug(),
+            "mozc_user_history_preference_not_preserved");
+  EXPECT_TRUE(peer.zenz_live_applied_local_preferences_().empty());
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
 }
 
 TEST_F(SessionTest, LocalV4TextAlignmentPreservesUnrelatedDifferences) {

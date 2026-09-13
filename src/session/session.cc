@@ -2166,19 +2166,33 @@ BuildLocalPreferenceLearningPairsFromUniqueAlignment(
         converter, full_key, preferred_full_value, disfavored_full_value);
   }
 
-  // Reverse conversion sometimes returns one coarse segment for an otherwise
-  // local spelling difference.  In that case, try the conservative lexical
-  // surface-diff proposal and use it only when it proves a strictly shorter
-  // local reading by reverse-reading both surfaces to the same key.  A raw diff
-  // alone never creates evidence.
-  if (result.size() == 1 && result[0].key == full_key) {
-    const std::vector<ZenzLocalPreferenceLearningPair> local_fallback =
+  // Reverse-conversion boundaries can be coarser than the lexical edit. Refine
+  // each changed block independently, but only when the existing surface-diff
+  // path proves a strictly shorter reading by validating both surfaces against
+  // the same reading. The alignment-derived block remains the fallback.
+  for (ZenzLocalPreferenceLearningPair& pair : result) {
+    const std::vector<ZenzLocalPreferenceLearningPair> refined =
         BuildLocalPreferenceLearningPairFromSurfaceDiff(
-            converter, full_key, preferred_full_value, disfavored_full_value);
-    if (local_fallback.size() == 1 &&
-        local_fallback[0].key.size() < full_key.size()) {
-      return local_fallback;
+            converter, pair.key, pair.preferred_value, pair.disfavored_value);
+    if (refined.size() != 1 ||
+        Util::CharsLen(refined[0].key) >= Util::CharsLen(pair.key) ||
+        refined[0].reading_begin > pair.key.size()) {
+      continue;
     }
+
+    const size_t absolute_reading_begin =
+        pair.reading_begin + refined[0].reading_begin;
+    if (absolute_reading_begin > full_key.size() ||
+        refined[0].key.size() >
+            full_key.size() - absolute_reading_begin ||
+        full_key.substr(absolute_reading_begin, refined[0].key.size()) !=
+            refined[0].key) {
+      continue;
+    }
+
+    ZenzLocalPreferenceLearningPair narrowed = refined[0];
+    narrowed.reading_begin = absolute_reading_begin;
+    pair = std::move(narrowed);
   }
   return result;
 }
@@ -2533,7 +2547,11 @@ bool MozcUserHistoryPreferencesArePreserved(
         bool exempted_by_applied_local = false;
         for (const ZenzLocalPreference& applied :
              applied_local_preferences) {
-          if (ZenzLocalTextSpansOverlap(occurrence, applied.mozc_span)) {
+          // Local may exempt a persistent Mozc-history surface only when it
+          // owns exactly that whole surface. Mere overlap must not permit an
+          // unrelated spelling change elsewhere in a longer history span.
+          if (occurrence.char_begin == applied.mozc_span.char_begin &&
+              occurrence.char_end == applied.mozc_span.char_end) {
             exempted_by_applied_local = true;
             break;
           }
@@ -2641,7 +2659,9 @@ bool MozcUserHistoryPreferencesArePreserved(
         if (!applied_range(applied, &local_begin, &local_end)) {
           continue;
         }
-        if (preference_begin < local_end && local_begin < preference_end) {
+        // Keep the legacy/test-only path as strict as text-span attribution:
+        // overlap alone cannot exempt a longer persistent history preference.
+        if (preference_begin == local_begin && preference_end == local_end) {
           exempted_by_applied_local = true;
           break;
         }
