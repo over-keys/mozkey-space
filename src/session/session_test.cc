@@ -3205,6 +3205,12 @@ TEST_F(SessionTest, RepeatedLocalEditsPreserveSlotsAndCountOncePerCommit) {
       EXPECT_CALL(*converter, StartReverseConversion(_, _))
           .WillRepeatedly([&](Segments* out, absl::string_view text) {
             out->Clear();
+            if (text == "離籍" || text == "離席" || text == "離石") {
+              auto* segment = out->add_segment();
+              segment->set_key(std::string(text));
+              segment->add_candidate()->value = "りせき";
+              return true;
+            }
             if (text != displayed && text != final_value) {
               ADD_FAILURE() << "Unexpected reverse reading: " << text;
               return false;
