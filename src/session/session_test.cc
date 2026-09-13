@@ -2205,6 +2205,98 @@ TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
 }
 
 TEST_F(SessionTest,
+       LocalV4NoAlignmentFallbackMatchesMozcAndOverridesPositiveFull) {
+#if defined(_WIN32)
+  for (const bool existing_full : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "existing_full=" << existing_full);
+
+    MockEngine engine;
+    std::shared_ptr<MockConverter> converter =
+        CreateEngineConverterMock(&engine);
+    ScopedUserProfileForZenzFeedbackSessionTest profile;
+    ASSERT_TRUE(profile.ok());
+
+    Session session(engine);
+    SessionTestPeer session_peer(session);
+    InitSessionToPrecomposition(&session);
+
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_live_conversion(true);
+    config.set_use_zenz_live_correction(true);
+    config.set_use_zenz_feedback_learning(true);
+    config.set_use_zenz_local_preference_learning(true);
+    config.set_use_zenz_synthetic_candidate(true);
+    config.set_zenz_local_preference_threshold(2);
+    session.SetConfig(config);
+
+    const std::string key = "けいりょうかのけんとう";
+    const std::string raw_zenz = "計量化の検討";
+    const std::string mozc_value = "軽量化の検討";
+
+    if (existing_full) {
+      session_peer.zenz_feedback_store_().RecordAccepted(
+          key, "empty", raw_zenz);
+    }
+    for (int i = 0; i < 2; ++i) {
+      session_peer.zenz_feedback_store_().RecordLocalAccepted(
+          "けいりょうか", "empty", "計量化", "軽量化");
+    }
+
+    session_peer.context_()->set_state(ImeContext::CONVERSION);
+    session_peer.live_conversion_active_() = true;
+    session_peer.live_conversion_key_() = key;
+    session_peer.live_conversion_preedit_() = key;
+    session_peer.live_conversion_value_() = mozc_value;
+
+    auto& pending = session_peer.pending_zenz_live_();
+    pending.generation = 9;
+    pending.key = key;
+    pending.context_class = "empty";
+    pending.mozc_value = mozc_value;
+    pending.symbol_style_source = key;
+    pending.pending = true;
+    pending.from_live_conversion = true;
+    pending.use_conversion_history = true;
+
+    // Simulate the real failure mode: neither full phrase has a usable unique
+    // reverse alignment. Application must not reverse-read the local surfaces.
+    EXPECT_CALL(*converter, StartReverseConversion(_, raw_zenz))
+        .WillOnce(Return(false));
+    EXPECT_CALL(*converter, StartReverseConversion(_, mozc_value))
+        .WillOnce(Return(false));
+    EXPECT_CALL(*converter, StartReverseConversion(_, "計量化")).Times(0);
+    EXPECT_CALL(*converter, StartReverseConversion(_, "軽量化")).Times(0);
+
+    ZenzLiveResponse response;
+    response.generation = 9;
+    response.key = key;
+    response.value = raw_zenz;
+    response.ok = true;
+    response.timeout = false;
+
+    commands::Command command;
+    ASSERT_TRUE(session_peer.ApplyZenzLiveCorrectionResult(response, &command));
+    EXPECT_PREEDIT(mozc_value, command);
+    EXPECT_EQ(session_peer.zenz_live_value_(), mozc_value);
+
+    ASSERT_EQ(session_peer.zenz_live_applied_local_preferences_().size(), 1);
+    const ZenzLocalPreference& applied =
+        session_peer.zenz_live_applied_local_preferences_()[0];
+    EXPECT_EQ(applied.key, "けいりょうか");
+    EXPECT_EQ(applied.preferred_value, "軽量化");
+    EXPECT_EQ(applied.disfavored_value, "計量化");
+    ASSERT_TRUE(applied.has_reading_begin);
+    EXPECT_EQ(applied.reading_begin, 0);
+  }
+#else
+  GTEST_SKIP()
+      << "This feedback-persistence test currently has Windows-only test "
+         "isolation.";
+#endif
+}
+
+TEST_F(SessionTest,
        LocalV4RepeatedReadingRoutesEachOccurrenceByCurrentMozcSurface) {
 #if defined(_WIN32)
   MockEngine engine;

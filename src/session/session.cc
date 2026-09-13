@@ -2322,6 +2322,61 @@ ZenzLocalRepairResult ApplyLocalPreferenceRepairs(
     }
   }
 
+  if (replacements.empty() && !has_unique_alignment) {
+    // Whole-phrase reverse alignment can be ambiguous even when a mature
+    // Local rule is unambiguous in the current conversion. Do not infer a new
+    // reading boundary here. Apply the stored rule only when one literal
+    // replacement reproduces the complete current Mozc result exactly.
+    std::optional<Replacement> fallback_replacement;
+    bool fallback_ambiguous = false;
+    for (const ZenzLocalPreference& preference : mature) {
+      if (preference.key.empty() || preference.preferred_value.empty() ||
+          preference.disfavored_value.empty() ||
+          preference.preferred_value == preference.disfavored_value ||
+          CountSurfaceOccurrences(full_key, preference.key) != 1 ||
+          CountSurfaceOccurrences(zenz_value,
+                                  preference.disfavored_value) != 1 ||
+          CountSurfaceOccurrences(mozc_value,
+                                  preference.preferred_value) != 1) {
+        continue;
+      }
+
+      const size_t reading_begin = full_key.find(preference.key);
+      const size_t surface_begin =
+          zenz_value.find(preference.disfavored_value);
+      if (reading_begin == absl::string_view::npos ||
+          surface_begin == absl::string_view::npos) {
+        continue;
+      }
+
+      std::string repaired_value(zenz_value);
+      repaired_value.replace(surface_begin,
+                             preference.disfavored_value.size(),
+                             preference.preferred_value);
+      if (repaired_value != mozc_value) {
+        continue;
+      }
+
+      ZenzLocalPreference applied = preference;
+      applied.reading_begin = reading_begin;
+      applied.has_reading_begin = true;
+      Replacement candidate{
+          surface_begin,
+          surface_begin + preference.disfavored_value.size(),
+          std::move(applied)};
+
+      if (fallback_replacement.has_value()) {
+        fallback_ambiguous = true;
+        break;
+      }
+      fallback_replacement = std::move(candidate);
+    }
+
+    if (!fallback_ambiguous && fallback_replacement.has_value()) {
+      replacements.push_back(std::move(*fallback_replacement));
+    }
+  }
+
   if (replacements.empty()) {
     return result;
   }
@@ -8106,32 +8161,14 @@ bool Session::ApplyZenzLiveCorrectionResult(
     return true;
   }
 
-  bool has_authoritative_full_feedback = false;
-  if (can_use_persistent_feedback) {
-    const ZenzFeedbackDecision exact_full_decision =
-        zenz_feedback_store_.Decide(
-            pending_zenz_live_.key, context_class, zenz_value,
-            GetZenzFeedbackAutoBlockPolicy(config));
-
-    // Full feedback outranks generalized Local Preference only when it evaluates
-    // the exact surface returned by this Zenz inference.  A different accepted
-    // full candidate for the same reading must not suppress a corroborated local
-    // preference that applies to the current output.
-    // Only exact positive Full evidence outranks generalized Local repair.
-    // Exact negative evidence blocks the raw surface itself, but a mature Local
-    // rule may still rescue it into a distinct surface that is evaluated below.
-    has_authoritative_full_feedback =
-        exact_full_decision.action == ZenzFeedbackAction::kPrefer;
-  }
-
   const std::string raw_zenz_value = zenz_value;
   std::vector<ZenzLocalPreference> applied_local_preferences;
 
-  // Exact positive Full feedback for this raw model output is more specific
-  // than generalized Local v4 correction. Negative Full evidence may still be
-  // rescued into a distinct surface by a mature, safely aligned Local rule.
-  if (can_use_local_preferences &&
-      !has_authoritative_full_feedback) {
+  // Apply an active Local rule before Full feedback is evaluated. Full
+  // feedback is still checked below against the candidate that would actually
+  // be displayed, so a rejected repaired surface remains blocked while an
+  // accepted raw Full surface does not suppress a corroborated Local rule.
+  if (can_use_local_preferences) {
     const ZenzLocalRepairResult local_repair = ApplyLocalPreferenceRepairs(
         *context_->mutable_converter(), zenz_feedback_store_,
         pending_zenz_live_.key, context_class,
