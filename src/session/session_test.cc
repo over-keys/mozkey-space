@@ -4498,6 +4498,64 @@ TEST_F(SessionTest, DeferredLiveAppendKeepsUpdatedMozcAuthoritative) {
   EXPECT_EQ(command.output().callback().delay_millisec(), 321);
 }
 
+TEST_F(SessionTest, DeferredLiveZenzDisplayUsesConfiguredWait) {
+  MockEngine engine;
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_zenz_direct_display_wait_msec(240);
+  session.SetConfig(config);
+
+  peer.context_()->set_state(ImeContext::CONVERSION);
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = "りせき";
+  peer.live_conversion_preedit_() = "りせき";
+  peer.live_conversion_value_() = "離席";
+
+  commands::Preedit mozc_preedit;
+  auto* mozc_segment = mozc_preedit.add_segment();
+  mozc_segment->set_key("りせき");
+  mozc_segment->set_value("離席");
+  mozc_segment->set_annotation(commands::Preedit::Segment::HIGHLIGHT);
+  mozc_preedit.set_cursor(2);
+  peer.live_conversion_preedit_output_() = mozc_preedit;
+
+  auto& pending = peer.pending_zenz_live_();
+  pending.pending = true;
+  pending.submitted = false;
+  pending.from_live_conversion = true;
+  pending.defer_live_conversion_display = true;
+  pending.generation = 1;
+  pending.key = "りせき";
+  pending.mozc_value = "離席";
+  pending.deferred_live_conversion_display.valid = true;
+  pending.deferred_live_conversion_display.key = "りせき";
+  pending.deferred_live_conversion_display.preedit = "りせき";
+  pending.deferred_live_conversion_display.value = "りせき";
+  auto* visible_segment =
+      pending.deferred_live_conversion_display.preedit_output.add_segment();
+  visible_segment->set_key("りせき");
+  visible_segment->set_value("りせき");
+  visible_segment->set_annotation(commands::Preedit::Segment::UNDERLINE);
+  pending.deferred_live_conversion_display.preedit_output.set_cursor(3);
+
+  peer.zenz_live_corrector_() = std::make_unique<ZenzLiveCorrector>(
+      std::unique_ptr<ZenzClient>());
+
+  commands::Command command;
+  ASSERT_TRUE(peer.AdvancePendingZenzLiveCorrection(
+      &command, /*refresh_output_on_submit=*/true));
+
+  EXPECT_TRUE(pending.submitted);
+  EXPECT_EQ(pending.deferred_live_conversion_display_deadline,
+            pending.issued_at + absl::Milliseconds(240));
+  EXPECT_PREEDIT("りせき", command);
+  EXPECT_TRUE(command.output().zenz_live_correction_pending());
+}
+
 TEST_F(SessionTest, DeferredLiveGraceDeadlineOnlyEndsPresentationDeferral) {
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);

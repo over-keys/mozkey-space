@@ -922,6 +922,8 @@ constexpr uint32_t kMinLiveConversionMinKeyLength = 1;
 constexpr uint32_t kMaxLiveConversionMinKeyLength = 20;
 constexpr uint32_t kDefaultZenzLiveCorrectionDelayMsec = 200;
 constexpr uint32_t kMaxZenzLiveCorrectionDelayMsec = 5000;
+constexpr uint32_t kDefaultZenzDirectDisplayWaitMsec = 96;
+constexpr uint32_t kMaxZenzDirectDisplayWaitMsec = 1000;
 constexpr uint32_t kDefaultZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMinZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMaxZenzLiveCorrectionMinKeyLength = 20;
@@ -3128,6 +3130,16 @@ void ConfigDialog::ConvertFromProto(const config::Config &config) {
   SET_CHECKBOX(zenzDeferredNormalConversionDisplayCheckBox,
                use_zenz_deferred_normal_conversion_display);
 
+  const uint32_t zenz_direct_display_wait_msec =
+      config.has_zenz_direct_display_wait_msec()
+          ? config.zenz_direct_display_wait_msec()
+          : kDefaultZenzDirectDisplayWaitMsec;
+  zenzDirectDisplayWaitSpinBox->setValue(
+      static_cast<int>(
+          std::clamp(zenz_direct_display_wait_msec,
+                     0u,
+                     kMaxZenzDirectDisplayWaitMsec)));
+
   const uint32_t zenz_live_correction_delay_msec =
       config.has_zenz_live_correction_delay_msec()
           ? config.zenz_live_correction_delay_msec()
@@ -3363,6 +3375,8 @@ void ConfigDialog::ConvertToProto(config::Config *config) const {
   GET_CHECKBOX(zenzLiveCorrectionCheckBox, use_zenz_live_correction);
   GET_CHECKBOX(zenzDeferredNormalConversionDisplayCheckBox,
                use_zenz_deferred_normal_conversion_display);
+  config->set_zenz_direct_display_wait_msec(
+      static_cast<uint32_t>(zenzDirectDisplayWaitSpinBox->value()));
   config->set_zenz_live_correction_delay_msec(
       static_cast<uint32_t>(zenzLiveCorrectionDelaySpinBox->value()));
   config->set_zenz_live_correction_min_key_length(
@@ -4232,8 +4246,12 @@ void ConfigDialog::SelectZenzLiveCorrectionSetting(int /*state*/) {
   // Direct Display is presentation-only. The common Zenz start delay remains
   // editable whenever Zenz correction itself is enabled.
   const bool delay_enabled = enabled;
+  const bool direct_display_enabled =
+      enabled && zenzDeferredNormalConversionDisplayCheckBox->isChecked();
 
   zenzDeferredNormalConversionDisplayCheckBox->setEnabled(enabled);
+  zenzDirectDisplayWaitLabel->setEnabled(direct_display_enabled);
+  zenzDirectDisplayWaitSpinBox->setEnabled(direct_display_enabled);
   zenzLiveCorrectionDelayLabel->setEnabled(delay_enabled);
   zenzLiveCorrectionDelaySpinBox->setEnabled(delay_enabled);
   zenzLiveCorrectionMinKeyLengthLabel->setEnabled(enabled);

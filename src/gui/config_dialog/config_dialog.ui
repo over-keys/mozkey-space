@@ -1573,10 +1573,42 @@
                 <item row="17" column="0" colspan="8">
                  <widget class="QCheckBox" name="zenzDeferredNormalConversionDisplayCheckBox">
                   <property name="toolTip">
-                   <string>Zenz 補正開始の遅延中から送信後最大 96 ms まで Mozc の中間結果を一時的に隠します。期限を過ぎた場合は Mozc を表示しますが、Zenz 補正処理は継続します。</string>
+                   <string>Zenz 補正開始の遅延中から、Zenz 送信後に指定した待機時間まで Mozc の中間結果を一時的に隠します。待機時間を過ぎた場合は Mozc を表示しますが、Zenz 補正処理は継続します。</string>
                   </property>
                   <property name="text">
                    <string>Zenz 補正を直接表示</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="20" column="0" colspan="3">
+                 <widget class="QLabel" name="zenzDirectDisplayWaitLabel">
+                  <property name="toolTip">
+                   <string>Zenz を送信してから Mozc の中間結果を表示せずに待つ時間です。Zenz 補正開始の遅延とは別に計算されます。</string>
+                  </property>
+                  <property name="text">
+                   <string>直接表示の待機時間</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="20" column="3" colspan="5">
+                 <widget class="QSpinBox" name="zenzDirectDisplayWaitSpinBox">
+                  <property name="toolTip">
+                   <string>Zenz を送信してから Mozc の中間結果を表示せずに待つ時間です。時間内に Zenz が返れば補正結果を直接表示します。時間を過ぎると Mozc を表示しますが、Zenz 補正は継続します。</string>
+                  </property>
+                  <property name="minimum">
+                   <number>0</number>
+                  </property>
+                  <property name="maximum">
+                   <number>1000</number>
+                  </property>
+                  <property name="singleStep">
+                   <number>1</number>
+                  </property>
+                  <property name="value">
+                   <number>96</number>
+                  </property>
+                  <property name="suffix">
+                   <string> ms</string>
                   </property>
                  </widget>
                 </item>
@@ -3333,6 +3365,7 @@
   <tabstop>zenzDeferredNormalConversionDisplayCheckBox</tabstop>
   <tabstop>zenzLiveCorrectionDelaySpinBox</tabstop>
   <tabstop>zenzLiveCorrectionMinKeyLengthSpinBox</tabstop>
+  <tabstop>zenzDirectDisplayWaitSpinBox</tabstop>
   <tabstop>zenzLiveCorrectionProfileLineEdit</tabstop>
   <tabstop>zenzLiveCorrectionTopicLineEdit</tabstop>
   <tabstop>zenzLiveCorrectionStyleLineEdit</tabstop>

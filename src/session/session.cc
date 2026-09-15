@@ -212,11 +212,10 @@ constexpr uint32_t kMaxLiveConversionMinKeyLength = 20;
 constexpr uint32_t kDefaultZenzLiveCorrectionDelayMsec = 200;
 constexpr uint32_t kDefaultZenzLiveCorrectionTimeoutMsec = 180;
 constexpr uint32_t kDefaultZenzLiveCorrectionPollMsec = 24;
-// Four normal Zenz poll intervals. This is a presentation deadline, not a
-// transport timeout and not a blocking wait in key processing. A warm Windows
-// scorer benchmark returned 199/200 responses within 96 ms, so this remains a
-// short presentation grace rather than a result-adoption deadline.
-constexpr uint32_t kZenzDeferredDirectDisplayMsec = 96;
+// A warm Windows scorer benchmark returned 199/200 responses within 96 ms.
+// Keep that value as the default, but let Direct Display users tune this
+// presentation-only deadline independently of Zenz inference/async timeouts.
+constexpr uint32_t kDefaultZenzDirectDisplayWaitMsec = 96;
 constexpr uint32_t kDefaultZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMaxZenzLiveCorrectionContextLength = 128;
 // Volatile left-context continuation cache used only when the current platform
@@ -229,6 +228,7 @@ constexpr absl::string_view kZenzContextResetFeature =
     "mozkey_zenz_context_reset";
 constexpr uint32_t kMaxZenzLiveCorrectionDelayMsec = 5000;
 constexpr uint32_t kMaxZenzLiveCorrectionTimeoutMsec = 1000;
+constexpr uint32_t kMaxZenzDirectDisplayWaitMsec = 1000;
 
 // This is not the model inference timeout.  It is the maximum time the session
 // keeps polling the async worker after the request has been submitted.  Cold
@@ -2868,6 +2868,14 @@ uint32_t GetZenzLiveCorrectionTimeoutMsec(const config::Config& config) {
   }
   return std::min(config.zenz_live_correction_timeout_msec(),
                   kMaxZenzLiveCorrectionTimeoutMsec);
+}
+
+uint32_t GetZenzDirectDisplayWaitMsec(const config::Config& config) {
+  if (!config.has_zenz_direct_display_wait_msec()) {
+    return kDefaultZenzDirectDisplayWaitMsec;
+  }
+  return std::min(config.zenz_direct_display_wait_msec(),
+                  kMaxZenzDirectDisplayWaitMsec);
 }
 
 uint32_t GetZenzLiveCorrectionMinKeyLength(const config::Config& config) {
@@ -7772,6 +7780,8 @@ bool Session::AdvancePendingZenzLiveCorrection(
   const config::Config& config = context_->GetConfig();
   const absl::Time now = Clock::GetAbslTime();
   const uint32_t timeout_msec = GetZenzLiveCorrectionTimeoutMsec(config);
+  const uint32_t direct_display_wait_msec =
+      GetZenzDirectDisplayWaitMsec(config);
 
   if (!pending_zenz_live_.submitted) {
     // The common start delay has elapsed (or is zero). Direct presentation
@@ -7781,11 +7791,11 @@ bool Session::AdvancePendingZenzLiveCorrection(
     pending_zenz_live_.poll_count = 0;
     if (pending_zenz_live_.defer_normal_conversion_display) {
       pending_zenz_live_.deferred_normal_conversion_display_deadline =
-          now + absl::Milliseconds(kZenzDeferredDirectDisplayMsec);
+          now + absl::Milliseconds(direct_display_wait_msec);
     }
     if (pending_zenz_live_.defer_live_conversion_display) {
       pending_zenz_live_.deferred_live_conversion_display_deadline =
-          now + absl::Milliseconds(kZenzDeferredDirectDisplayMsec);
+          now + absl::Milliseconds(direct_display_wait_msec);
     }
 
     ZenzLiveRequest request;
@@ -7869,7 +7879,7 @@ bool Session::AdvancePendingZenzLiveCorrection(
     ZenzDebugOutput(absl::StrCat(
         "[zenz] direct-display grace expired origin=live; reveal Mozc only",
         " generation=", pending_zenz_live_.generation,
-        " grace_msec=", kZenzDeferredDirectDisplayMsec));
+        " grace_msec=", direct_display_wait_msec));
     SetVisibleLiveConversionFromCurrentMozc();
     pending_zenz_live_.defer_live_conversion_display = false;
   }
@@ -7878,7 +7888,7 @@ bool Session::AdvancePendingZenzLiveCorrection(
     ZenzDebugOutput(absl::StrCat(
         "[zenz] direct-display grace expired origin=explicit; reveal Mozc only",
         " generation=", pending_zenz_live_.generation,
-        " grace_msec=", kZenzDeferredDirectDisplayMsec));
+        " grace_msec=", direct_display_wait_msec));
     pending_zenz_live_.defer_normal_conversion_display = false;
   }
 

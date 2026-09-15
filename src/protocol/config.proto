@@ -419,12 +419,17 @@ message Config {
       [default = 24];
 
   // Prefer direct Zenz presentation instead of first showing a transient
-  // Mozc result. Explicit conversion keeps the pre-conversion preedit for a
-  // short grace. Live conversion keeps the last client-visible live display for
-  // a shorter grace and skips Zenz immediately while the worker is busy.
-  // Late results are ignored for that generation.
+  // Mozc result. While enabled, Mozc stays hidden for
+  // zenz_direct_display_wait_msec after the Zenz request is submitted. When
+  // that presentation grace expires, Mozc becomes visible while the pending
+  // Zenz request continues and may still replace it later.
   optional bool use_zenz_deferred_normal_conversion_display = 1029
       [default = false];
+
+  // Presentation-only grace after Zenz submission while Direct Display is
+  // enabled. This is independent of both the Zenz start delay and the model /
+  // asynchronous timeouts.
+  optional uint32 zenz_direct_display_wait_msec = 1030 [default = 96];
 
   //////////////////////////////////////////////////////////////
   //

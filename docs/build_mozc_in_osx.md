@@ -150,6 +150,86 @@ bazelisk test ... --build_tests_only -c dbg
 
 See [build Mozc in Docker](build_mozc_in_docker.md#unittests) for details.
 
+### Local Bazel verification on macOS
+
+Run Bazel commands from the `src` directory. Before starting, verify that
+the full Xcode toolchain is selected; Command Line Tools alone are not
+sufficient for this repository.
+
+```
+xcode-select -p
+xcrun --sdk macosx --show-sdk-path
+```
+
+The first command should point to the Xcode developer directory (for example,
+`/Applications/Xcode.app/Contents/Developer`), and the second should point to
+an SDK inside that Xcode installation. If the paths are wrong, select Xcode
+again and use a new, task-specific Bazel output directory:
+
+```
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+```
+
+Use the normal test command first. The following targets cover the protocol
+configuration and Zenz live-display behavior changed in this project:
+
+```
+bazelisk --output_user_root=/private/tmp/mozkey-bazel-local test \
+  --config=oss_macos --config=release_build \
+  //config:config_handler_test \
+  //session:session_test \
+  --test_output=errors
+```
+
+On some macOS/Bazel combinations, the generated Apple toolchain can still
+refer to the old Command Line Tools C++ include path. Symptoms include
+`cstddef`, `atomic`, or `ios` not being found, or an aligned-allocation error
+when compiling with the current Clang. In that case, use this verification
+fallback; these flags are local-environment workarounds and must not be added
+to the product or release configuration:
+
+```
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export MOZKEY_CXX_HEADERS=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1
+bazelisk --output_user_root=/private/tmp/mozkey-bazel-local test \
+  --config=oss_macos --config=release_build \
+  --spawn_strategy=local \
+  --cxxopt=-isystem$MOZKEY_CXX_HEADERS \
+  --host_cxxopt=-isystem$MOZKEY_CXX_HEADERS \
+  --cxxopt=-faligned-allocation \
+  --host_cxxopt=-faligned-allocation \
+  //config:config_handler_test \
+  //session:session_test \
+  --test_output=errors
+```
+
+The GUI test additionally requires Qt to exist under `src/third_party/qt`.
+If it is absent, fetch the dependencies and build Qt before running it:
+
+```
+python3 build_tools/update_deps.py
+
+# Make Qt use the selected full Xcode SDK and compiler.
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+export CC="$(xcrun --sdk macosx --find clang)"
+export CXX="$(xcrun --sdk macosx --find clang++)"
+export MACOSX_DEPLOYMENT_TARGET=12
+
+python3 build_tools/build_qt.py --release --confirm_license
+bazelisk --output_user_root=/private/tmp/mozkey-bazel-local test \
+  --config=oss_macos --config=release_build \
+  //gui/config_dialog:config_dialog_ui_test \
+  --test_env=QT_QPA_PLATFORM=offscreen \
+  --test_env=QT_PLUGIN_PATH="$PWD/third_party/qt/plugins" \
+  --test_env=DYLD_FRAMEWORK_PATH="$PWD/third_party/qt/lib" \
+  --test_output=errors
+```
+
+Do not treat a successful core test as a successful GUI or installer build.
+Record those checks separately, and run the release workflow before publishing
+an installer.
+
 ### Edit src/config.bzl
 
 You can modify variables in `src/config.bzl` to fit your environment. Note: `~`
