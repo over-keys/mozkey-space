@@ -43,7 +43,7 @@ REVISION = 100
 # User-facing mozkey-space release version.  This is shown in the About dialog
 # and should match the GitHub release tag without the leading "v".
 MOZKEY_SPACE_RELEASE_VERSION_MAJOR = 5
-MOZKEY_SPACE_RELEASE_VERSION_MINOR = 0
+MOZKEY_SPACE_RELEASE_VERSION_MINOR = 10
 MOZKEY_SPACE_RELEASE_VERSION_PATCH = 0
 
 # LINT.IfChange
