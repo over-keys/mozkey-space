@@ -429,7 +429,7 @@ message Config {
   // Presentation-only grace after Zenz submission while Direct Display is
   // enabled. This is independent of both the Zenz start delay and the model /
   // asynchronous timeouts.
-  optional uint32 zenz_direct_display_wait_msec = 1030 [default = 96];
+  optional uint32 zenz_direct_display_wait_msec = 1030 [default = 150];
 
   //////////////////////////////////////////////////////////////
   //

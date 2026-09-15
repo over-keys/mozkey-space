@@ -213,9 +213,9 @@ constexpr uint32_t kDefaultZenzLiveCorrectionDelayMsec = 200;
 constexpr uint32_t kDefaultZenzLiveCorrectionTimeoutMsec = 180;
 constexpr uint32_t kDefaultZenzLiveCorrectionPollMsec = 24;
 // A warm Windows scorer benchmark returned 199/200 responses within 96 ms.
-// Keep that value as the default, but let Direct Display users tune this
-// presentation-only deadline independently of Zenz inference/async timeouts.
-constexpr uint32_t kDefaultZenzDirectDisplayWaitMsec = 96;
+// Use 150 ms as the default presentation grace to leave additional margin
+// while keeping it independent of Zenz inference/async timeouts.
+constexpr uint32_t kDefaultZenzDirectDisplayWaitMsec = 150;
 constexpr uint32_t kDefaultZenzLiveCorrectionMinKeyLength = 2;
 constexpr uint32_t kMaxZenzLiveCorrectionContextLength = 128;
 // Volatile left-context continuation cache used only when the current platform

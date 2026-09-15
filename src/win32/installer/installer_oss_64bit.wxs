@@ -132,14 +132,12 @@
        TODO: Consider migrating to "MajorUpgrade" rule.
        See https://github.com/google/mozc/issues/734#issuecomment-1524294119
     -->
+    <!-- Replace any installed Mozkey version, including newer and equal
+         versions. Release builds intentionally use the same UpgradeCode so a
+         package can repair or roll back an existing installation. -->
     <Upgrade Id="$(var.UpgradeCode)">
-      <UpgradeVersion Minimum="0.0.0.0" IncludeMinimum="yes" Maximum="$(var.MsiVersion)" IncludeMaximum="yes" OnlyDetect="no" Property="UPGRADING" />
-      <UpgradeVersion Minimum="$(var.MsiVersion)" IncludeMinimum="no" OnlyDetect="yes" Property="NEWERVERSIONDETECTED" />
+      <UpgradeVersion Minimum="0.0.0.0" IncludeMinimum="yes" OnlyDetect="no" Property="UPGRADING" />
     </Upgrade>
-
-    <UI>
-      <Error Id="4000" Message="新しいバージョンの Mozkey が既にインストールされています。" />
-    </UI>
 
     <Feature Id="MozcInstall" Title="Mozkey" Level="1">
       <ComponentRef Id="MozcTIP32" />
@@ -206,7 +204,6 @@
          the installer helper DLL after InstallFinalize so the action does not
          depend on a FileRef being marked for installation (error 2753). -->
     <CustomAction Id="LaunchPostInstallDialog" DllEntry="LaunchPostInstallDialog" Impersonate="yes" Return="ignore" BinaryRef="mozc_installer_helper.dll" />
-    <CustomAction Id="NewerVersionError" Error="4000" />
 
     <InstallExecuteSequence>
       <Custom Action="InitialInstallation" After="InstallInitialize" Condition="(NOT (REMOVE=&quot;ALL&quot;)) AND (NOT UPGRADING)" />
@@ -226,7 +223,6 @@
         needs to be callled before the InstallValidate action.
       -->
       <Custom Action="ShutdownServer" Before="InstallValidate" />
-      <Custom Action="NewerVersionError" After="FindRelatedProducts" Condition="NEWERVERSIONDETECTED" />
       <!--
         RemoveExistingProducts needs to be scheduled between InstallExecute and
         InstallFinalize to correctly deal with errors which occur when the old

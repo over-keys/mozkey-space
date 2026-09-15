@@ -85,7 +85,7 @@ void SetMozkeyProductDefaultsForTesting(Config* config) {
   config->set_direct_commit_key(kExpectedMozkeyDirectCommitKey);
   config->set_use_zenz_live_correction(true);
   config->set_use_zenz_deferred_normal_conversion_display(false);
-  config->set_zenz_direct_display_wait_msec(96);
+  config->set_zenz_direct_display_wait_msec(150);
   config->set_zenz_live_correction_delay_msec(200);
   config->set_use_zenz_feedback_learning(true);
   config->set_use_zenz_auto_block_rejected_correction(false);
@@ -108,7 +108,7 @@ void ExpectMozkeyProductDefaults(const Config& config) {
 
   EXPECT_TRUE(config.use_zenz_live_correction());
   EXPECT_FALSE(config.use_zenz_deferred_normal_conversion_display());
-  EXPECT_EQ(config.zenz_direct_display_wait_msec(), 96);
+  EXPECT_EQ(config.zenz_direct_display_wait_msec(), 150);
   EXPECT_EQ(config.zenz_live_correction_delay_msec(), 200);
   EXPECT_EQ(config.zenz_live_correction_timeout_msec(), 180);
   EXPECT_EQ(config.zenz_live_correction_min_key_length(), 2);

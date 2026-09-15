@@ -1605,7 +1605,7 @@
                    <number>1</number>
                   </property>
                   <property name="value">
-                   <number>96</number>
+                   <number>150</number>
                   </property>
                   <property name="suffix">
                    <string> ms</string>
