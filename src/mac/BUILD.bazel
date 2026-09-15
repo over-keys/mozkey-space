@@ -575,15 +575,22 @@ mozc_py_binary(
     name = "build_package",
     srcs = ["build_package.py"],
     test_lib = False,
-    deps = ["//build_tools:util"],
+    deps = [
+        "//build_tools:mozc_version_lib",
+        "//build_tools:util",
+    ],
 )
 
 genrule(
     name = "package",
-    srcs = [":package_files"],
+    srcs = [
+        ":package_files",
+        "//base:mozc_version_txt",
+    ],
     outs = ["Mozc.pkg"],
     cmd = "$(location :build_package) --input $(location :package_files)" +
           " --output $@" +
+          " --version_file $(location //base:mozc_version_txt)" +
           ' --codesign_identity "' + CODESIGN_IDENTITY_INSTALLER_SELECT + '"' +
           ' --keychain "' + KEYCHAIN_INSTALLER_SELECT + '"' +
           mozc_select(
@@ -594,7 +601,7 @@ genrule(
     exec_compatible_with = ["@platforms//os:macos"],
     # Set local for `productsign` with the local KeyChain.
     local = True,
-    # TODO(b/269007577): version_file, auto_updater_dir and build_type should be supported.
+    # TODO(b/269007577): auto_updater_dir and build_type should be supported.
     tags = ["manual"],
     tools = [":build_package"],
     visibility = [

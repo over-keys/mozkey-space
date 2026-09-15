@@ -39,6 +39,7 @@ import plistlib
 import shutil
 import tempfile
 
+from build_tools import mozc_version
 from build_tools import util
 
 
@@ -47,6 +48,7 @@ def ParseArguments():
   parser = argparse.ArgumentParser()
   parser.add_argument('--input')
   parser.add_argument('--output')
+  parser.add_argument('--version_file')
   parser.add_argument('--oss', action='store_true')
   parser.add_argument(
       '--codesign_identity',
@@ -61,9 +63,24 @@ def ParseArguments():
 def main():
   args = ParseArguments()
 
+  package_version = None
   if args.oss:
     identifier = 'org.mozc.pkg.JapaneseInput'
     pkg_name = 'Mozc.pkg'
+    if not args.version_file:
+      raise ValueError('--version_file is required for Mozkey packages')
+    version_file = os.path.abspath(args.version_file)
+    version = mozc_version.MozcVersion(version_file)
+    package_version = version.GetVersionInFormat(
+        '@MOZKEY_SPACE_RELEASE_VERSION_MAJOR@.'
+        '@MOZKEY_SPACE_RELEASE_VERSION_MINOR@.'
+        '@MOZKEY_SPACE_RELEASE_VERSION_PATCH@'
+    )
+    parts = package_version.split('.')
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+      raise ValueError(
+          f'Invalid Mozkey package version: {package_version!r}'
+      )
   else:
     identifier = 'com.google.pkg.GoogleJapaneseInput'
     pkg_name = 'GoogleJapaneseInput.pkg'
@@ -75,12 +92,10 @@ def main():
     util.RunOrDie(['unzip', '-q', args.input, '-d', tmp_dir])
     os.chdir(os.path.join(tmp_dir, 'installer'))
 
-    # Generate a component property list from the root directory, then clear
-    # BundleOverwriteAction to prevent atomic bundle replacement during
-    # upgrades. With 'upgrade' (the default), the installer deletes the old
-    # bundle and installs the new one atomically, which can invalidate the
-    # macOS IME registration. With an empty action, the installer simply
-    # overwrites files in place, preserving the existing registration.
+    # Generate a component property list from the root directory. Clear
+    # BundleOverwriteAction to avoid atomic bundle replacement, which can
+    # invalidate macOS IME registration. For Mozkey, also disable bundle
+    # version checking so reinstall and downgrade installs remain possible.
     # https://github.com/google/mozc/issues/1439
     component_plist = 'component.plist'
     util.RunOrDie(
@@ -90,6 +105,8 @@ def main():
       components = plistlib.load(f)
     for component in components:
       component['BundleOverwriteAction'] = ''
+      if args.oss:
+        component['BundleIsVersionChecked'] = False
     with open(component_plist, 'wb') as f:
       plistlib.dump(components, f)
 
@@ -101,11 +118,33 @@ def main():
         component_plist,
         '--identifier',
         identifier,
+    ]
+    if package_version is not None:
+      pkgbuild_commands += ['--version', package_version]
+    pkgbuild_commands += [
         '--scripts',
         'scripts/',
         pkg_name,  # pkg_name is configured in distribution.xml.
     ]
     util.RunOrDie(pkgbuild_commands)
+
+    if package_version is not None:
+      distribution_path = 'distribution.xml'
+      with open(distribution_path, encoding='utf-8') as f:
+        distribution = f.read()
+      old_ref = (
+          f'<pkg-ref id="{identifier}" version="0" '
+          f'onConclusion="none">{pkg_name}</pkg-ref>'
+      )
+      new_ref = (
+          f'<pkg-ref id="{identifier}" version="{package_version}" '
+          f'onConclusion="none">{pkg_name}</pkg-ref>'
+      )
+      if distribution.count(old_ref) != 1:
+        raise ValueError('Mozkey distribution package reference is not unique')
+      with open(distribution_path, 'w', encoding='utf-8') as f:
+        f.write(distribution.replace(old_ref, new_ref, 1))
+
     productbuild_commands = [
         '/usr/bin/productbuild',
         '--distribution',

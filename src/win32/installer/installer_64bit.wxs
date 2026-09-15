@@ -146,11 +146,14 @@
        TODO: Consider migrating to "MajorUpgrade" rule.
        See https://github.com/google/mozc/issues/734#issuecomment-1524294119
     -->
-    <!-- Replace any installed Google Japanese Input version, including newer
-         and equal versions, when the same product code is used. -->
     <Upgrade Id="$(var.UpgradeCode)">
-      <UpgradeVersion Minimum="0.0.0.0" IncludeMinimum="yes" OnlyDetect="no" Property="UPGRADING" />
+      <UpgradeVersion Minimum="0.0.0.0" IncludeMinimum="yes" Maximum="$(var.MsiVersion)" IncludeMaximum="yes" OnlyDetect="no" Property="UPGRADING" />
+      <UpgradeVersion Minimum="$(var.MsiVersion)" IncludeMinimum="no" OnlyDetect="yes" Property="NEWERVERSIONDETECTED" />
     </Upgrade>
+
+    <UI>
+      <Error Id="4000" Message="新しいバージョンの Google 日本語入力が既にインストールされています。" />
+    </UI>
 
     <Feature Id="GIMEJaInstall" Title="Google 日本語入力" Level="1">
       <ComponentRef Id="GIMEJaTIP32" />
@@ -207,6 +210,7 @@
     <CustomAction Id="StopCacheServiceForRollback" DllEntry="StopCacheService" Impersonate="no" Execute="rollback" Return="ignore" BinaryRef="GoogleIMEJaInstallerHelper.dll" />
     <CustomAction Id="WriteApValue" DllEntry="WriteApValue" Execute="deferred" Impersonate="no" BinaryRef="GoogleIMEJaInstallerHelper.dll" />
     <CustomAction Id="WriteApValueRollback" DllEntry="WriteApValueRollback" Execute="rollback" Impersonate="no" BinaryRef="GoogleIMEJaInstallerHelper.dll" />
+    <CustomAction Id="NewerVersionError" Error="4000" />
 
     <InstallExecuteSequence>
       <Custom Action="InitialInstallation" After="InstallInitialize" Condition="(NOT (REMOVE=&quot;ALL&quot;)) AND (NOT UPGRADING)" />
@@ -228,6 +232,7 @@
         needs to be callled before the InstallValidate action.
       -->
       <Custom Action="ShutdownServer" Before="InstallValidate" />
+      <Custom Action="NewerVersionError" After="FindRelatedProducts" Condition="NEWERVERSIONDETECTED" />
       <!--
         RemoveExistingProducts needs to be scheduled between InstallExecute and
         InstallFinalize to correctly deal with errors which occur when the old
