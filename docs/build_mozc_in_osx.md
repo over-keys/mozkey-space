@@ -158,44 +158,40 @@ sufficient for this repository.
 
 ```
 xcode-select -p
+xcodebuild -version
 xcrun --sdk macosx --show-sdk-path
+xcrun --sdk macosx --find clang++
 ```
 
 The first command should point to the Xcode developer directory (for example,
 `/Applications/Xcode.app/Contents/Developer`), and the second should point to
-an SDK inside that Xcode installation. If the paths are wrong, select Xcode
-again and use a new, task-specific Bazel output directory:
+an SDK inside that Xcode installation. `xcodebuild -version` must succeed; after
+installing or updating Xcode, accept its license once in Terminal:
 
 ```
 sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
 ```
+
+Do not select `/Library/Developer/CommandLineTools` for this build. Mixing its
+C++ headers with the selected Xcode SDK can produce `cstddef`, `atomic`, or
+`int64_t` errors. If Bazel still reports that Xcode cannot be found after the
+checks above, start with a fresh, task-specific Bazel output directory rather
+than reusing a cache created by another Xcode installation.
 
 Use the normal test command first. The following targets cover the protocol
 configuration and Zenz live-display behavior changed in this project:
 
 ```
-bazelisk --output_user_root=/private/tmp/mozkey-bazel-local test \
-  --config=oss_macos --config=release_build \
-  //config:config_handler_test \
-  //session:session_test \
-  --test_output=errors
-```
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+export CC="$(xcrun --sdk macosx --find clang)"
+export CXX="$(xcrun --sdk macosx --find clang++)"
+export MACOSX_DEPLOYMENT_TARGET=12
 
-On some macOS/Bazel combinations, the generated Apple toolchain can still
-refer to the old Command Line Tools C++ include path. Symptoms include
-`cstddef`, `atomic`, or `ios` not being found, or an aligned-allocation error
-when compiling with the current Clang. In that case, use this verification
-fallback; these flags are local-environment workarounds and must not be added
-to the product or release configuration:
-
-```
-export DEVELOPER_DIR=/Library/Developer/CommandLineTools
-export MOZKEY_CXX_HEADERS=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1
 bazelisk --output_user_root=/private/tmp/mozkey-bazel-local test \
   --config=oss_macos --config=release_build \
   --spawn_strategy=local \
-  --cxxopt=-isystem$MOZKEY_CXX_HEADERS \
-  --host_cxxopt=-isystem$MOZKEY_CXX_HEADERS \
   --cxxopt=-faligned-allocation \
   --host_cxxopt=-faligned-allocation \
   //config:config_handler_test \
@@ -217,14 +213,21 @@ export CXX="$(xcrun --sdk macosx --find clang++)"
 export MACOSX_DEPLOYMENT_TARGET=12
 
 python3 build_tools/build_qt.py --release --confirm_license
+
+export MOZKEY_QT_ROOT="$PWD/third_party/qt"
 bazelisk --output_user_root=/private/tmp/mozkey-bazel-local test \
   --config=oss_macos --config=release_build \
+  --spawn_strategy=local \
+  --cxxopt=-faligned-allocation \
+  --host_cxxopt=-faligned-allocation \
   //gui/config_dialog:config_dialog_ui_test \
-  --test_env=QT_QPA_PLATFORM=offscreen \
-  --test_env=QT_PLUGIN_PATH="$PWD/third_party/qt/plugins" \
-  --test_env=DYLD_FRAMEWORK_PATH="$PWD/third_party/qt/lib" \
+  --run_under="env QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH=$MOZKEY_QT_ROOT/plugins DYLD_FRAMEWORK_PATH=$MOZKEY_QT_ROOT/lib DYLD_LIBRARY_PATH=$MOZKEY_QT_ROOT/lib" \
   --test_output=errors
 ```
+
+`DYLD_FRAMEWORK_PATH` and `DYLD_LIBRARY_PATH` are passed through
+`--run_under`; setting them only in the shell or with `--test_env` may not make
+the Qt frameworks available to the Bazel test process.
 
 Do not treat a successful core test as a successful GUI or installer build.
 Record those checks separately, and run the release workflow before publishing
