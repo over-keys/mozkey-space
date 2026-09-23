@@ -98,6 +98,7 @@ class SessionTestPeer : testing::TestPeer<Session> {
   PEER_METHOD(PushUndoContext);
   PEER_METHOD(AdvancePendingZenzLiveCorrection);
   PEER_METHOD(ApplyZenzLiveCorrectionResult);
+  PEER_METHOD(CanDirectCommitAfterPunctuation);
   PEER_METHOD(OutputZenzLiveCorrection);
   PEER_METHOD(SetPendingZenzFeedbackAccepted);
   PEER_METHOD(SetPendingZenzFeedbackRejected);
@@ -1218,7 +1219,7 @@ TEST_F(SessionTest, KeymapCommandSequenceCommitAndImeOffFromConversion) {
 
 #if defined(_WIN32)
 
-TEST_F(SessionTest, KeymapCommandSequenceCommitZenzLiveCorrectionAndImeOff) {
+TEST_F(SessionTest, ImeOffCommitsVisibleZenzLiveCorrection) {
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
 
@@ -1227,16 +1228,9 @@ TEST_F(SessionTest, KeymapCommandSequenceCommitZenzLiveCorrectionAndImeOff) {
 
   Session session(engine);
   SessionTestPeer session_peer(session);
-  InitSessionToPrecomposition(&session);
-
-  constexpr absl::string_view kCustomKeymapTable =
-      "status\tkey\tcommand\n"
-      "Conversion\tCtrl Enter\tCommit|IMEOff\n";
 
   config::Config config;
   config::ConfigHandler::GetDefaultConfig(&config);
-  config.set_session_keymap(config::Config::CUSTOM);
-  config.set_custom_keymap_table(std::string(kCustomKeymapTable));
   config.set_use_live_conversion(true);
   config.set_use_zenz_live_correction(true);
   config.set_use_zenz_feedback_learning(true);
@@ -1244,47 +1238,39 @@ TEST_F(SessionTest, KeymapCommandSequenceCommitZenzLiveCorrectionAndImeOff) {
   config.set_zenz_live_correction_min_key_length(2);
   session.SetConfig(config);
 
-  auto key_map_manager = std::make_shared<keymap::KeyMapManager>(config);
-  session.SetKeyMapManager(key_map_manager);
+  InitSessionToConversionWithAiueo(&session, converter.get());
 
   session_peer.zenz_feedback_store_().RecordAccepted(
-      "かれはてんてきです",
+      "あいうえお",
       "empty",
-      "彼は天敵です");
+      "愛上尾");
   ASSERT_FALSE(session_peer.zenz_feedback_store_().ListEntries().empty());
 
-  session_peer.context_()->set_state(ImeContext::CONVERSION);
   session_peer.live_conversion_active_() = true;
-  session_peer.live_conversion_key_() = "かれはてんてきです";
-  session_peer.live_conversion_preedit_() = "かれはてんてきです";
-  session_peer.live_conversion_value_() = "彼は点滴です";
+  session_peer.live_conversion_key_() = "あいうえお";
+  session_peer.live_conversion_preedit_() = "あいうえお";
+  session_peer.live_conversion_value_() = "あいうえお";
 
   commands::Preedit& live_preedit =
       session_peer.live_conversion_preedit_output_();
   live_preedit.Clear();
 
   commands::Preedit::Segment* segment = live_preedit.add_segment();
-  segment->set_key("かれは");
-  segment->set_value("彼は");
-  segment->set_value_length(Util::CharsLen("彼は"));
-
-  segment = live_preedit.add_segment();
-  segment->set_key("てんてきです");
-  segment->set_value("点滴です");
-  segment->set_value_length(Util::CharsLen("点滴です"));
+  segment->set_key("あいうえお");
+  segment->set_value("あいうえお");
+  segment->set_value_length(Util::CharsLen("あいうえお"));
 
   commands::Command command;
-  ShowZenzCorrectionForTest(&session_peer, "かれはてんてきです",
-                            "彼は点滴です", "彼は天敵です", "empty",
-                            &command);
+  ShowZenzCorrectionForTest(&session_peer, "あいうえお", "あいうえお",
+                            "愛上尾", "empty", &command);
   ASSERT_TRUE(command.output().zenz_live_correction_applied());
-  EXPECT_PREEDIT("彼は天敵です", command);
+  EXPECT_PREEDIT("愛上尾", command);
 
   command.Clear();
-  EXPECT_TRUE(SendKey("Ctrl Enter", &session, &command));
+  ASSERT_TRUE(session.IMEOff(&command));
 
   EXPECT_TRUE(command.output().consumed());
-  EXPECT_RESULT_AND_KEY("彼は天敵です", "かれはてんてきです", command);
+  EXPECT_RESULT_AND_KEY("愛上尾", "あいうえお", command);
   EXPECT_EQ(session.context().state(), ImeContext::DIRECT);
   EXPECT_EQ(command.output().mode(), commands::DIRECT);
   EXPECT_FALSE(session_peer.live_conversion_active_());
@@ -1314,6 +1300,83 @@ TEST_F(SessionTest, PendingZenzFeedbackIsConfirmedByNextTextInput) {
   SendKey("a", &session, &command);
 
   EXPECT_FALSE(session_peer.pending_zenz_feedback_().pending);
+}
+
+TEST_F(SessionTest, ZenzLatinTransliterationRestoresOnlyTheTokenSpan) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  auto append_segment = [](Segments* segments, absl::string_view surface,
+                           absl::string_view reading) {
+    Segment* segment = segments->add_segment();
+    segment->set_key(std::string(surface));
+    segment->add_candidate()->value = std::string(reading);
+  };
+  EXPECT_CALL(*converter, StartReverseConversion(_, _))
+      .WillRepeatedly(Invoke([&](Segments* reverse, absl::string_view source) {
+        Segments result;
+        if (source == "Jazz") {
+          append_segment(&result, "Jazz", "じゃず");
+        } else if (source == "ジャズが点滴です") {
+          append_segment(&result, "ジャズ", "じゃず");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "点滴", "てんてき");
+          append_segment(&result, "です", "です");
+        } else if (source == "Jazzが天敵です") {
+          append_segment(&result, "Jazz", "じゃず");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "天敵", "てんてき");
+          append_segment(&result, "です", "です");
+        } else if (source == "ジャズが天敵です") {
+          append_segment(&result, "ジャズ", "じゃず");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "天敵", "てんてき");
+          append_segment(&result, "です", "です");
+        } else {
+          return false;
+        }
+        *reverse = result;
+        return true;
+      }));
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_synthetic_candidate(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+
+  constexpr absl::string_view kKey = "じゃずがてんてきです";
+  constexpr absl::string_view kMozcValue = "ジャズが点滴です";
+  peer.context_()->set_state(ImeContext::CONVERSION);
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = std::string(kKey);
+  peer.live_conversion_preedit_() = std::string(kKey);
+  peer.live_conversion_value_() = std::string(kMozcValue);
+
+  auto& pending = peer.pending_zenz_live_();
+  pending.generation = 1;
+  pending.key = std::string(kKey);
+  pending.mozc_value = std::string(kMozcValue);
+  pending.symbol_style_source = std::string(kKey);
+  pending.pending = true;
+  pending.from_live_conversion = true;
+
+  ZenzLiveResponse response;
+  response.generation = 1;
+  response.key = std::string(kKey);
+  response.value = "Jazzが天敵です";
+  response.ok = true;
+
+  commands::Command command;
+  ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+  EXPECT_EQ(peer.zenz_live_value_(), "ジャズが天敵です")
+      << command.output().zenz_live_correction_debug();
+  EXPECT_PREEDIT("ジャズが天敵です", command);
 }
 
 TEST_F(SessionTest, PendingZenzFeedbackIsDiscardedByBackspace) {
@@ -5999,6 +6062,61 @@ TEST_F(SessionTest,
   EXPECT_TRUE(command.output().live_conversion_pending());
   EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
   EXPECT_TRUE(session_peer.live_conversion_pending_());
+}
+
+TEST_F(SessionTest, DirectCommitIgnoresDecimalAndThousandsSeparators) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_direct_commit(true);
+  config.set_direct_commit_key(config::Config::DIRECT_COMMIT_KUTEN |
+                               config::Config::DIRECT_COMMIT_TOUTEN);
+  session.SetConfig(config);
+  peer.context_()->set_state(ImeContext::COMPOSITION);
+
+  commands::Command command;
+  for (const auto& [preedit, trigger] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"3.", "."}, {"３．", "."}, {"1,000、", ","},
+           {"１，０００、", ","}}) {
+    peer.context_()->mutable_composer()->Reset();
+    peer.context_()->mutable_composer()->SetPreeditTextForTestOnly(preedit);
+    ASSERT_TRUE(SetSendKeyCommand(trigger, &command));
+    EXPECT_FALSE(peer.CanDirectCommitAfterPunctuation(command.input().key()))
+        << preedit;
+  }
+
+  peer.context_()->mutable_composer()->Reset();
+  peer.context_()->mutable_composer()->SetPreeditTextForTestOnly("かな。");
+  ASSERT_TRUE(SetSendKeyCommand(".", &command));
+  EXPECT_TRUE(peer.CanDirectCommitAfterPunctuation(command.input().key()));
+}
+
+TEST_F(SessionTest,
+       PendingLiveConversionDoesNotDirectCommitAfterDecimalSeparator) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_direct_commit(true);
+  config.set_direct_commit_key(config::Config::DIRECT_COMMIT_KUTEN);
+  session.SetConfig(config);
+  peer.context_()->set_state(ImeContext::COMPOSITION);
+  peer.live_conversion_pending_() = true;
+  peer.context_()->mutable_composer()->SetPreeditTextForTestOnly("３．");
+
+  commands::Command command;
+  ASSERT_TRUE(SetSendKeyCommand(".", &command));
+  EXPECT_FALSE(peer.CanDirectCommitAfterPunctuation(command.input().key()));
 }
 
 TEST_F(SessionTest,

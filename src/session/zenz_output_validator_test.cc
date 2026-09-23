@@ -84,5 +84,53 @@ TEST(ZenzOutputValidatorTest, RestoreUserVisibleSymbolStyleFullwidthAsciiPunct) 
             "note:A;B,C.");
 }
 
+TEST(ZenzOutputValidatorTest, RestoreTrailingUserPunctuation) {
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "するな", "するな", "するな！"),
+            "するな");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "本当ですか？", "本当ですか？", "本当ですか"),
+            "本当ですか？");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "3.14", "3.14", "3.14."),
+            "3.14");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "1,000", "1,000", "1,000！"),
+            "1,000");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "今日雨", "今日は雨", "今日は雨。"),
+            "今日は雨");
+}
+
+TEST(ZenzOutputValidatorTest, RejectsLongLeftContextEcho) {
+  ZenzOutputValidator validator;
+  ZenzValidationInput input;
+  input.key = "きょうはあめがふっています";
+  input.mozc_value = "今日は雨が降っています";
+  input.zenz_value = "彼は図書館で本を読んでいました。今日は雨";
+  input.left_context = "昨日、彼は図書館で本を読んでいました";
+  EXPECT_EQ(validator.Validate(input).reason, "left_context_echo");
+}
+
+TEST(ZenzOutputValidatorTest, AcceptsLegitimateRepeatedCurrentReading) {
+  ZenzOutputValidator validator;
+  ZenzValidationInput input;
+  input.key = "きょうはあめがふっていますね";
+  input.mozc_value = "今日は雨が降っています";
+  input.zenz_value = "今日は雨が降っていますね";
+  input.left_context = "今日は雨が降っています";
+  EXPECT_TRUE(validator.Validate(input).accept);
+}
+
+TEST(ZenzOutputValidatorTest, IgnoresShortLeftContextOverlap) {
+  ZenzOutputValidator validator;
+  ZenzValidationInput input;
+  input.key = "とうきょうではあめ";
+  input.mozc_value = "東京では雨";
+  input.zenz_value = "では雨が続いています";
+  input.left_context = "東京では雨";
+  EXPECT_TRUE(validator.Validate(input).accept);
+}
+
 }  // namespace
 }  // namespace mozc::session

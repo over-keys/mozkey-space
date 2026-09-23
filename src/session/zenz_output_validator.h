@@ -41,6 +41,12 @@ class ZenzOutputValidator {
       absl::string_view mozc_value,
       absl::string_view zenz_value);
 
+  // Removes trailing punctuation added by Zenz and restores trailing
+  // punctuation explicitly present in the user's key or Mozc's result.
+  static std::string RestoreTrailingUserPunctuation(
+      absl::string_view key, absl::string_view mozc_value,
+      absl::string_view zenz_value);
+
  private:
   static bool ContainsSpecialToken(absl::string_view text);
   static bool LooksLikeUrlOrEmail(absl::string_view text);

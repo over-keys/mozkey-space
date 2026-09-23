@@ -1810,6 +1810,190 @@ bool ExtractSurfaceForReadingRange(
   return true;
 }
 
+struct AsciiTechnicalToken {
+  std::string value;
+  size_t byte_begin = 0;
+  size_t byte_end = 0;
+};
+
+bool IsAsciiLetterOrDigit(unsigned char c) {
+  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
+         ('0' <= c && c <= '9');
+}
+
+std::vector<AsciiTechnicalToken> ExtractAsciiTechnicalTokens(
+    absl::string_view text) {
+  std::vector<AsciiTechnicalToken> tokens;
+  size_t index = 0;
+  while (index < text.size()) {
+    const unsigned char c = static_cast<unsigned char>(text[index]);
+    if (!((('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')))) {
+      ++index;
+      continue;
+    }
+
+    const size_t begin = index++;
+    while (index < text.size()) {
+      const unsigned char next = static_cast<unsigned char>(text[index]);
+      if (IsAsciiLetterOrDigit(next)) {
+        ++index;
+        continue;
+      }
+      if ((next == '+' || next == '#') && index > begin) {
+        ++index;
+        continue;
+      }
+      if ((next == '-' || next == '_' || next == '.' || next == '/') &&
+          index > begin && index + 1 < text.size() &&
+          IsAsciiLetterOrDigit(static_cast<unsigned char>(text[index + 1]))) {
+        ++index;
+        continue;
+      }
+      break;
+    }
+    tokens.push_back({std::string(text.substr(begin, index - begin)), begin,
+                      index});
+  }
+  return tokens;
+}
+
+bool FindUniqueReadingRangeForToken(
+    engine::EngineConverterInterface& converter, absl::string_view token,
+    absl::string_view key, size_t* reading_begin, size_t* reading_end) {
+  if (reading_begin == nullptr || reading_end == nullptr || token.empty()) {
+    return false;
+  }
+  std::string reading;
+  if (!converter.GetReadingText(token, &reading) || reading.empty() ||
+      CountSurfaceOccurrences(key, reading) != 1) {
+    return false;
+  }
+  *reading_begin = key.find(reading);
+  if (*reading_begin == absl::string_view::npos) {
+    return false;
+  }
+  *reading_end = *reading_begin + reading.size();
+  return true;
+}
+
+struct ZenzOrthographyReplacement {
+  size_t byte_begin = 0;
+  size_t byte_end = 0;
+  std::string value;
+};
+
+// Protect ASCII words and technical tokens that Zenz added or removed while
+// keeping unrelated Japanese corrections. A token is repaired only when its
+// reading maps to one unique, whole reverse-conversion span; ambiguous or
+// coarse alignments fail closed to the Mozc result at the call site.
+bool RepairZenzOnlyAsciiTokens(
+    engine::EngineConverterInterface& converter, absl::string_view key,
+    absl::string_view mozc_value, absl::string_view zenz_value,
+    std::string* repaired_value) {
+  if (repaired_value == nullptr) {
+    return false;
+  }
+  *repaired_value = std::string(zenz_value);
+
+  std::map<std::string, int> remaining_mozc_tokens;
+  for (const AsciiTechnicalToken& token :
+       ExtractAsciiTechnicalTokens(mozc_value)) {
+    ++remaining_mozc_tokens[token.value];
+  }
+
+  std::vector<AsciiTechnicalToken> added_tokens;
+  for (const AsciiTechnicalToken& token :
+       ExtractAsciiTechnicalTokens(zenz_value)) {
+    int& count = remaining_mozc_tokens[token.value];
+    if (count > 0) {
+      --count;
+    } else {
+      added_tokens.push_back(token);
+    }
+  }
+
+  std::vector<std::pair<std::string, int>> removed_tokens;
+  for (const auto& [token, count] : remaining_mozc_tokens) {
+    if (count > 0) {
+      removed_tokens.push_back({token, count});
+    }
+  }
+  if (added_tokens.empty() && removed_tokens.empty()) {
+    return true;
+  }
+  std::map<std::string, int> added_token_counts;
+  for (const AsciiTechnicalToken& token : added_tokens) {
+    if (++added_token_counts[token.value] > 1) {
+      return false;
+    }
+  }
+
+  std::vector<engine::ReadingSurfaceAlignmentSegment> mozc_alignment;
+  std::vector<engine::ReadingSurfaceAlignmentSegment> zenz_alignment;
+  if (!converter.GetUniqueReadingSurfaceAlignment(
+          mozc_value, key, &mozc_alignment) ||
+      !converter.GetUniqueReadingSurfaceAlignment(
+          zenz_value, key, &zenz_alignment)) {
+    return false;
+  }
+
+  std::vector<ZenzOrthographyReplacement> replacements;
+  replacements.reserve(added_tokens.size() + removed_tokens.size());
+  for (const AsciiTechnicalToken& token : added_tokens) {
+    size_t reading_begin = 0;
+    size_t reading_end = 0;
+    std::string mozc_surface;
+    if (!FindUniqueReadingRangeForToken(converter, token.value, key,
+                                        &reading_begin, &reading_end) ||
+        !ExtractSurfaceForReadingRange(mozc_alignment, reading_begin,
+                                       reading_end, &mozc_surface)) {
+      return false;
+    }
+    if (mozc_surface != token.value) {
+      replacements.push_back(
+          {token.byte_begin, token.byte_end, std::move(mozc_surface)});
+    }
+  }
+
+  for (const auto& [token, count] : removed_tokens) {
+    if (count != 1) {
+      return false;
+    }
+    size_t reading_begin = 0;
+    size_t reading_end = 0;
+    std::string zenz_surface;
+    size_t surface_begin = 0;
+    size_t surface_end = 0;
+    if (!FindUniqueReadingRangeForToken(converter, token, key,
+                                        &reading_begin, &reading_end) ||
+        !ExtractSurfaceForReadingRange(zenz_alignment, reading_begin,
+                                       reading_end, &zenz_surface,
+                                       &surface_begin, &surface_end)) {
+      return false;
+    }
+    replacements.push_back({surface_begin, surface_end, token});
+  }
+
+  std::sort(replacements.begin(), replacements.end(),
+            [](const ZenzOrthographyReplacement& lhs,
+               const ZenzOrthographyReplacement& rhs) {
+              return lhs.byte_begin < rhs.byte_begin;
+            });
+  for (size_t i = 1; i < replacements.size(); ++i) {
+    if (replacements[i].byte_begin < replacements[i - 1].byte_end) {
+      return false;
+    }
+  }
+  for (auto it = replacements.rbegin(); it != replacements.rend(); ++it) {
+    if (it->byte_end > repaired_value->size()) {
+      return false;
+    }
+    repaired_value->replace(it->byte_begin, it->byte_end - it->byte_begin,
+                            it->value);
+  }
+  return true;
+}
+
 // Locate an already-learned surface without reverse-reading it again. Exact
 // alignment is authoritative, including a mismatch. Within a coarse segment,
 // require a literal reading/surface prefix or suffix to anchor the same slot,
@@ -8036,6 +8220,8 @@ bool Session::ApplyZenzLiveCorrectionResult(
   const std::string zenz_value_before_symbol_restore = zenz_value;
   zenz_value = ZenzOutputValidator::RestoreUserVisibleSymbolStyle(
       zenz_symbol_style_source, pending_zenz_live_.mozc_value, zenz_value);
+  zenz_value = ZenzOutputValidator::RestoreTrailingUserPunctuation(
+      zenz_symbol_style_source, pending_zenz_live_.mozc_value, zenz_value);
 
   const std::string zenz_display_key =
       ZenzOutputValidator::RestoreUserVisibleSymbolStyle(
@@ -8094,6 +8280,42 @@ bool Session::ApplyZenzLiveCorrectionResult(
     command->mutable_output()->set_zenz_live_correction_debug(
         validation.reason);
     return true;
+  }
+
+  std::string orthography_safe_value;
+  if (!RepairZenzOnlyAsciiTokens(*context_->mutable_converter(),
+                                 pending_zenz_live_.key,
+                                 pending_zenz_live_.mozc_value, zenz_value,
+                                 &orthography_safe_value)) {
+    constexpr absl::string_view kReason = "ascii_token_alignment_unavailable";
+    ZenzDebugOutput(absl::StrCat(
+        "[zenz] adoption rejected reason=", kReason, " ",
+        ZenzRedactedTextStats("value", zenz_value), " ",
+        ZenzRedactedTextStats("mozc_value", pending_zenz_live_.mozc_value),
+        " context_class=", context_class));
+
+    cancel_pending_zenz();
+    Output(command);
+    if (from_live_conversion && command->output().has_preedit()) {
+      RestorePreeditSegmentKeysForSymbolStyle(
+          live_conversion_preedit_.empty()
+              ? live_conversion_key_
+              : live_conversion_preedit_,
+          command->mutable_output()->mutable_preedit());
+    }
+    command->mutable_output()->set_live_conversion(from_live_conversion);
+    command->mutable_output()->set_live_conversion_pending(false);
+    command->mutable_output()->set_zenz_live_correction_pending(false);
+    command->mutable_output()->set_zenz_live_correction_debug(
+        std::string(kReason));
+    return true;
+  }
+  if (orthography_safe_value != zenz_value) {
+    ZenzDebugOutput(absl::StrCat(
+        "[zenz] restored Zenz-only ASCII token changes ",
+        ZenzRedactedTextStats("value", orthography_safe_value),
+        " context_class=", context_class));
+    zenz_value = std::move(orthography_safe_value);
   }
 
   const ZenzTextPrivacyDecision key_privacy =
@@ -11028,6 +11250,24 @@ bool Session::CanDirectCommitAfterPunctuation(
       Util::Utf8SubString(preedit, length - 1, 1);
   if (last_char.empty()) {
     return false;
+  }
+
+  const std::string last_char_string(last_char);
+  char32_t last_codepoint = 0;
+  Util::SplitFirstChar32(last_char_string, &last_codepoint, nullptr);
+  if (length >= 2 &&
+      (last_codepoint == U'.' || last_codepoint == U'．' ||
+       last_codepoint == U'。' || last_codepoint == U'｡' ||
+       last_codepoint == U',' || last_codepoint == U'，' ||
+       last_codepoint == U'、' || last_codepoint == U'､')) {
+    const std::string previous_char(Util::Utf8SubString(
+        preedit, length - 2, 1));
+    char32_t previous_codepoint = 0;
+    if (Util::SplitFirstChar32(previous_char, &previous_codepoint, nullptr) &&
+        ((U'0' <= previous_codepoint && previous_codepoint <= U'9') ||
+         (U'０' <= previous_codepoint && previous_codepoint <= U'９'))) {
+      return false;
+    }
   }
 
   return IsValidDirectCommitChar(config, last_char);

@@ -164,6 +164,75 @@ bool ContainsAnySymbolStyleVariant(absl::string_view text,
   return false;
 }
 
+bool IsTrailingSentencePunctuation(char32_t cp) {
+  switch (cp) {
+    case U'!':
+    case U'！':
+    case U'?':
+    case U'？':
+    case U'.':
+    case U'．':
+    case U'。':
+    case U',':
+    case U'，':
+    case U'、':
+    case U':':
+    case U'：':
+    case U';':
+    case U'；':
+    case U'…':
+    case U'⋯':
+      return true;
+    default:
+      return false;
+  }
+}
+
+absl::string_view GetTrailingSentencePunctuation(absl::string_view text) {
+  size_t suffix_begin = text.size();
+  while (suffix_begin > 0) {
+    size_t char_begin = suffix_begin - 1;
+    while (char_begin > 0 &&
+           (static_cast<unsigned char>(text[char_begin]) & 0xC0) == 0x80) {
+      --char_begin;
+    }
+    size_t next = char_begin;
+    char32_t cp = 0;
+    if (!DecodeOneUtf8(text, &next, &cp) || next != suffix_begin ||
+        !IsTrailingSentencePunctuation(cp)) {
+      break;
+    }
+    suffix_begin = char_begin;
+  }
+  return text.substr(suffix_begin);
+}
+
+bool HasLongLeftContextEcho(const ZenzValidationInput& input) {
+  constexpr size_t kMinimumEchoChars = 8;
+  if (input.left_context.empty() || input.mozc_value.empty() ||
+      !Util::IsValidUtf8(input.left_context)) {
+    return false;
+  }
+
+  const size_t context_chars = Util::CharsLen(input.left_context);
+  const size_t value_chars = Util::CharsLen(input.zenz_value);
+  const size_t max_overlap = std::min(context_chars, value_chars);
+  if (max_overlap < kMinimumEchoChars) {
+    return false;
+  }
+
+  for (size_t overlap = max_overlap; overlap >= kMinimumEchoChars; --overlap) {
+    const std::string context_suffix(Util::Utf8SubString(
+        input.left_context, context_chars - overlap, overlap));
+    if (absl::StartsWith(input.zenz_value, context_suffix)) {
+      // Repeated text is legitimate when it also begins Mozc's current
+      // conversion. Otherwise this is a copied context suffix.
+      return !absl::StartsWith(input.mozc_value, context_suffix);
+    }
+  }
+  return false;
+}
+
 std::string RestoreSymbolGroupStyle(
     absl::string_view style_source,
     absl::string_view zenz_value,
@@ -362,6 +431,22 @@ std::string ZenzOutputValidator::RestoreUserVisibleSymbolStyle(
   return restored;
 }
 
+std::string ZenzOutputValidator::RestoreTrailingUserPunctuation(
+    absl::string_view key, absl::string_view mozc_value,
+    absl::string_view zenz_value) {
+  absl::string_view source_suffix = GetTrailingSentencePunctuation(key);
+  if (source_suffix.empty()) {
+    source_suffix = GetTrailingSentencePunctuation(mozc_value);
+  }
+
+  const absl::string_view zenz_body =
+      zenz_value.substr(0, zenz_value.size() -
+                               GetTrailingSentencePunctuation(zenz_value).size());
+  std::string restored(zenz_body);
+  restored.append(source_suffix);
+  return restored;
+}
+
 bool ZenzOutputValidator::ContainsSpecialToken(absl::string_view text) {
   if (absl::StrContains(text, "<s>") ||
       absl::StrContains(text, "</s>") ||
@@ -443,6 +528,10 @@ ZenzValidationResult ZenzOutputValidator::Validate(
 
   if (!Util::IsValidUtf8(input.zenz_value)) {
     return Reject("invalid_utf8");
+  }
+
+  if (HasLongLeftContextEcho(input)) {
+    return Reject("left_context_echo");
   }
 
   const size_t key_len = Util::CharsLen(input.key);
