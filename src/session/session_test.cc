@@ -1219,7 +1219,7 @@ TEST_F(SessionTest, KeymapCommandSequenceCommitAndImeOffFromConversion) {
 
 #if defined(_WIN32)
 
-TEST_F(SessionTest, ImeOffCommitsVisibleZenzLiveCorrection) {
+TEST_F(SessionTest, ImeOffKeymapCommitsVisibleZenzLiveCorrection) {
   MockEngine engine;
   std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
 
@@ -1227,6 +1227,10 @@ TEST_F(SessionTest, ImeOffCommitsVisibleZenzLiveCorrection) {
   ASSERT_TRUE(profile.ok());
 
   Session session(engine);
+  SetCustomKeymapForSession(
+      "status\tkey\tcommand\n"
+      "Conversion\tCtrl Enter\tIMEOff\n",
+      &session);
   SessionTestPeer session_peer(session);
 
   config::Config config;
@@ -1267,7 +1271,7 @@ TEST_F(SessionTest, ImeOffCommitsVisibleZenzLiveCorrection) {
   EXPECT_PREEDIT("愛上尾", command);
 
   command.Clear();
-  ASSERT_TRUE(session.IMEOff(&command));
+  ASSERT_TRUE(SendKey("Ctrl Enter", &session, &command));
 
   EXPECT_TRUE(command.output().consumed());
   EXPECT_RESULT_AND_KEY("愛上尾", "あいうえお", command);
@@ -1377,6 +1381,159 @@ TEST_F(SessionTest, ZenzLatinTransliterationRestoresOnlyTheTokenSpan) {
   EXPECT_EQ(peer.zenz_live_value_(), "ジャズが天敵です")
       << command.output().zenz_live_correction_debug();
   EXPECT_PREEDIT("ジャズが天敵です", command);
+}
+
+TEST_F(SessionTest, ZenzUnicodeAlphabetRunRemovedFromMozcIsRestored) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  auto append_segment = [](Segments* segments, absl::string_view surface,
+                           absl::string_view reading) {
+    Segment* segment = segments->add_segment();
+    segment->set_key(std::string(surface));
+    segment->add_candidate()->value = std::string(reading);
+  };
+  EXPECT_CALL(*converter, StartReverseConversion(_, _))
+      .WillRepeatedly(Invoke([&](Segments* reverse, absl::string_view source) {
+        Segments result;
+        if (source == "Ｊａｚｚ") {
+          append_segment(&result, "Ｊａｚｚ", "じゃず");
+        } else if (source == "Ｊａｚｚが点滴です") {
+          append_segment(&result, "Ｊａｚｚ", "じゃず");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "点滴", "てんてき");
+          append_segment(&result, "です", "です");
+        } else if (source == "Ｊａｚｚが天敵です") {
+          append_segment(&result, "Ｊａｚｚ", "じゃず");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "天敵", "てんてき");
+          append_segment(&result, "です", "です");
+        } else if (source == "ジャズが天敵です") {
+          append_segment(&result, "ジャズ", "じゃず");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "天敵", "てんてき");
+          append_segment(&result, "です", "です");
+        } else {
+          return false;
+        }
+        *reverse = result;
+        return true;
+      }));
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_synthetic_candidate(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+
+  constexpr absl::string_view kKey = "じゃずがてんてきです";
+  constexpr absl::string_view kMozcValue = "Ｊａｚｚが点滴です";
+  peer.context_()->set_state(ImeContext::CONVERSION);
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = std::string(kKey);
+  peer.live_conversion_preedit_() = std::string(kKey);
+  peer.live_conversion_value_() = std::string(kMozcValue);
+
+  auto& pending = peer.pending_zenz_live_();
+  pending.generation = 1;
+  pending.key = std::string(kKey);
+  pending.mozc_value = std::string(kMozcValue);
+  pending.symbol_style_source = std::string(kKey);
+  pending.pending = true;
+  pending.from_live_conversion = true;
+
+  ZenzLiveResponse response;
+  response.generation = 1;
+  response.key = std::string(kKey);
+  response.value = "ジャズが天敵です";
+  response.ok = true;
+
+  commands::Command command;
+  ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+  EXPECT_EQ(peer.zenz_live_value_(), "Ｊａｚｚが天敵です")
+      << command.output().zenz_live_correction_debug();
+  EXPECT_PREEDIT("Ｊａｚｚが天敵です", command);
+}
+
+TEST_F(SessionTest, ZenzDigitPrefixedTechnicalTokenUsesWholeReadingForRepair) {
+  MockEngine engine;
+  std::shared_ptr<MockConverter> converter = CreateEngineConverterMock(&engine);
+
+  auto append_segment = [](Segments* segments, absl::string_view surface,
+                           absl::string_view reading) {
+    Segment* segment = segments->add_segment();
+    segment->set_key(std::string(surface));
+    segment->add_candidate()->value = std::string(reading);
+  };
+  EXPECT_CALL(*converter, StartReverseConversion(_, _))
+      .WillRepeatedly(Invoke([&](Segments* reverse, absl::string_view source) {
+        Segments result;
+        if (source == "5G") {
+          append_segment(&result, "5G", "ごじー");
+        } else if (source == "G") {
+          // The old extractor started at the letter and lost the leading 5.
+          append_segment(&result, "G", "じー");
+        } else if (source == "ごじーが好きです") {
+          append_segment(&result, "ごじー", "ごじー");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "好き", "すき");
+          append_segment(&result, "です", "です");
+        } else if (source == "5Gが好きです") {
+          append_segment(&result, "5G", "ごじー");
+          append_segment(&result, "が", "が");
+          append_segment(&result, "好き", "すき");
+          append_segment(&result, "です", "です");
+        } else {
+          return false;
+        }
+        *reverse = result;
+        return true;
+      }));
+
+  Session session(engine);
+  SessionTestPeer peer(session);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(true);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_synthetic_candidate(true);
+  config.set_zenz_live_correction_min_key_length(2);
+  session.SetConfig(config);
+
+  constexpr absl::string_view kKey = "ごじーがすきです";
+  constexpr absl::string_view kMozcValue = "ごじーが好きです";
+  peer.context_()->set_state(ImeContext::CONVERSION);
+  peer.live_conversion_active_() = true;
+  peer.live_conversion_key_() = std::string(kKey);
+  peer.live_conversion_preedit_() = std::string(kKey);
+  peer.live_conversion_value_() = std::string(kMozcValue);
+
+  auto& pending = peer.pending_zenz_live_();
+  pending.generation = 1;
+  pending.key = std::string(kKey);
+  pending.mozc_value = std::string(kMozcValue);
+  pending.symbol_style_source = std::string(kKey);
+  pending.pending = true;
+  pending.from_live_conversion = true;
+
+  ZenzLiveResponse response;
+  response.generation = 1;
+  response.key = std::string(kKey);
+  response.value = "5Gが好きです";
+  response.ok = true;
+
+  commands::Command command;
+  ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+  EXPECT_TRUE(command.output().zenz_live_correction_applied())
+      << command.output().zenz_live_correction_debug();
+  EXPECT_EQ(peer.zenz_live_value_(), kMozcValue);
+  EXPECT_PREEDIT(kMozcValue, command);
 }
 
 TEST_F(SessionTest, PendingZenzFeedbackIsDiscardedByBackspace) {

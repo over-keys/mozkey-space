@@ -100,15 +100,62 @@ TEST(ZenzOutputValidatorTest, RestoreTrailingUserPunctuation) {
   EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
                 "今日雨", "今日は雨", "今日は雨。"),
             "今日は雨");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "今日は雨", "今日は雨", "今日は雨~"),
+            "今日は雨");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "今日は雨", "今日は雨", "今日は雨～"),
+            "今日は雨");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "今日は雨", "今日は雨", "今日は雨〜"),
+            "今日は雨");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "今日は雨", "今日は雨", "今日は雨‥"),
+            "今日は雨");
+  EXPECT_EQ(ZenzOutputValidator::RestoreTrailingUserPunctuation(
+                "今日は雨〜", "今日は雨〜", "今日は雨"),
+            "今日は雨〜");
 }
 
 TEST(ZenzOutputValidatorTest, RejectsLongLeftContextEcho) {
   ZenzOutputValidator validator;
   ZenzValidationInput input;
-  input.key = "きょうはあめがふっています";
-  input.mozc_value = "今日は雨が降っています";
+  input.key = "あめがふ";
+  input.mozc_value = "雨が降る";
   input.zenz_value = "彼は図書館で本を読んでいました。今日は雨";
   input.left_context = "昨日、彼は図書館で本を読んでいました";
+  input.min_key_length = 4;
+  EXPECT_EQ(validator.Validate(input).reason, "left_context_echo");
+}
+
+TEST(ZenzOutputValidatorTest,
+     RejectsFourToSevenCharacterContextEchoWhenOutputIsLongEnough) {
+  ZenzOutputValidator validator;
+  for (size_t echo_chars = 4; echo_chars <= 7; ++echo_chars) {
+    SCOPED_TRACE(echo_chars);
+    std::string echo;
+    for (size_t i = 0; i < echo_chars; ++i) {
+      echo.append("あ");
+    }
+
+    ZenzValidationInput input;
+    input.key = "きょうは";
+    input.mozc_value = "今日です";
+    input.zenz_value = echo + "なにぬね";
+    input.left_context = echo;
+    input.min_key_length = 4;
+    EXPECT_EQ(validator.Validate(input).reason, "left_context_echo");
+  }
+}
+
+TEST(ZenzOutputValidatorTest, RejectsObservedShortContextEcho) {
+  ZenzOutputValidator validator;
+  ZenzValidationInput input;
+  input.key = "きょうは";
+  input.mozc_value = "今日です";
+  input.zenz_value = "同じ試験をもう一度見ます";
+  input.left_context = "前回は同じ試験を";
+  input.min_key_length = 4;
   EXPECT_EQ(validator.Validate(input).reason, "left_context_echo");
 }
 
@@ -129,6 +176,17 @@ TEST(ZenzOutputValidatorTest, IgnoresShortLeftContextOverlap) {
   input.mozc_value = "東京では雨";
   input.zenz_value = "では雨が続いています";
   input.left_context = "東京では雨";
+  EXPECT_TRUE(validator.Validate(input).accept);
+}
+
+TEST(ZenzOutputValidatorTest, AcceptsShortRepeatedCurrentReading) {
+  ZenzOutputValidator validator;
+  ZenzValidationInput input;
+  input.key = "おなじしけんを";
+  input.mozc_value = "同じ試験";
+  input.zenz_value = "同じ試験を";
+  input.left_context = "前回は同じ試験を";
+  input.min_key_length = 4;
   EXPECT_TRUE(validator.Validate(input).accept);
 }
 

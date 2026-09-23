@@ -401,6 +401,7 @@ class Session {
   void HandlePendingDirectCommitLearningForSessionCommand(
       commands::SessionCommand::CommandType);
 
+  bool HasDeferredZenzLivePresentation() const;
   bool HasVisibleZenzLiveCorrection() const;
   void SetPendingZenzFeedbackAccepted(absl::string_view,absl::string_view,
                                       absl::string_view);

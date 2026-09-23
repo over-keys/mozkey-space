@@ -1816,9 +1816,13 @@ struct AsciiTechnicalToken {
   size_t byte_end = 0;
 };
 
-bool IsAsciiLetterOrDigit(unsigned char c) {
-  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
-         ('0' <= c && c <= '9');
+bool IsAsciiLetter(unsigned char c) {
+  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z');
+}
+
+bool IsAsciiTechnicalTokenChar(unsigned char c) {
+  return IsAsciiLetter(c) || ('0' <= c && c <= '9') || c == '_' ||
+         c == '-' || c == '.' || c == '+' || c == '#' || c == '/';
 }
 
 std::vector<AsciiTechnicalToken> ExtractAsciiTechnicalTokens(
@@ -1827,32 +1831,27 @@ std::vector<AsciiTechnicalToken> ExtractAsciiTechnicalTokens(
   size_t index = 0;
   while (index < text.size()) {
     const unsigned char c = static_cast<unsigned char>(text[index]);
-    if (!((('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')))) {
+    if (!IsAsciiTechnicalTokenChar(c)) {
       ++index;
       continue;
     }
 
-    const size_t begin = index++;
-    while (index < text.size()) {
+    const size_t begin = index;
+    bool has_ascii_letter = false;
+    while (index < text.size() &&
+           IsAsciiTechnicalTokenChar(
+               static_cast<unsigned char>(text[index]))) {
       const unsigned char next = static_cast<unsigned char>(text[index]);
-      if (IsAsciiLetterOrDigit(next)) {
-        ++index;
-        continue;
-      }
-      if ((next == '+' || next == '#') && index > begin) {
-        ++index;
-        continue;
-      }
-      if ((next == '-' || next == '_' || next == '.' || next == '/') &&
-          index > begin && index + 1 < text.size() &&
-          IsAsciiLetterOrDigit(static_cast<unsigned char>(text[index + 1]))) {
-        ++index;
-        continue;
-      }
-      break;
+      has_ascii_letter = has_ascii_letter || IsAsciiLetter(next);
+      ++index;
     }
-    tokens.push_back({std::string(text.substr(begin, index - begin)), begin,
-                      index});
+    // Pure numbers are not technical orthography tokens. Keep any run that
+    // contains a letter intact so forms such as 5G, GPT-5, and HTTP/2 compare
+    // as single tokens.
+    if (has_ascii_letter) {
+      tokens.push_back({std::string(text.substr(begin, index - begin)), begin,
+                        index});
+    }
   }
   return tokens;
 }
@@ -1972,6 +1971,209 @@ bool RepairZenzOnlyAsciiTokens(
       return false;
     }
     replacements.push_back({surface_begin, surface_end, token});
+  }
+
+  std::sort(replacements.begin(), replacements.end(),
+            [](const ZenzOrthographyReplacement& lhs,
+               const ZenzOrthographyReplacement& rhs) {
+              return lhs.byte_begin < rhs.byte_begin;
+            });
+  for (size_t i = 1; i < replacements.size(); ++i) {
+    if (replacements[i].byte_begin < replacements[i - 1].byte_end) {
+      return false;
+    }
+  }
+  for (auto it = replacements.rbegin(); it != replacements.rend(); ++it) {
+    if (it->byte_end > repaired_value->size()) {
+      return false;
+    }
+    repaired_value->replace(it->byte_begin, it->byte_end - it->byte_begin,
+                            it->value);
+  }
+  return true;
+}
+
+struct AlphabetRun {
+  std::string value;
+  size_t byte_begin = 0;
+  size_t byte_end = 0;
+};
+
+std::vector<AlphabetRun> ExtractAlphabetRuns(absl::string_view text) {
+  std::vector<AlphabetRun> runs;
+  std::string current;
+  size_t byte_offset = 0;
+  size_t current_begin = 0;
+
+  auto flush = [&]() {
+    if (!current.empty()) {
+      runs.push_back({std::move(current), current_begin, byte_offset});
+      current.clear();
+    }
+  };
+
+  for (ConstChar32Iterator iter(text); !iter.Done(); iter.Next()) {
+    const char32_t codepoint = iter.Get();
+    const std::string encoded = Util::CodepointToUtf8(codepoint);
+    if (Util::GetScriptType(codepoint) == Util::ALPHABET) {
+      if (current.empty()) {
+        current_begin = byte_offset;
+      }
+      current.append(encoded);
+    } else {
+      flush();
+    }
+    byte_offset += encoded.size();
+  }
+  flush();
+  return runs;
+}
+
+// Restore changed Unicode alphabet runs to the Mozc surface at the same
+// uniquely aligned reading. This runs before Local preferences are applied,
+// so a learned Local spelling can still take precedence afterward.
+bool RepairZenzOnlyAlphabetRuns(
+    engine::EngineConverterInterface& converter, absl::string_view key,
+    absl::string_view mozc_value, absl::string_view zenz_value,
+    std::string* repaired_value) {
+  if (repaired_value == nullptr) {
+    return false;
+  }
+  *repaired_value = std::string(zenz_value);
+
+  const std::vector<AlphabetRun> mozc_runs = ExtractAlphabetRuns(mozc_value);
+  const std::vector<AlphabetRun> zenz_runs = ExtractAlphabetRuns(zenz_value);
+  std::vector<bool> matched_mozc(mozc_runs.size(), false);
+  std::vector<bool> matched_zenz(zenz_runs.size(), false);
+  for (size_t zenz_index = 0; zenz_index < zenz_runs.size(); ++zenz_index) {
+    for (size_t mozc_index = 0; mozc_index < mozc_runs.size(); ++mozc_index) {
+      if (!matched_mozc[mozc_index] &&
+          zenz_runs[zenz_index].value == mozc_runs[mozc_index].value) {
+        matched_mozc[mozc_index] = true;
+        matched_zenz[zenz_index] = true;
+        break;
+      }
+    }
+  }
+
+  std::vector<size_t> changed_mozc;
+  std::vector<size_t> changed_zenz;
+  for (size_t i = 0; i < mozc_runs.size(); ++i) {
+    if (!matched_mozc[i]) {
+      changed_mozc.push_back(i);
+    }
+  }
+  for (size_t i = 0; i < zenz_runs.size(); ++i) {
+    if (!matched_zenz[i]) {
+      changed_zenz.push_back(i);
+    }
+  }
+  if (changed_mozc.empty() && changed_zenz.empty()) {
+    return true;
+  }
+
+  std::vector<std::pair<size_t, size_t>> mozc_reading_ranges(mozc_runs.size());
+  std::vector<std::pair<size_t, size_t>> zenz_reading_ranges(zenz_runs.size());
+  for (const size_t i : changed_mozc) {
+    if (!FindUniqueReadingRangeForToken(converter, mozc_runs[i].value, key,
+                                        &mozc_reading_ranges[i].first,
+                                        &mozc_reading_ranges[i].second)) {
+      return false;
+    }
+  }
+  for (const size_t i : changed_zenz) {
+    if (!FindUniqueReadingRangeForToken(converter, zenz_runs[i].value, key,
+                                        &zenz_reading_ranges[i].first,
+                                        &zenz_reading_ranges[i].second)) {
+      return false;
+    }
+  }
+
+  std::vector<size_t> paired_mozc(zenz_runs.size(), mozc_runs.size());
+  for (const size_t zenz_index : changed_zenz) {
+    for (const size_t mozc_index : changed_mozc) {
+      if (paired_mozc[zenz_index] == mozc_runs.size() &&
+          !matched_mozc[mozc_index] &&
+          mozc_reading_ranges[mozc_index] ==
+              zenz_reading_ranges[zenz_index]) {
+        paired_mozc[zenz_index] = mozc_index;
+        matched_mozc[mozc_index] = true;
+        break;
+      }
+    }
+  }
+
+  const bool has_unpaired_mozc_run = std::any_of(
+      changed_mozc.begin(), changed_mozc.end(), [&](size_t mozc_index) {
+        return !matched_mozc[mozc_index];
+      });
+  const bool has_unpaired_zenz_run = std::any_of(
+      changed_zenz.begin(), changed_zenz.end(), [&](size_t zenz_index) {
+        return paired_mozc[zenz_index] == mozc_runs.size();
+      });
+  // If both sides have unrelated unmatched words, their alignment cannot tell
+  // us whether the surface was substituted or moved. Keep the entire Mozc
+  // result instead of applying two speculative local edits.
+  if (has_unpaired_mozc_run && has_unpaired_zenz_run) {
+    return false;
+  }
+
+  std::vector<engine::ReadingSurfaceAlignmentSegment> mozc_alignment;
+  std::vector<engine::ReadingSurfaceAlignmentSegment> zenz_alignment;
+  bool need_mozc_alignment = false;
+  bool need_zenz_alignment = false;
+  for (const size_t zenz_index : changed_zenz) {
+    need_mozc_alignment =
+        need_mozc_alignment || paired_mozc[zenz_index] == mozc_runs.size();
+  }
+  for (const size_t mozc_index : changed_mozc) {
+    need_zenz_alignment = need_zenz_alignment || !matched_mozc[mozc_index];
+  }
+  if ((need_mozc_alignment &&
+       !converter.GetUniqueReadingSurfaceAlignment(mozc_value, key,
+                                                   &mozc_alignment)) ||
+      (need_zenz_alignment &&
+       !converter.GetUniqueReadingSurfaceAlignment(zenz_value, key,
+                                                   &zenz_alignment))) {
+    return false;
+  }
+
+  std::vector<ZenzOrthographyReplacement> replacements;
+  replacements.reserve(changed_mozc.size() + changed_zenz.size());
+  for (const size_t zenz_index : changed_zenz) {
+    const AlphabetRun& zenz_run = zenz_runs[zenz_index];
+    const size_t mozc_index = paired_mozc[zenz_index];
+    if (mozc_index != mozc_runs.size()) {
+      replacements.push_back({zenz_run.byte_begin, zenz_run.byte_end,
+                              mozc_runs[mozc_index].value});
+      continue;
+    }
+
+    std::string mozc_surface;
+    const auto [reading_begin, reading_end] = zenz_reading_ranges[zenz_index];
+    if (!ExtractSurfaceForReadingRange(mozc_alignment, reading_begin,
+                                       reading_end, &mozc_surface)) {
+      return false;
+    }
+    replacements.push_back(
+        {zenz_run.byte_begin, zenz_run.byte_end, std::move(mozc_surface)});
+  }
+  for (const size_t mozc_index : changed_mozc) {
+    if (matched_mozc[mozc_index]) {
+      continue;
+    }
+
+    std::string zenz_surface;
+    size_t surface_begin = 0;
+    size_t surface_end = 0;
+    const auto [reading_begin, reading_end] = mozc_reading_ranges[mozc_index];
+    if (!ExtractSurfaceForReadingRange(zenz_alignment, reading_begin,
+                                       reading_end, &zenz_surface,
+                                       &surface_begin, &surface_end)) {
+      return false;
+    }
+    replacements.push_back({surface_begin, surface_end,
+                            mozc_runs[mozc_index].value});
   }
 
   std::sort(replacements.begin(), replacements.end(),
@@ -4900,6 +5102,15 @@ bool Session::SendKeyConversionState(commands::Command* command) {
 
   const commands::KeyEvent& input_key = command->input().key();
 
+  // IME-off commits the current user-visible presentation before switching to
+  // direct input. Do not let the generic conversion-command path clear a
+  // deferred or visible Zenz presentation first.
+  if (key_command == keymap::ConversionState::IME_OFF &&
+      (HasDeferredZenzLivePresentation() ||
+       HasVisibleZenzLiveCorrection())) {
+    return ExecuteCommandSequence(command_sequence, command);
+  }
+
   ZenzDebugOutput(absl::StrCat(
       "[zenz-feedback] SendKeyConversionState"
       " key_command=", static_cast<int>(key_command),
@@ -6394,6 +6605,21 @@ int Session::MaybeLearnZenzProjectedSegmentsToMozcHistory(
     return 0;
   }
   return static_cast<int>(external_segments.size());
+}
+
+bool Session::HasDeferredZenzLivePresentation() const {
+  if (!pending_zenz_live_.pending ||
+      context_->state() != ImeContext::CONVERSION) {
+    return false;
+  }
+
+  if (pending_zenz_live_.from_live_conversion) {
+    return pending_zenz_live_.defer_live_conversion_display &&
+           pending_zenz_live_.deferred_live_conversion_display.valid;
+  }
+  return pending_zenz_live_.defer_normal_conversion_display &&
+         pending_zenz_live_.deferred_normal_conversion_preedit_output
+                 .segment_size() > 0;
 }
 
 bool Session::HasVisibleZenzLiveCorrection() const {
@@ -8282,12 +8508,18 @@ bool Session::ApplyZenzLiveCorrectionResult(
     return true;
   }
 
+  std::string token_safe_value;
   std::string orthography_safe_value;
   if (!RepairZenzOnlyAsciiTokens(*context_->mutable_converter(),
                                  pending_zenz_live_.key,
                                  pending_zenz_live_.mozc_value, zenz_value,
-                                 &orthography_safe_value)) {
-    constexpr absl::string_view kReason = "ascii_token_alignment_unavailable";
+                                 &token_safe_value) ||
+      !RepairZenzOnlyAlphabetRuns(*context_->mutable_converter(),
+                                  pending_zenz_live_.key,
+                                  pending_zenz_live_.mozc_value,
+                                  token_safe_value,
+                                  &orthography_safe_value)) {
+    constexpr absl::string_view kReason = "orthography_alignment_unavailable";
     ZenzDebugOutput(absl::StrCat(
         "[zenz] adoption rejected reason=", kReason, " ",
         ZenzRedactedTextStats("value", zenz_value), " ",
@@ -8312,7 +8544,7 @@ bool Session::ApplyZenzLiveCorrectionResult(
   }
   if (orthography_safe_value != zenz_value) {
     ZenzDebugOutput(absl::StrCat(
-        "[zenz] restored Zenz-only ASCII token changes ",
+        "[zenz] restored Zenz-only orthography changes ",
         ZenzRedactedTextStats("value", orthography_safe_value),
         " context_class=", context_class));
     zenz_value = std::move(orthography_safe_value);

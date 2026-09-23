@@ -180,7 +180,11 @@ bool IsTrailingSentencePunctuation(char32_t cp) {
     case U'：':
     case U';':
     case U'；':
+    case U'~':
+    case U'～':
+    case U'〜':
     case U'…':
+    case U'‥':
     case U'⋯':
       return true;
     default:
@@ -207,30 +211,47 @@ absl::string_view GetTrailingSentencePunctuation(absl::string_view text) {
   return text.substr(suffix_begin);
 }
 
-bool HasLongLeftContextEcho(const ZenzValidationInput& input) {
-  constexpr size_t kMinimumEchoChars = 8;
-  if (input.left_context.empty() || input.mozc_value.empty() ||
-      !Util::IsValidUtf8(input.left_context)) {
-    return false;
+size_t LongestLeftContextSuffixPrefixChars(absl::string_view left_context,
+                                           absl::string_view value) {
+  if (left_context.empty() || value.empty() ||
+      !Util::IsValidUtf8(left_context)) {
+    return 0;
   }
 
-  const size_t context_chars = Util::CharsLen(input.left_context);
-  const size_t value_chars = Util::CharsLen(input.zenz_value);
+  const size_t context_chars = Util::CharsLen(left_context);
+  const size_t value_chars = Util::CharsLen(value);
   const size_t max_overlap = std::min(context_chars, value_chars);
-  if (max_overlap < kMinimumEchoChars) {
-    return false;
-  }
-
-  for (size_t overlap = max_overlap; overlap >= kMinimumEchoChars; --overlap) {
+  for (size_t overlap = max_overlap; overlap > 0; --overlap) {
     const std::string context_suffix(Util::Utf8SubString(
-        input.left_context, context_chars - overlap, overlap));
-    if (absl::StartsWith(input.zenz_value, context_suffix)) {
-      // Repeated text is legitimate when it also begins Mozc's current
-      // conversion. Otherwise this is a copied context suffix.
-      return !absl::StartsWith(input.mozc_value, context_suffix);
+        left_context, context_chars - overlap, overlap));
+    if (absl::StartsWith(value, context_suffix)) {
+      return overlap;
     }
   }
-  return false;
+  return 0;
+}
+
+bool HasLongLeftContextEcho(const ZenzValidationInput& input, size_t key_len,
+                            size_t value_len) {
+  // Four characters catch observed short context echoes such as "同じ試験を"
+  // while the length guard below avoids rejecting incidental short overlaps.
+  constexpr size_t kMinimumEchoChars = 4;
+  const size_t echo_len = LongestLeftContextSuffixPrefixChars(
+      input.left_context, input.zenz_value);
+  if (echo_len < kMinimumEchoChars) {
+    return false;
+  }
+
+  const size_t baseline_len = std::max<size_t>(
+      1, std::max(key_len, Util::CharsLen(input.mozc_value)));
+
+  // A context prefix much longer than the current composition is strong echo
+  // evidence on its own. Otherwise require enough output after the copied
+  // prefix to contain a composition-sized result as well.
+  if (echo_len >= baseline_len * 2 + 1) {
+    return true;
+  }
+  return value_len >= echo_len + baseline_len;
 }
 
 std::string RestoreSymbolGroupStyle(
@@ -530,15 +551,15 @@ ZenzValidationResult ZenzOutputValidator::Validate(
     return Reject("invalid_utf8");
   }
 
-  if (HasLongLeftContextEcho(input)) {
-    return Reject("left_context_echo");
-  }
-
   const size_t key_len = Util::CharsLen(input.key);
   const size_t value_len = Util::CharsLen(input.zenz_value);
 
   if (value_len == 0) {
     return Reject("zero_value_len");
+  }
+
+  if (HasLongLeftContextEcho(input, key_len, value_len)) {
+    return Reject("left_context_echo");
   }
 
   // Conservative length guard. Japanese conversion can shrink/expand, but not
