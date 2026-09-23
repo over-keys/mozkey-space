@@ -94,6 +94,61 @@ if ($dialogTableRows.Count -ne 0) {
   throw "Unexpected MSI Dialog table found; the original installer UI must remain unchanged"
 }
 
+# Mozkey can ship new code without changing the upstream Mozc file version.
+# These files must be removed before InstallFiles so a major upgrade cannot
+# retain binaries from the older product that shares the same component IDs.
+$files = @(Get-Records(
+  'SELECT `FileName`, `Component_` FROM `File`'
+))
+$removeFiles = @(Get-Records(
+  'SELECT `FileName`, `Component_`, `InstallMode` FROM `RemoveFile`'
+))
+$requiredRuntimeFiles = @(
+  "mozc_server.exe",
+  "mozc_cache_service.exe",
+  "mozc_tip32.dll",
+  "mozc_tip64.dll",
+  "mozc_broker.exe",
+  "mozc_renderer.exe",
+  "mozc_tool.exe",
+  "mozc_zenz_scorer.exe",
+  "llama-server.exe",
+  "Qt6Core.dll",
+  "Qt6Gui.dll",
+  "Qt6Widgets.dll",
+  "qwindows.dll"
+)
+$optionalRuntimeFiles = @(
+  "mozc_tip64arm.dll",
+  "mozc_tip64x.dll"
+)
+
+function Get-LongFileName([string]$fileName) {
+  $parts = $fileName.Split('|')
+  return $parts[$parts.Length - 1]
+}
+
+foreach ($runtimeFile in $requiredRuntimeFiles + $optionalRuntimeFiles) {
+  $fileRows = @($files | Where-Object {
+      (Get-LongFileName $_.StringData(1)) -ieq $runtimeFile
+    })
+  if ($runtimeFile -in $optionalRuntimeFiles -and $fileRows.Count -eq 0) {
+    continue
+  }
+  if ($fileRows.Count -ne 1) {
+    throw "Expected exactly one packaged runtime file '$runtimeFile', found $($fileRows.Count)"
+  }
+
+  $component = $fileRows[0].StringData(2)
+  $removeRows = @($removeFiles | Where-Object {
+      (Get-LongFileName $_.StringData(1)) -ieq $runtimeFile -and
+      $_.StringData(2) -eq $component
+    })
+  if ($removeRows.Count -ne 1 -or $removeRows[0].IntegerData(3) -ne 1) {
+    throw "Runtime file '$runtimeFile' is not removed on install in component '$component'"
+  }
+}
+
 Write-Host "Verified interactive MSI completion dialogs:"
 Write-Host "  action    = $actionName"
 Write-Host "  type      = $actionType"
@@ -102,3 +157,4 @@ Write-Host "  target    = $actionTarget"
 Write-Host "  sequence  = $($sequence.StringData(1))"
 Write-Host "  condition = $sequenceCondition"
 Write-Host "  ui        = original MSI UI (no Dialog table)"
+Write-Host "  upgrades  = Mozkey runtime files replaced even when Mozc file versions stay unchanged"
