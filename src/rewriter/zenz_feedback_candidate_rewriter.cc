@@ -272,6 +272,15 @@ bool ZenzFeedbackCandidateRewriter::Rewrite(
       continue;
     }
 
+    // Ranking checked the persisted spelling. Punctuation repair can produce
+    // a different spelling whose rejection policy must still be respected.
+    if (repaired_value != feedback_candidate.value &&
+        store.Decide(full_key, kContextClass, zenz_value,
+                     GetZenzFeedbackAutoBlockPolicy(request.config())).action ==
+            session::ZenzFeedbackAction::kReject) {
+      continue;
+    }
+
     if (zenz_value == original_top_value) {
       // Candidates are ordered by feedback strength. The strongest applicable
       // choice is already first; do not promote a weaker alternative over it.

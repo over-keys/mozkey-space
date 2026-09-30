@@ -375,6 +375,7 @@ mozc_cc_test(
         ":keymap",
         ":session",
         "//base:vlog",
+        "//base/file:temp_dir",
         "//base/strings:assign",
         "//base/strings:unicode",
         "//composer",

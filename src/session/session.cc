@@ -2590,7 +2590,8 @@ struct ZenzLocalRepairResult {
 };
 
 ZenzLocalRepairResult ApplyLocalPreferenceRepairs(
-    const ZenzFeedbackStore& store, absl::string_view full_key,
+    const ZenzFeedbackStore& store,
+    engine::EngineConverterInterface& converter, absl::string_view full_key,
     absl::string_view context_class, absl::string_view mozc_value,
     absl::string_view zenz_value, int hard_repair_threshold) {
   ZenzLocalRepairResult result{std::string(zenz_value), 0, {}};
@@ -2599,6 +2600,51 @@ ZenzLocalRepairResult ApplyLocalPreferenceRepairs(
   }
 
   hard_repair_threshold = std::max(1, hard_repair_threshold);
+  if (zenz_value == mozc_value) {
+    // Without a preferred Mozc surface, text alignment cannot corroborate a
+    // rule. Accept only one active direction, anchored to whole uniquely
+    // reverse-aligned segments, and verify the replacement's reading too.
+    const std::vector<ZenzLocalPreference> mature = store.GetLocalPreferences(
+        full_key, context_class, 12, hard_repair_threshold, zenz_value);
+    if (mature.size() != 1 ||
+        CountSurfaceOccurrences(full_key, mature[0].key) != 1) {
+      return result;
+    }
+    ZenzLocalPreference applied = mature[0];
+    const size_t reading_begin = full_key.find(applied.key);
+    std::vector<engine::ReadingSurfaceAlignmentSegment> alignment;
+    std::string raw_surface;
+    size_t surface_begin = 0;
+    size_t surface_end = 0;
+    if (!converter.GetUniqueReadingSurfaceAlignment(mozc_value, full_key,
+                                                   &alignment) ||
+        !ExtractSurfaceForReadingRange(
+            alignment, reading_begin, reading_begin + applied.key.size(),
+            &raw_surface, &surface_begin, &surface_end) ||
+        raw_surface != applied.disfavored_value ||
+        !converter.IsReadingEquivalent(applied.preferred_value, applied.key)) {
+      return result;
+    }
+    applied.reading_begin = reading_begin;
+    applied.has_reading_begin = true;
+    applied.raw_zenz_span = {
+        Util::CharsLen(zenz_value.substr(0, surface_begin)),
+        Util::CharsLen(zenz_value.substr(0, surface_end)),
+        surface_begin, surface_end};
+    applied.mozc_span = applied.raw_zenz_span;
+    applied.displayed_span = applied.raw_zenz_span;
+    applied.displayed_span.byte_end =
+        surface_begin + applied.preferred_value.size();
+    applied.displayed_span.char_end =
+        applied.displayed_span.char_begin +
+        Util::CharsLen(applied.preferred_value);
+    applied.has_text_spans = true;
+    result.value.replace(surface_begin, surface_end - surface_begin,
+                         applied.preferred_value);
+    result.repaired_count = 1;
+    result.applied_preferences.push_back(std::move(applied));
+    return result;
+  }
   const std::vector<ZenzLocalPreference> mature =
       store.GetLocalPreferences(full_key, context_class, 12,
                                 hard_repair_threshold, zenz_value,
@@ -8481,9 +8527,9 @@ bool Session::ApplyZenzLiveCorrectionResult(
   const ZenzValidationResult validation =
       zenz_output_validator_.Validate(validation_input);
 
-  if (!validation.accept) {
+  const auto reject_validation = [&](absl::string_view reason) {
     ZenzDebugOutput(absl::StrCat(
-        "[zenz] validation rejected reason=", validation.reason,
+        "[zenz] validation rejected reason=", reason,
         " ", ZenzRedactedTextStats("value", zenz_value),
         " ", ZenzRedactedTextStats("mozc_value",
                                     pending_zenz_live_.mozc_value),
@@ -8504,8 +8550,14 @@ bool Session::ApplyZenzLiveCorrectionResult(
     command->mutable_output()->set_live_conversion_pending(false);
     command->mutable_output()->set_zenz_live_correction_pending(false);
     command->mutable_output()->set_zenz_live_correction_debug(
-        validation.reason);
+        std::string(reason));
     return true;
+  };
+  const bool try_same_result_local_repair =
+      !validation.accept && validation.reason == "same_as_mozc" &&
+      can_use_local_preferences;
+  if (!validation.accept && !try_same_result_local_repair) {
+    return reject_validation(validation.reason);
   }
 
   std::string token_safe_value;
@@ -8623,7 +8675,8 @@ bool Session::ApplyZenzLiveCorrectionResult(
   // accepted raw Full surface does not suppress a corroborated Local rule.
   if (can_use_local_preferences) {
     const ZenzLocalRepairResult local_repair = ApplyLocalPreferenceRepairs(
-        zenz_feedback_store_, pending_zenz_live_.key, context_class,
+        zenz_feedback_store_, *context_->mutable_converter(),
+        pending_zenz_live_.key, context_class,
         pending_zenz_live_.mozc_value, zenz_value,
         GetZenzLocalPreferenceThreshold(config));
     if (local_repair.repaired_count > 0 && local_repair.value != zenz_value) {
@@ -8643,6 +8696,17 @@ bool Session::ApplyZenzLiveCorrectionResult(
         zenz_value = local_repair.value;
         applied_local_preferences = local_repair.applied_preferences;
       }
+    }
+  }
+
+  if (try_same_result_local_repair) {
+    // Equality only delayed validation until after the Local repair.
+    // Revalidate the actual Local result, including synthetic-candidate opt-out.
+    validation_input.zenz_value = zenz_value;
+    const ZenzValidationResult repaired_validation =
+        zenz_output_validator_.Validate(validation_input);
+    if (!repaired_validation.accept) {
+      return reject_validation(repaired_validation.reason);
     }
   }
 

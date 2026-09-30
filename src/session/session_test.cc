@@ -32,6 +32,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <iterator>
 #include <memory>
@@ -46,6 +47,7 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "base/file/temp_dir.h"
 #include "base/strings/assign.h"
 #include "base/strings/unicode.h"
 #include "base/vlog.h"
@@ -313,6 +315,34 @@ void ExpectTentekiReadingEquivalent(MockConverter* converter) {
 }
 
 #endif  // defined(_WIN32)
+
+#if defined(__APPLE__) && TARGET_OS_OSX
+class ScopedZenzFeedbackMacTestProfile {
+ public:
+  ScopedZenzFeedbackMacTestProfile() {
+    if (const char* value = std::getenv("HOME")) {
+      old_home_ = value;
+      had_home_ = true;
+    }
+    ok_ = ::setenv("HOME", directory_.path().c_str(), 1) == 0;
+  }
+  ~ScopedZenzFeedbackMacTestProfile() {
+    if (!ok_) return;
+    (void)session::ZenzFeedbackStore().ClearAll();
+    if (had_home_) {
+      ::setenv("HOME", old_home_.c_str(), 1);
+    } else {
+      ::unsetenv("HOME");
+    }
+  }
+  bool ok() const { return ok_; }
+ private:
+  TempDirectory directory_ = testing::MakeTempDirectoryOrDie();
+  std::string old_home_;
+  bool had_home_ = false;
+  bool ok_ = false;
+};
+#endif
 
 void SetSendKeyCommandWithKeyString(const absl::string_view key_string,
                                     commands::Command* command) {
@@ -2320,6 +2350,129 @@ void SetPendingRejectedZenzFeedbackForTest(SessionTestPeer* session_peer) {
   session_peer->context_()->set_state(ImeContext::PRECOMPOSITION);
 }
 #endif  // defined(_WIN32)
+
+TEST_F(SessionTest, SameMozcAndZenzResultAppliesOnlyVerifiedLocalPreference) {
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
+  // The rejection cases keep the original presentation and never manufacture
+  // another observation for an automatically applied Local rule.
+  for (const std::string mode : {"accept", "immature", "ambiguous", "coarse",
+                                 "wrong_reading", "final_reading", "blocked",
+                                 "disabled", "synthetic_disabled", "no_history",
+                                 "repeat", "failed_response"}) {
+    SCOPED_TRACE(mode);
+#if defined(_WIN32)
+    ScopedUserProfileForZenzFeedbackSessionTest profile;
+#else
+    ScopedZenzFeedbackMacTestProfile profile;
+#endif
+    ASSERT_TRUE(profile.ok());
+    MockEngine engine;
+    auto converter = CreateEngineConverterMock(&engine);
+    Session session(engine);
+    SessionTestPeer peer(session);
+    InitSessionToPrecomposition(&session);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_live_conversion(true);
+    config.set_use_zenz_live_correction(true);
+    config.set_use_zenz_feedback_learning(true);
+    config.set_use_zenz_local_preference_learning(mode != "disabled");
+    config.set_use_zenz_synthetic_candidate(mode != "synthetic_disabled");
+    config.set_zenz_local_preference_threshold(2);
+    if (mode == "no_history") {
+      config.set_history_learning_level(config::Config::NO_HISTORY);
+    }
+    session.SetConfig(config);
+    for (int i = 0; i < (mode == "immature" ? 1 : 2); ++i) {
+      peer.zenz_feedback_store_().RecordLocalAccepted(
+          "りせき", "empty", "離籍", "離席");
+    }
+    if (mode == "ambiguous") {
+      for (int i = 0; i < 2; ++i) {
+        peer.zenz_feedback_store_().RecordLocalAccepted(
+            "りせき", "empty", "離籍", "離石");
+      }
+    }
+    const std::string key =
+        mode == "repeat" ? "りせきりせき" : "すみませんりせきします";
+    const std::string raw =
+        mode == "repeat" ? "離籍離籍" : "すみません離籍します";
+    const std::string preferred = "すみません離席します";
+    if (mode == "blocked") {
+      ASSERT_TRUE(peer.zenz_feedback_store_().SetManualHardReject(
+          key, "empty", preferred));
+    }
+    Segments aligned;
+    if (mode == "coarse") {
+      Segment* segment = aligned.add_segment();
+      segment->set_key(raw);
+      segment->add_candidate()->value = key;
+    } else {
+      for (const auto& [surface, reading] :
+           std::vector<std::pair<std::string, std::string>>{{"すみません", "すみません"},
+                                                         {"離籍", "りせき"}, {"します", "します"}}) {
+        Segment* segment = aligned.add_segment();
+        segment->set_key(surface);
+        segment->add_candidate()->value = reading;
+      }
+    }
+    Segments preferred_reverse;
+    Segment* segment = preferred_reverse.add_segment();
+    segment->set_key("離席");
+    segment->add_candidate()->value = mode == "wrong_reading" ? "べつ" : "りせき";
+    Segments final_reverse;
+    segment = final_reverse.add_segment();
+    segment->set_key(preferred);
+    segment->add_candidate()->value = mode == "final_reading" ? "べつ" : key;
+    ON_CALL(*converter, StartReverseConversion(_, raw))
+        .WillByDefault(DoAll(SetArgPointee<0>(aligned), Return(true)));
+    ON_CALL(*converter, StartReverseConversion(_, "離席"))
+        .WillByDefault(DoAll(SetArgPointee<0>(preferred_reverse), Return(true)));
+    ON_CALL(*converter, StartReverseConversion(_, preferred))
+        .WillByDefault(DoAll(SetArgPointee<0>(final_reverse), Return(true)));
+    peer.context_()->set_state(ImeContext::CONVERSION);
+    peer.live_conversion_active_() = true;
+    peer.live_conversion_key_() = key;
+    peer.live_conversion_preedit_() = key;
+    peer.live_conversion_value_() = raw;
+    auto& pending = peer.pending_zenz_live_();
+    pending.generation = 8;
+    pending.key = key;
+    pending.context_class = "empty";
+    pending.mozc_value = raw;
+    pending.symbol_style_source = key;
+    pending.pending = true;
+    pending.from_live_conversion = true;
+    pending.use_conversion_history = true;
+    ZenzLiveResponse response;
+    response.generation = 8;
+    response.key = key;
+    response.value = raw;
+    response.ok = mode != "failed_response";
+    commands::Command command;
+    ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+    if (mode == "accept") {
+      EXPECT_PREEDIT(preferred, command);
+      EXPECT_EQ(peer.zenz_live_raw_value_(), raw);
+      ASSERT_EQ(peer.zenz_live_applied_local_preferences_().size(), 1);
+      const auto& applied = peer.zenz_live_applied_local_preferences_()[0];
+      EXPECT_TRUE(applied.has_text_spans);
+      EXPECT_EQ(applied.mozc_span.byte_begin, std::string("すみません").size());
+      EXPECT_EQ(applied.mozc_span.byte_end, std::string("すみません離籍").size());
+      const auto active = peer.zenz_feedback_store_().GetLocalPreferences(
+          key, "empty", 12, 2);
+      ASSERT_EQ(active.size(), 1);
+      EXPECT_EQ(active[0].observation_count, 2);
+    } else {
+      EXPECT_EQ(peer.zenz_live_visible_generation_(), 0);
+      EXPECT_TRUE(peer.zenz_live_applied_local_preferences_().empty());
+    }
+    EXPECT_FALSE(peer.pending_zenz_live_().pending);
+  }
+#else
+  GTEST_SKIP() << "Persistent feedback requires a desktop platform.";
+#endif
+}
 
 TEST_F(SessionTest, LocalV4CoarseAlignmentGeneralizesMatureRuleToLongPhrase) {
 #if defined(_WIN32)

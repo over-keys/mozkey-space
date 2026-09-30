@@ -2,9 +2,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <utility>
 
+#include "base/file/temp_dir.h"
 #include "converter/attribute.h"
 #include "converter/candidate.h"
 #include "converter/segments.h"
@@ -12,6 +14,11 @@
 #include "request/conversion_request.h"
 #include "session/zenz_feedback_store.h"
 #include "testing/gunit.h"
+#include "testing/mozctest.h"
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -109,6 +116,41 @@ class ScopedUserProfileForZenzFeedbackCandidateRewriterTest {
   std::wstring old_profile_;
   std::wstring profile_dir_;
 };
+
+#elif defined(__APPLE__) && TARGET_OS_OSX
+
+class ScopedZenzFeedbackMacTestProfile {
+ public:
+  ScopedZenzFeedbackMacTestProfile() {
+    if (const char* value = std::getenv("HOME")) {
+      old_home_ = value;
+      had_home_ = true;
+    }
+    ok_ = ::setenv("HOME", directory_.path().c_str(), 1) == 0;
+  }
+  ~ScopedZenzFeedbackMacTestProfile() {
+    if (!ok_) return;
+    (void)session::ZenzFeedbackStore().ClearAll();
+    if (had_home_) {
+      ::setenv("HOME", old_home_.c_str(), 1);
+    } else {
+      ::unsetenv("HOME");
+    }
+  }
+  bool ok() const { return ok_; }
+ private:
+  TempDirectory directory_ = testing::MakeTempDirectoryOrDie();
+  std::string old_home_;
+  bool had_home_ = false;
+  bool ok_ = false;
+};
+
+using ScopedUserProfileForZenzFeedbackCandidateRewriterTest =
+    ScopedZenzFeedbackMacTestProfile;
+
+#endif
+
+#if defined(_WIN32) || (defined(__APPLE__) && TARGET_OS_OSX)
 
 void AddSegment(absl::string_view key,
                 absl::string_view value,
@@ -254,6 +296,63 @@ TEST(ZenzFeedbackCandidateRewriterTest,
   EXPECT_EQ(segment.candidate(1).value, "彼は点滴です");
   EXPECT_FALSE(segment.candidate(1).attributes &
                converter::Attribute::BEST_CANDIDATE);
+}
+
+TEST(ZenzFeedbackCandidateRewriterTest,
+     PunctuationRepairRespectsRejectionOfDisplayedSpelling) {
+  // Both candidate insertion and promotion must honor the repaired spelling's
+  // manual and automatic block, even when the saved spelling is preferred.
+  for (const bool existing_candidate : {false, true}) {
+    for (const bool manual_block : {false, true}) {
+      ScopedUserProfileForZenzFeedbackCandidateRewriterTest profile;
+      ASSERT_TRUE(profile.ok());
+      session::ZenzFeedbackStore store;
+      store.RecordAccepted("はし", "empty", "箸！");
+      if (manual_block) {
+        ASSERT_TRUE(store.SetManualHardReject("はし", "empty", "箸"));
+      } else {
+        store.RecordRejected("はし", "empty", "箸", "space_revert_zenz_to_mozc");
+      }
+      Segments segments;
+      AddSegment("はし", "橋", &segments);
+      Segment* segment = segments.mutable_conversion_segment(0);
+      segment->mutable_candidate(0)->cost = 3000;
+      if (existing_candidate) {
+        converter::Candidate* candidate = segment->add_candidate();
+        candidate->key = candidate->content_key = "はし";
+        candidate->value = candidate->content_value = "箸";
+        candidate->cost = 3100;
+      }
+      config::Config config;
+      config.set_use_zenz_feedback_learning(true);
+      config.set_use_zenz_auto_block_rejected_correction(true);
+      config.set_zenz_auto_block_reject_threshold(1);
+      const ConversionRequest base_request = CreateZenzFeedbackConversionRequest();
+      const ConversionRequest request = ConversionRequestBuilder()
+          .SetConversionRequestView(base_request)
+          .SetConfig(config).SetKey("はし").Build();
+      EXPECT_FALSE(ZenzFeedbackCandidateRewriter().Rewrite(request, &segments));
+      EXPECT_EQ(segment->candidate(0).value, "橋");
+      EXPECT_EQ(segment->candidates_size(), existing_candidate ? 2 : 1);
+      if (existing_candidate) EXPECT_EQ(segment->candidate(1).cost, 3100);
+    }
+  }
+}
+
+TEST(ZenzFeedbackCandidateRewriterTest,
+     PunctuationRepairStillInsertsUnblockedDisplayedSpelling) {
+  ScopedUserProfileForZenzFeedbackCandidateRewriterTest profile;
+  ASSERT_TRUE(profile.ok());
+  session::ZenzFeedbackStore().RecordAccepted("はし", "empty", "箸！");
+  Segments segments;
+  AddSegment("はし", "橋", &segments);
+  segments.mutable_conversion_segment(0)->mutable_candidate(0)->cost = 3000;
+  const ConversionRequest base_request = CreateZenzFeedbackConversionRequest();
+  const ConversionRequest request = ConversionRequestBuilder()
+      .SetConversionRequestView(base_request)
+      .SetKey("はし").Build();
+  EXPECT_TRUE(ZenzFeedbackCandidateRewriter().Rewrite(request, &segments));
+  EXPECT_EQ(segments.conversion_segment(0).candidate(0).value, "箸");
 }
 
 TEST(ZenzFeedbackCandidateRewriterTest,
