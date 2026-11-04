@@ -1,9 +1,11 @@
 name: Windows release candidates (x64 / ARM64, unsigned)
 
 # Audited unsigned release candidates; no signing or automatic publication.
-# Pull requests execute contract tests only; MSI builds require dispatch from main.
+# Pull requests execute contract tests only; MSI builds require dispatch from main or the 1.0.0 staging branch.
 # Universal MSI remains supported by the regular Windows CI, NOT released here.
 on:
+  push:
+    branches: ['release/1.0.0-space']
   pull_request:
     paths:
       - '.github/workflows/windows-release-candidate.yml'
@@ -39,13 +41,13 @@ jobs:
   prepare-dictionary:
     name: Prepare one verified dictionary input for both architectures
     needs: source-contract-tests
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/1.0.0-space')
     runs-on: windows-2025
     timeout-minutes: 90
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: 'utf-8'
-      EXPECTED_VERSION: ${{ inputs.release_version }}
+      EXPECTED_VERSION: ${{ inputs.release_version || '1.0.0' }}
       EXPECTED_SOURCE_SHA: ${{ github.sha }}
     steps:
       - name: Checkout exact source without write credentials
@@ -97,9 +99,9 @@ jobs:
           retention-days: 30
 
   unsigned-candidate:
-    name: Build and validate unsigned ${{ matrix.arch }} MSI (manual main only)
+    name: Build and validate unsigned ${{ matrix.arch }} MSI (manual main / 1.0.0 staging)
     needs: [source-contract-tests, prepare-dictionary]
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/1.0.0-space')
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +119,7 @@ jobs:
       PYTHONIOENCODING: 'utf-8'
       TARGET_ARCH: ${{ matrix.arch }}
       EXPECTED_HOST_ARCH: ${{ matrix.host_arch }}
-      EXPECTED_VERSION: ${{ inputs.release_version }}
+      EXPECTED_VERSION: ${{ inputs.release_version || '1.0.0' }}
       EXPECTED_SOURCE_SHA: ${{ github.sha }}
     steps:
       - name: Checkout exact source without write credentials
@@ -226,13 +228,31 @@ jobs:
           if ($env:TARGET_ARCH -eq 'arm64') {
             bazelisk test --config release_build `
               --test_output=errors `
-              //config:stats_config_util_test //config:config_handler_test
+              //config:stats_config_util_test //config:config_handler_test `
+              //session:session_test //session:keymap_test `
+              //session:zenz_context_request_test //session:session_handler_test `
+              //engine:engine_converter_test
           } else {
             bazelisk test --config oss_windows --config release_build `
               --test_output=errors `
-              //config:stats_config_util_test //config:config_handler_test
+              //config:stats_config_util_test //config:config_handler_test `
+              //session:session_test //session:keymap_test `
+              //session:zenz_context_request_test //session:session_handler_test `
+              //engine:engine_converter_test
           }
           if ($LASTEXITCODE -ne 0) { throw 'Offline configuration regression tests failed.' }
+
+      - name: Build and run real config-dialog regression tests
+        shell: pwsh
+        working-directory: src
+        run: |
+          bazelisk build --config release_build //gui/config_dialog:config_dialog_ui_test
+          if ($LASTEXITCODE -ne 0) { throw 'Config-dialog test build failed.' }
+          $env:PATH = "$pwd/third_party/qt/bin;$env:PATH"
+          $env:QT_PLUGIN_PATH = "$pwd/third_party/qt/plugins"
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          & ./bazel-bin/gui/config_dialog/config_dialog_ui_test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Config-dialog regression failed.' }
 
       - name: Verify MSI identity, architecture, Zenz hashes and stage candidate
         shell: pwsh

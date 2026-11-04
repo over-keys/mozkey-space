@@ -6949,7 +6949,6 @@ bool Session::ForceZenzLiveCorrection(
   if (context_->composer().GetInputFieldType() == commands::Context::PASSWORD) {
     return DoNothing(command);
   }
-  const bool previously_live = live_conversion_active_;
   const bool originally_live_composition =
       (live_conversion_active_ && live_conversion_from_composition_) ||
       (live_conversion_pending_ && context_->GetConfig().use_live_conversion());
@@ -7003,6 +7002,16 @@ bool Session::ForceZenzLiveCorrection(
 
   command->mutable_output()->set_consumed(true);
   Output(command);
+  return StartZenzCorrectionFromConversion(
+      command, originally_live_composition, bypass_automatic_feedback);
+}
+
+bool Session::StartZenzCorrectionFromConversion(
+    commands::Command* command, const bool from_composition,
+    const bool bypass_automatic_feedback) {
+  // Reuse the conversion and output already produced by the caller. A second
+  // Convert()/Output() would reset candidates or consume the output twice.
+  const bool previously_live = live_conversion_active_;
   const std::string key = context_->composer().GetQueryForConversion();
   if (key.empty() || !command->output().has_preedit()) {
     return true;
@@ -7016,7 +7025,7 @@ bool Session::ForceZenzLiveCorrection(
   // Clear any earlier auto request before creating the explicit generation.
   ClearZenzLiveCorrectionState();
   live_conversion_active_ = true;
-  live_conversion_from_composition_ = originally_live_composition;
+  live_conversion_from_composition_ = from_composition;
   live_conversion_key_ = key;
   live_conversion_preedit_ = context_->composer().GetStringForPreedit();
   live_conversion_value_ = mozc_value;
@@ -8404,6 +8413,9 @@ bool Session::InsertCharacter(commands::Command* command) {
     return true;
   }
 
+  const bool ordinary_zenz_conversion =
+      context_->state() == ImeContext::CONVERSION && live_conversion_active_ &&
+      !live_conversion_from_composition_;
   const bool was_live_conversion = live_conversion_active_;
   const bool was_pending_live_conversion = live_conversion_pending_;
   const bool was_deferred_zenz_live_presentation =
@@ -8518,17 +8530,25 @@ bool Session::InsertCharacter(commands::Command* command) {
   // state. This is especially important after an adopted Zenz result: pending
   // romaji such as a trailing consonant must extend the Zenz surface, not the
   // hidden Mozc baseline.
-  std::optional<PendingLiveConversionPresentation> continued_presentation =
-      CapturePendingLiveConversionPresentationForContinuedInput();
-  CancelLiveConversionForEditing();
-  if (continued_presentation.has_value()) {
-    pending_live_conversion_presentation_ =
-        std::move(*continued_presentation);
+  if (!ordinary_zenz_conversion) {
+    std::optional<PendingLiveConversionPresentation> continued_presentation =
+        CapturePendingLiveConversionPresentationForContinuedInput();
+    CancelLiveConversionForEditing();
+    if (continued_presentation.has_value()) {
+      pending_live_conversion_presentation_ =
+          std::move(*continued_presentation);
+    }
   }
 
   // Handle shortcut keys selecting a candidate from a list.
   if (MaybeSelectCandidate(command)) {
     ClearPendingRerankedPreeditCommitAfterConvertCancel();
+    if (ordinary_zenz_conversion) {
+      if (HasVisibleZenzLiveCorrection()) {
+        SetPendingZenzFeedbackRejected("explicit_conversion_after_zenz");
+      }
+      ClearLiveConversionState();
+    }
     Output(command);
     return true;
   }
@@ -8547,7 +8567,13 @@ bool Session::InsertCharacter(commands::Command* command) {
   bool committed_conversion_before_insert = false;
 
   if (should_commit) {
-    CommitNotTriggeringZeroQuerySuggest(command);
+    // A normal conversion keeps its displayed value when typing starts the
+    // next composition, including a visible Zenz overlay. Live-origin input
+    // still follows the editing path above instead of implicitly committing.
+    if (!ordinary_zenz_conversion ||
+        !CommitZenzLiveCorrectionResult(command)) {
+      CommitNotTriggeringZeroQuerySuggest(command);
+    }
     committed_conversion_before_insert = true;
 
     // HandlePendingZenzFeedbackForKeyEvent() intentionally does not confirm
@@ -8617,7 +8643,8 @@ bool Session::InsertCharacter(commands::Command* command) {
             composer_before_insert, command->input().context(),
             "convert_cancel_direct_commit_punctuation");
 
-    if (!learned_reranked_preedit_after_cancel && had_visible_zenz_correction) {
+    if (!learned_reranked_preedit_after_cancel && had_visible_zenz_correction &&
+        !committed_conversion_before_insert) {
       const size_t length = context_->composer().GetLength();
       const std::string preedit = context_->composer().GetStringForPreedit();
       const std::string last_char(
@@ -10078,6 +10105,12 @@ bool Session::Convert(commands::Command* command) {
     context_->mutable_converter()->SetCandidateListVisible(true);
   }
   Output(command);
+  if (!context_->GetConfig().use_live_conversion() &&
+      context_->GetConfig().use_zenz_live_correction() &&
+      context_->composer().GetInputFieldType() != commands::Context::PASSWORD) {
+    return StartZenzCorrectionFromConversion(
+        command, /*from_composition=*/false);
+  }
   return true;
 }
 

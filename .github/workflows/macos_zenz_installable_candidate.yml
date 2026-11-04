@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_REPOSITORY" = koyasi777/mozkey
+          test "$GITHUB_REPOSITORY" = over-keys/mozkey-space
           test "$(/usr/bin/uname -m)" = arm64
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"

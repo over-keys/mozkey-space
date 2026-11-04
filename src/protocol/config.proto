@@ -338,7 +338,8 @@ message Config {
   optional bool show_candidate_window_on_initial_conversion = 72
       [default = false];
 
-  // Use asynchronous zenz live correction after normal live conversion.
+  // Use asynchronous Zenz correction for live conversion and, with it off, normal
+  // conversion. Keep the existing field number and name for compatibility.
   // Mozkey enables this by default in ConfigHandler.
   optional bool use_zenz_live_correction = 1003 [default = false];
 

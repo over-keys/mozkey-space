@@ -1537,10 +1537,10 @@
                   <item>
                    <widget class="QCheckBox" name="zenzLiveCorrectionCheckBox">
                     <property name="toolTip">
-                     <string>ライブ変換結果に対して、ローカルの Zenz モデルで文脈補正を行います。</string>
+                     <string>ライブ変換、またはライブ変換 OFF 時の Space 変換に Zenz 補正を適用します。</string>
                     </property>
                     <property name="text">
-                     <string>Zenz ライブ補正を有効にする</string>
+                     <string>Zenz 補正を有効にする</string>
                     </property>
                    </widget>
                   </item>

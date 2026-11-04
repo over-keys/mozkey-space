@@ -23,7 +23,6 @@ ZenzContextRequest GetZenzContextRequest(
   ZenzContextRequest request;
 
   if (!may_snapshot_client_context ||
-      !config.use_live_conversion() ||
       !config.use_zenz_live_correction() ||
       input_field_type == commands::Context::PASSWORD) {
     return request;

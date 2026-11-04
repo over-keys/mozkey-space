@@ -274,6 +274,32 @@ mozc_cc_qt_binary(
     deps = [":config_dialog_main_lib"],
 )
 
+# Build explicitly after Qt, then run with the SDK's runtime libraries/plugins.
+# The core-only test jobs do not install Qt.
+mozc_cc_qt_binary(
+    name = "config_dialog_ui_test",
+    testonly = True,
+    srcs = ["config_dialog_ui_test.cc"],
+    tags = [
+        "manual",
+        "nolinux",
+    ],
+    deps = [
+        ":config_dialog",
+        "//client",
+        "//client:client_mock",
+        "//protocol:config_cc_proto",
+        "//testing:gunit",
+    ] + mozc_select(
+        default = [],
+        oss_macos = [
+            "@qt_mac//:QtCore_mac",
+            "@qt_mac//:QtGui_mac",
+            "@qt_mac//:QtWidgets_mac",
+        ],
+    ),
+)
+
 mozc_infoplist_strings(
     name = "infolist_strings_en",
     srcs = [

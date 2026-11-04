@@ -37,7 +37,7 @@ class ReleaseContractTests(unittest.TestCase):
                 c.load_release_parts(f)
 
     def test_origin_restriction(self):
-        for ok in ("https://github.com/koyasi777/mozkey.git", "git@github.com:koyasi777/mozkey.git"):
+        for ok in ("https://github.com/over-keys/mozkey-space.git", "git@github.com:over-keys/mozkey-space.git"):
             self.assertTrue(c.EXPECTED_ORIGIN.fullmatch(ok))
         for no in ("https://github.com/other/mozkey", "https://evil.test/koyasi777/mozkey", "https://github.com/koyasi777/mozkey.evil"):
             self.assertFalse(c.EXPECTED_ORIGIN.fullmatch(no))

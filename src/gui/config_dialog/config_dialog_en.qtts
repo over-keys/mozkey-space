@@ -5,6 +5,16 @@
     <name>ConfigDialog</name>
     <message>
         <location filename="config_dialog.ui" line="0"/>
+        <source>Zenz 補正を有効にする</source>
+        <translation>Enable Zenz correction</translation>
+    </message>
+    <message>
+        <location filename="config_dialog.ui" line="0"/>
+        <source>ライブ変換、またはライブ変換 OFF 時の Space 変換に Zenz 補正を適用します。</source>
+        <translation>Apply Zenz correction during live conversion, or when converting with Space while live conversion is off.</translation>
+    </message>
+    <message>
+        <location filename="config_dialog.ui" line="0"/>
         <source>Input Appearance</source>
         <translation>Input Appearance</translation>
     </message>

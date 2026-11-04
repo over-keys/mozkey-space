@@ -6458,24 +6458,25 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
   showLiveConversionRubyWindow->setEnabled(enabled);
   showCandidateWindowOnInitialConversionCheckBox->setEnabled(!enabled);
 
-  zenzLiveCorrectionCheckBox->setEnabled(enabled);
+  // Zenz also corrects explicit normal conversion when live conversion is off.
+  zenzLiveCorrectionCheckBox->setEnabled(true);
   SelectZenzLiveCorrectionSetting(
-      enabled ? static_cast<int>(zenzLiveCorrectionCheckBox->isChecked()) : 0);
+      static_cast<int>(zenzLiveCorrectionCheckBox->isChecked()));
 }
 
 void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
-  const bool enabled =
-      liveConversionCheckBox->isChecked() && static_cast<bool>(state);
+  const bool enabled = static_cast<bool>(state);
+  const bool live_enabled = enabled && liveConversionCheckBox->isChecked();
 
-  zenzLiveCorrectionDelayLabel->setEnabled(enabled);
-  zenzLiveCorrectionDelaySpinBox->setEnabled(enabled);
-  zenzDeferLiveConversionDisplayCheckBox->setEnabled(enabled);
+  zenzLiveCorrectionDelayLabel->setEnabled(live_enabled);
+  zenzLiveCorrectionDelaySpinBox->setEnabled(live_enabled);
+  zenzDeferLiveConversionDisplayCheckBox->setEnabled(live_enabled);
   SelectZenzDeferredPresentationSetting(
-      enabled ? static_cast<int>(
-                    zenzDeferLiveConversionDisplayCheckBox->isChecked())
-              : 0);
-  zenzLiveCorrectionMinKeyLengthLabel->setEnabled(enabled);
-  zenzLiveCorrectionMinKeyLengthSpinBox->setEnabled(enabled);
+      live_enabled ? static_cast<int>(
+                         zenzDeferLiveConversionDisplayCheckBox->isChecked())
+                   : 0);
+  zenzLiveCorrectionMinKeyLengthLabel->setEnabled(live_enabled);
+  zenzLiveCorrectionMinKeyLengthSpinBox->setEnabled(live_enabled);
   zenzLiveCorrectionProfileLabel->setEnabled(enabled);
   zenzLiveCorrectionProfileLineEdit->setEnabled(enabled);
   zenzLiveCorrectionTopicLabel->setEnabled(enabled);
@@ -6533,8 +6534,7 @@ void ConfigDialog::SelectZenzFeedbackAutoBlockSetting(int state) {
 }
 
 void ConfigDialog::SelectZenzRightContextSetting(int state) {
-  const bool enabled = liveConversionCheckBox->isChecked() &&
-                       zenzLiveCorrectionCheckBox->isChecked() &&
+  const bool enabled = zenzLiveCorrectionCheckBox->isChecked() &&
                        static_cast<bool>(state);
 
   zenzLiveCorrectionRightContextLengthLabel->setEnabled(enabled);

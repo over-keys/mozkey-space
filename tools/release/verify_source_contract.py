@@ -15,7 +15,7 @@ import sys
 
 EXPECTED_ORIGIN = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
-    r"koyasi777/mozkey(?:\.git)?/?$", re.I
+    r"over-keys/mozkey-space(?:\.git)?/?$", re.I
 )
 EXPECTED_UPGRADE_CODE = "DD94B570-B5E2-4100-9D42-61930C611D8A"
 VERSION_KEYS = (

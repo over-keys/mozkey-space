@@ -2,20 +2,24 @@
   <img src="src/data/images/icon.svg" width="112" height="112" alt="Mozkey icon">
 </p>
 
-<h1 align="center">Mozkey（もずきー）</h1>
+<h1 align="center">mozkey-space 1.0.0</h1>
 
 <p align="center">
   <strong>Mozc をベースに、通常変換・遅延付きライブ変換・ローカル Zenz 補正を組み合わせ、<br>縦書き対応・外観カスタマイズ・柔軟な入力操作と学習制御を備えた日本語入力ソフトウェアです。</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/koyasi777/mozkey/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/koyasi777/mozkey?include_prereleases&label=release"></a>
+  <a href="https://github.com/over-keys/mozkey-space/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/over-keys/mozkey-space?include_prereleases&label=release"></a>
   <img alt="Based on Mozc" src="https://img.shields.io/badge/based%20on-Mozc-88A2DD">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-Zenz-53D4C7">
   <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-178B8B">
 </p>
 
 <br>
+
+**mozkey-space 1.0.0** は [本家 Mozkey v1.0.0](https://github.com/koyasi777/mozkey/tree/v1.0.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
+
+設定は **ライブ変換 OFF / Zenz 補正 ON** とし、Space は標準の通常変換を使用します。旧版や手動設定から移行する場合の詳細は [Space 変換の Zenz 補正](#space-変換の-zenz-補正) を参照してください。旧 5.x からはバージョン体系が変わるため自動更新には対応しません。設定・辞書をバックアップし、旧版をアンインストールしてから導入してください。以下には本家から引き継いだ機能説明も含まれます。
 
 Mozkey（もずきー）は [google/mozc](https://github.com/google/mozc) をベースにした非公式フォークです。
 
@@ -49,7 +53,7 @@ upstream Mozc との追従性および既存インストールとの互換性を
 ダウンロード / インストール
 --------------------------
 
-Mozkey のインストーラーは [GitHub Releases](https://github.com/koyasi777/mozkey/releases) の各リリースの **Assets** に掲載されています。リリースごとに配布対象が異なるため、利用する OS と CPU に合うファイルを選んでください。
+Mozkey のインストーラーは [GitHub Releases](https://github.com/over-keys/mozkey-space/releases) の各リリースの **Assets** に掲載されています。リリースごとに配布対象が異なるため、利用する OS と CPU に合うファイルを選んでください。
 
 | 環境 | 選ぶファイル | インストール方法 |
 | --- | --- | --- |
@@ -85,7 +89,7 @@ Windows 向けの未署名 MSI は、Microsoft Defender SmartScreen によって
 
 #### インストール
 
-1. [GitHub Releases](https://github.com/koyasi777/mozkey/releases) の対象リリースにある **Assets** から、macOS 用 Universal `.pkg` をダウンロードします。PKG が掲載されていないリリースでは、macOS 用インストーラーは配布されていません。
+1. [GitHub Releases](https://github.com/over-keys/mozkey-space/releases) の対象リリースにある **Assets** から、macOS 用 Universal `.pkg` をダウンロードします。PKG が掲載されていないリリースでは、macOS 用インストーラーは配布されていません。
 2. Finder でダウンロードした PKG を**ダブルクリック**します。Gatekeeper の警告で開けない場合は、下記の [macOS でセキュリティ警告が表示された場合](#macos-でセキュリティ警告が表示された場合) に従い、対象の PKG だけを個別に許可してください。インストーラーが開いたら、画面の案内に従ってインストールします。
 3. **インストール完了後は、macOS から一度ログアウトして再ログインしてください。** インストール直後に「キーボード」の設定画面が自動で開くことがありますが、その時点では Mozkey が入力ソースの候補にまだ表示されないことがあります。再ログインを先に行ってください。
 4. 再ログイン後、**システム設定 → キーボード → テキスト入力 → 編集** を開きます。**「ひらがな（Mozkey）」**（環境によっては「Hiragana (Mozkey)」）がすでに登録されていれば、そのまま次へ進みます。未登録の場合は **「+」→「日本語」** から Mozkey のひらがな入力ソースを追加します。
@@ -352,6 +356,14 @@ Windows 版では、追加のオフライン防御層として、インストー
 
 この一般設定はライブ変換がOFFの場合だけ適用されます。Space以外のキーに通常変換を割り当てている場合も、keymapで`Convert`に解決された初回の変換操作で同じように適用されます。ライブ変換がONの場合は、通常のライブ変換から候補選択への移行を優先します。ただし、**「郵便番号変換」ONかつ単独の7桁（またはハイフン付き7桁）の郵便番号を明示変換する場合**は、この一般設定とは独立して初回の候補ウィンドウを表示する特例があります。一般設定を無効化すると、郵便番号以外のライブ変換OFF時の表示タイミングを従来どおりに戻せます。
 
+### Space 変換の Zenz 補正
+
+ライブ変換を OFF にしても、設定画面の「Zenz 補正を有効にする」を ON にすると、通常の Space 変換で Mozc の変換結果を表示し、Zenz に非同期で補正を依頼します。キーのカスタム割り当ては不要です。通常変換コマンド `Convert` に組み込んでいるため、別のキーから通常変換する場合も同じように動作します。
+
+補正結果が返る前に確定すると Mozc の結果を、補正結果が表示された後に確定すると表示中の結果を確定します。そのまま次の文字を入力した場合も、表示中の変換結果を確定して新しい入力を始めます。Zenz 補正を OFF にすると通常の Mozc 変換になります。ライブ変換用の補正待機時間・最小文字数・応答待ち表示設定は Space 変換には適用しません。
+
+以前の回避策として Space に `ForceZenzLiveCorrection` を割り当てている場合は、未変換入力中の Space を通常の `Convert` に戻してください。`ForceZenzLiveCorrection` は手動実行用のため、Zenz 補正の ON/OFF 設定にかかわらず実行されます。
+
 ### Zenz ライブ補正
 
 ライブ変換と Zenz ライブ補正の両方を有効にすると、通常は Mozc のライブ変換結果を表示したうえで、ローカルの Zenz runtime に非同期で補正を依頼します。
@@ -585,7 +597,7 @@ Zenz ライブ補正では、Zenzai v3/v3.2 の特殊トークン形式に沿っ
 
 - **通常の手動 Zenz 補正**: 入力中（Composition）または変換中（Conversion）の未確定文字列に対して、現在の Mozc 変換結果を基準に Zenz 補正を非同期で要求します。保存済み Zenz feedback の利用設定は通常どおり適用されます。
 - **フィードバック無視の手動補正**: この実行に限り、保存済み Zenz feedback による通常候補の順位調整・補正結果の高速再利用・統計的な自動ブロックを無視します。変換中から実行した場合は、フィードバック抜きの Mozc 変換結果を再計算して基準にします。通常の Mozc 学習履歴とユーザー辞書は利用でき、ユーザーが明示的に指定した手動ブロック（hard reject）は引き続き有効です。「無視」は**過去の feedback の参照**についてであり、補正結果を確定した場合の新しい feedback 記録（A）や Mozc 履歴への学習（C）は、それぞれの設定に従って行われます。
-- **両コマンド共通**: 自動の「Zenz ライブ補正を有効にする」が OFF でも実行でき、手動実行には自動補正開始用の最小読み文字数を適用しません。パスワード欄やプライバシー・入力内容の適格性検査は維持し、Zenz の出力が必ず採用されるわけではありません。変換中のフィードバック無視補正で再変換が失敗した場合、元の候補・入力モード・学習取り消し情報を維持します。
+- **両コマンド共通**: 自動の「Zenz 補正を有効にする」が OFF でも実行でき、手動実行には自動補正開始用の最小読み文字数を適用しません。パスワード欄やプライバシー・入力内容の適格性検査は維持し、Zenz の出力が必ず採用されるわけではありません。変換中のフィードバック無視補正で再変換が失敗した場合、元の候補・入力モード・学習取り消し情報を維持します。
 - **遅延**: `Delay(700)` は後続コマンドを 700 ms 後に再開する指定です。設定できる値は 0～5000 ms で、`Delay(0)` は待機しません。これは自動ライブ変換や自動 Zenz 補正の遅延設定とは独立した、キー割り当て専用の待機です。
 
 実用的なキー割り当て例（**カスタム設定例**であり、標準の既定割り当てではありません）:
@@ -930,7 +942,7 @@ For implementation details and settings, see the feature list and detailed expla
 Download / platform availability
 --------------------------------
 
-Get installers from the **Assets** section of the appropriate [GitHub Release](https://github.com/koyasi777/mozkey/releases). Available platforms and packages vary by release; select the package for your OS and CPU architecture.
+Get installers from the **Assets** section of the appropriate [GitHub Release](https://github.com/over-keys/mozkey-space/releases). Available platforms and packages vary by release; select the package for your OS and CPU architecture.
 
 | Platform | Package | Instructions |
 | --- | --- | --- |
@@ -967,7 +979,7 @@ macOS installation and initial setup
 
 ### Install the PKG
 
-1. Download the macOS Universal `.pkg` from the **Assets** of the relevant [GitHub Release](https://github.com/koyasi777/mozkey/releases). If the release has no PKG, no macOS installer is provided for that release.
+1. Download the macOS Universal `.pkg` from the **Assets** of the relevant [GitHub Release](https://github.com/over-keys/mozkey-space/releases). If the release has no PKG, no macOS installer is provided for that release.
 2. **Double-click** the downloaded PKG in Finder. If Gatekeeper blocks it, follow [If macOS blocks the installer](#if-macos-blocks-the-installer) below to approve that specific package only. Then complete the Installer prompts.
 3. **After installation, log out of macOS and log back in before selecting Mozkey.** The installer may open Keyboard settings automatically, but **ひらがな（Mozkey）** (or **Hiragana (Mozkey)**) may not appear in the input-source choices until you log back in.
 4. After logging in again, open **System Settings → Keyboard → Text Input → Edit**. If **ひらがな（Mozkey）** (or **Hiragana (Mozkey)**) is already configured, continue. Otherwise, use **+ → Japanese** to add the Mozkey Hiragana input source (its displayed name may be localized).
@@ -1262,6 +1274,23 @@ With **live conversion ON**, the numeric literal remains the first candidate for
 Disabling **Postal code conversion** disables the hyphenless address alias and its special numeric-first ranking. To avoid interpreting parts of ASCII-alphanumeric identifiers as postal codes, the alias is suppressed in inputs such as `ID1000000`, `1000000ABC`, and `1231000000`. This boundary check covers ASCII letters and digits; it is not a general identifier parser for all punctuation or Unicode alphanumeric forms. This `ConvertNext` behavior describes ordinary Mozc live conversion. The separate Zenz-to-Mozc revert behavior may check for physical Space, so remapping `ConvertNext` to another key does not guarantee identical behavior while a Zenz correction is visible.
 
 The separate setting to show the candidate window on the first conversion normally applies when live conversion is OFF. Standalone postal codes are an exception: when live conversion and postal code conversion are ON, an explicit first conversion can open the candidate window independently of that setting.
+
+### Zenz correction on Space conversion
+
+With live conversion OFF, enable **Zenz correction** in the config dialog to
+apply asynchronous Zenz correction after ordinary Space conversion. No custom
+key assignment is required. This is part of the normal `Convert` command, so
+other keys assigned to normal conversion behave the same way.
+
+Committing before the response arrives uses the Mozc result; committing after
+the correction appears uses the visible result. Continuing to type also commits
+the visible conversion and starts a new composition. Disabling Zenz correction
+restores ordinary Mozc conversion. The live-conversion debounce, minimum reading
+length, and deferred-presentation settings do not apply to Space conversion.
+
+If Space was previously assigned to `ForceZenzLiveCorrection` as a workaround,
+restore its Composition assignment to `Convert`. The manual force command runs
+regardless of the Zenz correction checkbox.
 
 ### Zenz live correction
 

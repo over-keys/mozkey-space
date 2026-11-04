@@ -18431,6 +18431,253 @@ TEST_F(SessionTest, ActualManualZenzLiveOffRevertThenPhysicalBackspace) {
   EXPECT_FALSE(command.output().has_result());
 }
 
+TEST_F(SessionTest, OrdinaryZenzConversionCommitsBeforeContinuedInput) {
+  for (const bool standard_conversion : {false, true}) {
+    SCOPED_TRACE(standard_conversion ? "standard Convert" : "manual ForceZenz");
+    for (const bool response_visible : {false, true}) {
+      for (const bool punctuation : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "visible=" << response_visible
+                                        << " punctuation=" << punctuation);
+        MockEngine engine;
+        auto converter = CreateEngineConverterMock(&engine);
+        Session session(engine);
+        InitSessionToPrecomposition(&session);
+
+        config::Config config;
+        config::ConfigHandler::GetDefaultConfig(&config);
+        config.set_use_live_conversion(false);
+        config.set_use_zenz_live_correction(standard_conversion);
+        config.set_use_zenz_synthetic_candidate(true);
+        config.set_use_direct_commit(punctuation);
+        config.set_direct_commit_key(config::Config::DIRECT_COMMIT_KUTEN);
+        config.set_session_keymap(config::Config::CUSTOM);
+        config.set_custom_keymap_table(
+            absl::StrCat("status\tkey\tcommand\nComposition\tSpace\t",
+                         standard_conversion ? "Convert"
+                                             : "ForceZenzLiveCorrection",
+                         "\n"));
+        session.SetConfig(config);
+        session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+        SessionTestPeer peer(session);
+
+        commands::Command command;
+        InsertCharacterString("あい", "ai", &session, &command);
+        Segments segments;
+        Segment* segment = segments.add_segment();
+        segment->set_key("あい");
+        AddCandidate("あい", "愛", segment);
+        EXPECT_CALL(*converter, StartConversion(_, _))
+            .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+        ASSERT_TRUE(SendKey("Space", &session, &command));
+        ASSERT_TRUE(command.output().zenz_live_correction_pending());
+        const commands::SessionCommand stale_callback =
+            command.output().callback().session_command();
+        if (response_visible) {
+          ZenzLiveResponse response;
+          response.ok = true;
+          response.value = "亜衣";
+          command.Clear();
+          ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+          ASSERT_TRUE(command.output().zenz_live_correction_applied());
+        }
+
+        ASSERT_TRUE(SendKey(punctuation ? "." : "a", &session, &command));
+        const std::string expected = response_visible ? "亜衣" : "愛";
+        if (punctuation) {
+          EXPECT_RESULT_AND_KEY(expected + "。", "あい。", command);
+          EXPECT_EQ(session.context().state(), ImeContext::PRECOMPOSITION);
+        } else {
+          EXPECT_RESULT_AND_KEY(expected, "あい", command);
+          EXPECT_PREEDIT("あ", command);
+          EXPECT_EQ(session.context().composer().GetQueryForConversion(), "あ");
+        }
+        EXPECT_FALSE(peer.live_conversion_active_());
+        EXPECT_FALSE(peer.pending_zenz_live_().pending);
+
+        // The response to the committed reading must not reopen its preedit.
+        command.Clear();
+        command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+        *command.mutable_input()->mutable_command() = stale_callback;
+        ASSERT_TRUE(session.SendCommand(&command));
+        EXPECT_FALSE(command.output().has_result());
+        EXPECT_EQ(session.context().composer().GetQueryForConversion(),
+                  punctuation ? "" : "あ");
+      }
+    }
+  }
+}
+
+TEST_F(SessionTest, SpaceConversionUsesZenzSettingWithLiveConversionOff) {
+  for (const bool zenz_enabled : {false, true}) {
+    SCOPED_TRACE(zenz_enabled);
+    MockEngine engine;
+    auto converter = CreateEngineConverterMock(&engine);
+    Session session(engine);
+    InitSessionToPrecomposition(&session);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_live_conversion(false);
+    config.set_use_zenz_live_correction(zenz_enabled);
+    config.set_use_zenz_synthetic_candidate(true);
+    // Explicit conversion must not wait for the live-typing debounce.
+    config.set_zenz_live_correction_delay_msec(1000);
+    config.set_session_keymap(config::Config::CUSTOM);
+    config.set_custom_keymap_table(
+        "status\tkey\tcommand\n"
+        "Composition\tSpace\tConvert\n"
+        "Conversion\tEnter\tCommit\n");
+    session.SetConfig(config);
+    session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+    SessionTestPeer peer(session);
+
+    commands::Command command;
+    InsertCharacterString("あい", "ai", &session, &command);
+    Segments segments;
+    Segment* segment = segments.add_segment();
+    segment->set_key("あい");
+    AddCandidate("あい", "愛", segment);
+    EXPECT_CALL(*converter, StartConversion(_, _))
+        .Times(1)
+        .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+    ASSERT_TRUE(SendKey("Space", &session, &command));
+    EXPECT_PREEDIT("愛", command);
+    EXPECT_EQ(command.output().zenz_live_correction_pending(), zenz_enabled);
+    EXPECT_EQ(peer.pending_zenz_live_().pending, zenz_enabled);
+    EXPECT_FALSE(peer.live_conversion_from_composition_());
+    if (zenz_enabled) {
+      EXPECT_TRUE(peer.pending_zenz_live_().submitted);
+      ZenzLiveResponse response;
+      response.ok = true;
+      response.value = "亜衣";
+      command.Clear();
+      ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+      EXPECT_PREEDIT("亜衣", command);
+    }
+    ASSERT_TRUE(SendKey("Enter", &session, &command));
+    EXPECT_RESULT_AND_KEY(zenz_enabled ? "亜衣" : "愛", "あい", command);
+    EXPECT_FALSE(peer.pending_zenz_live_().pending);
+  }
+}
+
+TEST_F(SessionTest, SpaceZenzCandidateShortcutPreservesOrdinarySelection) {
+  MockEngine engine;
+  auto converter = CreateEngineConverterMock(&engine);
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_use_zenz_synthetic_candidate(true);
+  config.set_show_candidate_window_on_initial_conversion(true);
+  config.set_selection_shortcut(config::Config::SHORTCUT_123456789);
+  config.set_session_keymap(config::Config::CUSTOM);
+  config.set_custom_keymap_table(
+      "status\tkey\tcommand\n"
+      "Composition\tSpace\tConvert\n"
+      "Conversion\tEnter\tCommit\n");
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+  SessionTestPeer peer(session);
+  commands::Command command;
+  InsertCharacterString("あい", "ai", &session, &command);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("あい");
+  AddCandidate("あい", "愛", segment);
+  AddCandidate("あい", "藍", segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+  ASSERT_TRUE(SendKey("Space", &session, &command));
+  ASSERT_TRUE(command.output().zenz_live_correction_pending());
+  ZenzLiveResponse response;
+  response.ok = true;
+  response.value = "亜衣";
+  command.Clear();
+  ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+  ASSERT_TRUE(SendKey("2", &session, &command));
+  EXPECT_FALSE(command.output().has_result());
+  EXPECT_PREEDIT("藍", command);
+  EXPECT_FALSE(peer.pending_zenz_live_().pending);
+  EXPECT_FALSE(peer.live_conversion_active_());
+  ASSERT_TRUE(SendKey("Enter", &session, &command));
+  EXPECT_RESULT_AND_KEY("藍", "あい", command);
+}
+
+TEST_F(SessionTest, SpaceZenzCancelInvalidatesPendingResponse) {
+  MockEngine engine;
+  auto converter = CreateEngineConverterMock(&engine);
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_session_keymap(config::Config::CUSTOM);
+  config.set_custom_keymap_table(
+      "status\tkey\tcommand\n"
+      "Composition\tSpace\tConvert\n"
+      "Conversion\tESC\tCancel\n");
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+  SessionTestPeer peer(session);
+  commands::Command command;
+  InsertCharacterString("あい", "ai", &session, &command);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("あい");
+  AddCandidate("あい", "愛", segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+  ASSERT_TRUE(SendKey("Space", &session, &command));
+  ASSERT_TRUE(command.output().has_callback());
+  const commands::SessionCommand stale_callback =
+      command.output().callback().session_command();
+  ASSERT_TRUE(SendKey("ESC", &session, &command));
+  EXPECT_FALSE(command.output().has_result());
+  EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
+  ASSERT_TRUE(SendKey("a", &session, &command));
+  EXPECT_PREEDIT("あいあ", command);
+  command.Clear();
+  command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+  *command.mutable_input()->mutable_command() = stale_callback;
+  ASSERT_TRUE(session.SendCommand(&command));
+  EXPECT_FALSE(command.output().has_result());
+  EXPECT_FALSE(peer.pending_zenz_live_().pending);
+  EXPECT_EQ(session.context().composer().GetQueryForConversion(), "あいあ");
+}
+
+TEST_F(SessionTest, ConversionWithoutHistoryDoesNotStartSpaceZenz) {
+  MockEngine engine;
+  auto converter = CreateEngineConverterMock(&engine);
+  Session session(engine);
+  InitSessionToPrecomposition(&session);
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(true);
+  config.set_session_keymap(config::Config::CUSTOM);
+  config.set_custom_keymap_table(
+      "status\tkey\tcommand\n"
+      "Composition\tF2\tConvertWithoutHistory\n");
+  session.SetConfig(config);
+  session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+  SessionTestPeer peer(session);
+  commands::Command command;
+  InsertCharacterString("あい", "ai", &session, &command);
+  Segments segments;
+  Segment* segment = segments.add_segment();
+  segment->set_key("あい");
+  AddCandidate("あい", "愛", segment);
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+  ASSERT_TRUE(SendKey("F2", &session, &command));
+  EXPECT_PREEDIT("愛", command);
+  EXPECT_FALSE(command.output().zenz_live_correction_pending());
+  EXPECT_FALSE(peer.pending_zenz_live_().pending);
+  EXPECT_FALSE(peer.live_conversion_active_());
+}
+
 // Cover continued physical typing after peeling the Zenz layer.  In live
 // conversion mode this must edit the existing reading instead of committing
 // the restored Mozc candidate and starting a new composition.

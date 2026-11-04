@@ -514,8 +514,7 @@ NSString *TrimIncompleteZenzSurrogateEdges(NSString *text) {
   useLiveConversion_ = config.use_live_conversion();
   useConversionStatusIndicator_ = config.show_conversion_status_indicator();
   // Avoid an extra TEST_SEND_KEY round trip for ordinary Mozc input.
-  useZenzContextAcquisition_ =
-      useLiveConversion_ && config.use_zenz_live_correction();
+  useZenzContextAcquisition_ = config.use_zenz_live_correction();
 
   if (config.use_japanese_layout()) {
     // Apple does not have "Japanese" layout actually -- here sets

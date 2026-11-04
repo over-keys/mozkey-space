@@ -1,8 +1,12 @@
 name: CI for Lint checks
 # https://github.com/google/mozc/blob/master/docs/build_mozc_in_docker.md
 
-# Run on push.
-on: push
+# Run on normal commits and pull requests. Keep this workflow lightweight so
+# source-level regressions are caught without starting a full platform build.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,7 +25,7 @@ jobs:
     steps:
       # Checkout without submodules to exclude third_party code from lint check
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
         with:
           submodules: false
           persist-credentials: false
@@ -29,10 +33,29 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version: 'stable'
+          go-version: '1.25'
+          cache: false
 
       - name: Run
         working-directory: ./src
         run: |
-          go install github.com/bazelbuild/buildtools/buildifier@latest
+          # v8.5.1 is tagged on a module whose go.mod still declares the
+          # unversioned path. Pin the release commit so Go resolves it as a
+          # pseudo-version instead of rejecting the incompatible v8 tag.
+          go install github.com/bazelbuild/buildtools/buildifier@f6a1982250030df9c2d24a675a04f150ff6aca6b
           $(go env GOPATH)/bin/buildifier --mode=diff -r .
+
+  source_security:
+    name: Source security guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: Check prohibited network symbols
+        run: python3 tools/check_no_network_symbols.py
