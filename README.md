@@ -362,7 +362,7 @@ Windows 版では、追加のオフライン防御層として、インストー
 
 Space 変換にも、Zenz 補正開始の遅延・最小文字数・応答待ちの表示設定・補正開始後の最大待機時間を適用します。Space 変換の補正開始遅延は既定で 0 ms（即時）、ライブ変換は従来どおり 700 ms です。ライブ変換の ON/OFF に応じて遅延欄に対応する値を表示し、それぞれ別々に保存します。以前に保存したライブ変換用の遅延値は Space 変換へ引き継ぎません。「Zenz 補正結果が返るまで通常の変換結果を表示しない」を ON にすると、応答待ちの間は未変換の入力を表示します。最大待機時間は要求の送信時から数え、補正開始までの遅延時間は含みません。失敗・タイムアウト・不採用時は Mozc の結果を表示します。待機中にもう一度 Space を押すと、候補を進めずに Mozc の結果を表示します。
 
-Enter や続け入力では、その時点で画面に表示されている文字列を確定します。表示待機中なら未変換の入力、補正結果が表示された後なら補正結果を確定して、新しい入力を始めます。Zenz 補正を OFF にすると通常の Mozc 変換になります。
+Enter や続け入力では、その時点で画面に表示されている文字列を確定します。表示待機中なら未変換の入力、補正結果が表示された後なら補正結果を確定して、新しい入力を始めます。Zenz 補正を OFF にすると通常の Mozc 変換になります。候補ウィンドウを表示する設定は補正待ち・フォールバック時にも維持し、マウスでの選択に対応します。待機中の確定を Undo した場合は未変換の入力へ戻り、ライブ変換 OFF のまま編集を続けられます。
 
 以前の回避策として Space に `ForceZenzLiveCorrection` を割り当てている場合は、未変換入力中の Space を通常の `Convert` に戻してください。`ForceZenzLiveCorrection` は手動実行用のため、Zenz 補正の ON/OFF 設定・補正開始の遅延・最小文字数・応答待ち表示設定にかかわらず実行されます。
 
@@ -1299,7 +1299,9 @@ also reveals the Mozc result without advancing the candidate.
 Enter and continued typing commit exactly the text currently displayed. While
 deferred display is waiting, this is the raw composition; after correction it is
 the Zenz result. Continued typing then starts a new composition. Disabling Zenz
-correction restores ordinary Mozc conversion.
+correction restores ordinary Mozc conversion. The configured candidate window
+remains available while waiting and after fallback, including mouse selection.
+Undoing a deferred commit restores raw composition without starting live conversion.
 
 If Space was previously assigned to `ForceZenzLiveCorrection` as a workaround,
 restore its Composition assignment to `Convert`. The manual force command runs

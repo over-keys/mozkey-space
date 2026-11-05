@@ -18630,7 +18630,8 @@ TEST_F(SessionTest, SpaceZenzHonorsDelayMinimumLengthAndDeferredDisplay) {
 TEST_F(SessionTest, SpaceZenzDeferredDisplayResolvesAndCancelsSafely) {
   for (const int delay : {0, 1000}) {
     for (const std::string action : {"accepted", "same", "failed", "timeout",
-                                     "Enter", "a", "2", ".", "Space", "ESC"}) {
+                                     "Enter", "a", "2", ".", "Space", "ESC",
+                                     "Backspace", "Ctrl Enter", "noop"}) {
       SCOPED_TRACE(::testing::Message() << delay << ":" << action);
       MockEngine engine;
       auto converter = CreateEngineConverterMock(&engine);
@@ -18652,7 +18653,9 @@ TEST_F(SessionTest, SpaceZenzDeferredDisplayResolvesAndCancelsSafely) {
       config.set_custom_keymap_table(
           "status\tkey\tcommand\nComposition\tSpace\tConvert\n"
           "Conversion\tSpace\tConvertNext\nConversion\tEnter\tCommit\n"
-          "Conversion\tESC\tCancel\n");
+          "Conversion\tESC\tCancel\n"
+          "Conversion\tBackspace\tBackspace\n"
+          "Conversion\tCtrl Enter\tCommit|IMEOff\n");
       session.SetConfig(config);
       session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
       SessionTestPeer peer(session);
@@ -18698,11 +18701,28 @@ TEST_F(SessionTest, SpaceZenzDeferredDisplayResolvesAndCancelsSafely) {
         ASSERT_TRUE(session.SendCommand(&command));
         EXPECT_PREEDIT("愛", command);
         EXPECT_FALSE(command.output().zenz_live_correction_pending());
+      } else if (action == "noop") {
+        SetSendCommandCommand(commands::SessionCommand::NONE, &command);
+        ASSERT_TRUE(session.SendCommand(&command));
+        EXPECT_PREEDIT("あい", command);
+        EXPECT_FALSE(command.output().has_candidate_window());
+        ASSERT_TRUE(SendKey("Enter", &session, &command));
+        EXPECT_RESULT_AND_KEY("あい", "あい", command);
       } else {
         ASSERT_TRUE(SendKey(action, &session, &command));
         if (action == "Space") {
           EXPECT_PREEDIT("愛", command);
           EXPECT_FALSE(command.output().has_result());
+          ASSERT_TRUE(SendKey("Space", &session, &command));
+          EXPECT_PREEDIT("藍", command);
+          ASSERT_TRUE(SendKey("Enter", &session, &command));
+          EXPECT_RESULT_AND_KEY("藍", "あい", command);
+        } else if (action == "Backspace") {
+          EXPECT_PREEDIT("あ", command);
+          EXPECT_FALSE(command.output().has_result());
+        } else if (action == "Ctrl Enter") {
+          EXPECT_RESULT_AND_KEY("あい", "あい", command);
+          EXPECT_EQ(session.context().state(), ImeContext::DIRECT);
         } else if (action == "ESC") {
           EXPECT_FALSE(command.output().has_result());
           EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
@@ -18724,6 +18744,208 @@ TEST_F(SessionTest, SpaceZenzDeferredDisplayResolvesAndCancelsSafely) {
       EXPECT_FALSE(peer.pending_zenz_live_().pending);
       EXPECT_EQ(session.context().composer().GetQueryForConversion(), remaining);
     }
+  }
+}
+
+TEST_F(SessionTest, SpaceZenzMouseActionsUseVisibleConversionCandidates) {
+  for (const std::string phase : {"immediate", "delayed", "fallback"}) {
+    SCOPED_TRACE(phase);
+    for (const auto action : {commands::SessionCommand::SELECT_CANDIDATE,
+                              commands::SessionCommand::HIGHLIGHT_CANDIDATE,
+                              commands::SessionCommand::SUBMIT_CANDIDATE}) {
+      SCOPED_TRACE(action);
+      MockEngine engine;
+      auto converter = CreateEngineConverterMock(&engine);
+      Session session(engine);
+      InitSessionToPrecomposition(&session);
+      config::Config config;
+      config::ConfigHandler::GetDefaultConfig(&config);
+      config.set_use_live_conversion(false);
+      config.set_use_zenz_live_correction(true);
+      config.set_zenz_conversion_correction_delay_msec(
+          phase == "delayed" ? 1000 : 0);
+      config.set_show_candidate_window_on_initial_conversion(true);
+      config.set_session_keymap(config::Config::CUSTOM);
+      config.set_custom_keymap_table(
+          "status\tkey\tcommand\nComposition\tSpace\tConvert\n"
+          "Conversion\tEnter\tCommit\n");
+      session.SetConfig(config);
+      session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+      SessionTestPeer peer(session);
+      commands::Command command;
+      InsertCharacterString("あい", "ai", &session, &command);
+      Segments segments;
+      Segment* segment = segments.add_segment();
+      segment->set_key("あい");
+      AddCandidate("あい", "愛", segment);
+      AddCandidate("あい", "藍", segment);
+      EXPECT_CALL(*converter, StartConversion(_, _))
+          .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+      ASSERT_TRUE(SendKey("Space", &session, &command));
+      const auto stale_callback = command.output().callback().session_command();
+      ASSERT_TRUE(command.output().has_candidate_window());
+      // Both native renderers suppress ordinary candidate windows when this
+      // flag denotes live input, so a preserved window alone is insufficient.
+      EXPECT_FALSE(command.output().live_conversion());
+      if (phase == "delayed") {
+        command.Clear();
+        command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+        *command.mutable_input()->mutable_command() = stale_callback;
+        ASSERT_TRUE(session.SendCommand(&command));
+      } else if (phase == "fallback") {
+        ZenzLiveResponse response;
+        response.ok = false;
+        command.Clear();
+        ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+      }
+      ASSERT_TRUE(command.output().has_candidate_window());
+      // Both native renderers suppress ordinary candidate windows when this
+      // flag denotes live input, so a preserved window alone is insufficient.
+      EXPECT_FALSE(command.output().live_conversion());
+      int id = -999;
+      for (const auto& candidate : command.output().candidate_window().candidate()) {
+        if (candidate.value() == "藍") id = candidate.id();
+      }
+      ASSERT_NE(id, -999);
+      SetSendCommandCommand(action, &command);
+      command.mutable_input()->mutable_command()->set_id(id);
+      EXPECT_TRUE(session.SendCommand(&command));
+      if (action != commands::SessionCommand::SUBMIT_CANDIDATE) {
+        EXPECT_PREEDIT("藍", command);
+        ASSERT_TRUE(SendKey("Enter", &session, &command));
+      }
+      EXPECT_RESULT_AND_KEY("藍", "あい", command);
+      EXPECT_FALSE(peer.live_conversion_active_());
+      EXPECT_FALSE(peer.pending_zenz_live_().pending);
+      command.Clear();
+      command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+      *command.mutable_input()->mutable_command() = stale_callback;
+      ASSERT_TRUE(session.SendCommand(&command));
+      EXPECT_FALSE(command.output().has_result());
+      EXPECT_FALSE(command.output().has_preedit());
+    }
+  }
+}
+
+TEST_F(SessionTest, SpaceZenzMouseActionsRejectHiddenOrInvalidCandidates) {
+  for (const std::string presentation : {"deferred", "corrected", "hidden",
+                                         "invalid"}) {
+    for (const auto action : {commands::SessionCommand::SELECT_CANDIDATE,
+                              commands::SessionCommand::HIGHLIGHT_CANDIDATE,
+                              commands::SessionCommand::SUBMIT_CANDIDATE}) {
+      SCOPED_TRACE(::testing::Message() << presentation << ":" << action);
+      MockEngine engine;
+      auto converter = CreateEngineConverterMock(&engine);
+      Session session(engine);
+      InitSessionToPrecomposition(&session);
+      config::Config config;
+      config::ConfigHandler::GetDefaultConfig(&config);
+      config.set_use_live_conversion(false);
+      config.set_use_zenz_live_correction(true);
+      config.set_use_zenz_synthetic_candidate(true);
+      config.set_zenz_conversion_correction_delay_msec(0);
+      config.set_show_candidate_window_on_initial_conversion(
+          presentation != "hidden");
+      config.set_defer_live_conversion_display_until_zenz_result(
+          presentation == "deferred");
+      config.set_session_keymap(config::Config::CUSTOM);
+      config.set_custom_keymap_table(
+          "status\tkey\tcommand\nComposition\tSpace\tConvert\n"
+          "Conversion\tEnter\tCommit\n");
+      session.SetConfig(config);
+      session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+      SessionTestPeer peer(session);
+      commands::Command command;
+      InsertCharacterString("あい", "ai", &session, &command);
+      Segments segments;
+      Segment* segment = segments.add_segment();
+      segment->set_key("あい");
+      AddCandidate("あい", "愛", segment);
+      AddCandidate("あい", "藍", segment);
+      EXPECT_CALL(*converter, StartConversion(_, _))
+          .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+      ASSERT_TRUE(SendKey("Space", &session, &command));
+      if (presentation == "corrected") {
+        ZenzLiveResponse response;
+        response.ok = true;
+        response.value = "亜衣";
+        command.Clear();
+        ASSERT_TRUE(peer.ApplyZenzLiveCorrectionResult(response, &command));
+      }
+      if (presentation != "invalid") {
+        ASSERT_FALSE(command.output().has_candidate_window());
+      }
+      const std::string visible = presentation == "deferred" ? "あい"
+                                  : presentation == "corrected" ? "亜衣"
+                                                                 : "愛";
+      SetSendCommandCommand(action, &command);
+      command.mutable_input()->mutable_command()->set_id(
+          presentation == "invalid" ? 999 : 1);
+      session.SendCommand(&command);
+      EXPECT_FALSE(command.output().has_result());
+      if (command.output().has_preedit()) EXPECT_PREEDIT(visible, command);
+      EXPECT_TRUE(peer.live_conversion_active_());
+      EXPECT_EQ(peer.pending_zenz_live_().pending, presentation != "corrected");
+      ASSERT_TRUE(SendKey("Enter", &session, &command));
+      EXPECT_RESULT_AND_KEY(visible, "あい", command);
+    }
+  }
+}
+
+TEST_F(SessionTest, SpaceZenzDeferredSubmitUndoDoesNotStartLiveConversion) {
+  for (const int delay : {0, 1000}) {
+    SCOPED_TRACE(delay);
+    MockEngine engine;
+    auto converter = CreateEngineConverterMock(&engine);
+    Session session(engine);
+    InitSessionToPrecomposition(&session);
+    commands::Capability capability;
+    capability.set_text_deletion(commands::Capability::DELETE_PRECEDING_TEXT);
+    session.set_client_capability(capability);
+    config::Config config;
+    config::ConfigHandler::GetDefaultConfig(&config);
+    config.set_use_live_conversion(false);
+    config.set_use_zenz_live_correction(true);
+    config.set_defer_live_conversion_display_until_zenz_result(true);
+    config.set_zenz_conversion_correction_delay_msec(delay);
+    config.set_session_keymap(config::Config::CUSTOM);
+    config.set_custom_keymap_table(
+        "status\tkey\tcommand\nComposition\tSpace\tConvert\n");
+    session.SetConfig(config);
+    session.SetKeyMapManager(std::make_shared<keymap::KeyMapManager>(config));
+    SessionTestPeer peer(session);
+    commands::Command command;
+    InsertCharacterString("あい", "ai", &session, &command);
+    Segments segments;
+    Segment* segment = segments.add_segment();
+    segment->set_key("あい");
+    AddCandidate("あい", "愛", segment);
+    EXPECT_CALL(*converter, StartConversion(_, _))
+        .Times(1)
+        .WillOnce(DoAll(SetArgPointee<1>(segments), Return(true)));
+    ASSERT_TRUE(SendKey("Space", &session, &command));
+    const auto stale_callback = command.output().callback().session_command();
+    // SUBMIT also covers commits requested by a host application on focus loss.
+    SetSendCommandCommand(commands::SessionCommand::SUBMIT, &command);
+    ASSERT_TRUE(session.SendCommand(&command));
+    EXPECT_RESULT_AND_KEY("あい", "あい", command);
+    SetSendCommandCommand(commands::SessionCommand::UNDO, &command);
+    ASSERT_TRUE(session.SendCommand(&command));
+    EXPECT_PREEDIT("あい", command);
+    ASSERT_TRUE(command.output().has_deletion_range());
+    EXPECT_EQ(command.output().deletion_range().length(), 2);
+    EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
+    EXPECT_FALSE(command.output().has_callback());
+    EXPECT_FALSE(peer.live_conversion_pending_());
+    EXPECT_FALSE(peer.pending_zenz_live_().pending);
+    ASSERT_TRUE(SendKey("a", &session, &command));
+    EXPECT_PREEDIT("あいあ", command);
+    EXPECT_FALSE(command.output().has_result());
+    command.Clear();
+    command.mutable_input()->set_type(commands::Input::SEND_COMMAND);
+    *command.mutable_input()->mutable_command() = stale_callback;
+    ASSERT_TRUE(session.SendCommand(&command));
+    EXPECT_PREEDIT("あいあ", command);
   }
 }
 

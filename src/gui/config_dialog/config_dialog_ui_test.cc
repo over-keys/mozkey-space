@@ -21,6 +21,10 @@
 namespace mozc::gui {
 class ConfigDialogTestPeer {
  public:
+  static void LoadSettings(ConfigDialog& dialog, const config::Config& value) {
+    dialog.ConvertFromProto(value);
+    dialog.UpdateDependentControls();
+  }
   static config::Config ReadSettings(const ConfigDialog& dialog) {
     config::Config value;
     dialog.ConvertToProto(&value);
@@ -134,6 +138,34 @@ TEST_F(ConfigDialogUiTest, RetainsIndependentLiveAndSpaceCorrectionDelays) {
         reloaded.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
     ASSERT_NE(reloaded_delay, nullptr);
     EXPECT_EQ(reloaded_delay->value(), initially_live ? 800 : 150);
+  }
+}
+
+TEST_F(ConfigDialogUiTest, ReloadReplacesBothEditedDelayValues) {
+  for (const bool initially_live : {false, true}) {
+    for (const bool loaded_live : {false, true}) {
+      factory_.live = initially_live;
+      ConfigDialog settings;
+      auto* live = settings.findChild<QCheckBox*>("liveConversionCheckBox");
+      auto* delay =
+          settings.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+      ASSERT_NE(live, nullptr);
+      ASSERT_NE(delay, nullptr);
+      delay->setValue(2000);
+      live->setChecked(!initially_live);
+      delay->setValue(3000);
+      config::Config imported;
+      imported.set_use_live_conversion(loaded_live);
+      imported.set_zenz_live_correction_delay_msec(900);
+      imported.set_zenz_conversion_correction_delay_msec(250);
+      ConfigDialogTestPeer::LoadSettings(settings, imported);
+      EXPECT_EQ(delay->value(), loaded_live ? 900 : 250);
+      live->setChecked(!loaded_live);
+      EXPECT_EQ(delay->value(), loaded_live ? 250 : 900);
+      const auto saved = ConfigDialogTestPeer::ReadSettings(settings);
+      EXPECT_EQ(saved.zenz_live_correction_delay_msec(), 900);
+      EXPECT_EQ(saved.zenz_conversion_correction_delay_msec(), 250);
+    }
   }
 }
 

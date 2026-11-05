@@ -713,6 +713,8 @@ class Session {
 
   // The internal implementation of both SelectCandidate and HighlightCandidate.
   bool SelectCandidateInternal(mozc::commands::Command* command);
+  void PromoteOrdinaryZenzConversionForCandidateSelection(
+      const mozc::commands::Command& command);
 
   // If the command is a shortcut to select a candidate from a list,
   // Process it and return true, otherwise return false.

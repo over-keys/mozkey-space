@@ -3487,6 +3487,14 @@ bool Session::EchoBackAndClearUndoContext(commands::Command* command) {
 
 bool Session::DoNothing(commands::Command* command) {
   command->mutable_output()->set_consumed(true);
+  // A no-op must preserve the presentation, including a hidden Mozc baseline.
+  if (HasVisibleZenzLiveCorrection()) {
+    return OutputZenzLiveCorrection(zenz_live_value_, command);
+  }
+  if (pending_zenz_live_.pending && live_conversion_active_ &&
+      context_->state() == ImeContext::CONVERSION) {
+    return OutputCurrentLiveConversionWithZenzPending(command);
+  }
   // Quick hack for zero query suggestion.
   // Caveats: Resetting converter causes b/8703702 on Windows.
   // Basically we should not *do* something in DoNothing.
@@ -3767,6 +3775,30 @@ bool Session::Undo(commands::Command* command) {
   return true;
 }
 
+void Session::PromoteOrdinaryZenzConversionForCandidateSelection(
+    const commands::Command& command) {
+  if (!live_conversion_active_ || live_conversion_from_composition_ ||
+      context_->state() != ImeContext::CONVERSION ||
+      HasDeferredZenzLivePresentation() || HasVisibleZenzLiveCorrection()) {
+    return;
+  }
+
+  // Space correction uses the real converter's visible candidate list.
+  // Only a currently visible ID may leave the speculative Zenz state; stale
+  // mouse events must not select an unseen candidate or cancel its request.
+  commands::Output snapshot;
+  context_->converter().FillOutput(context_->composer(), &snapshot);
+  if (!snapshot.has_candidate_window()) {
+    return;
+  }
+  for (const auto& candidate : snapshot.candidate_window().candidate()) {
+    if (candidate.has_id() && candidate.id() == command.input().command().id()) {
+      ClearLiveConversionState();
+      return;
+    }
+  }
+}
+
 bool Session::SelectCandidateInternal(commands::Command* command) {
   // If the current state is not conversion, composition or
   // precomposition, the candidate window should not be shown.  (On
@@ -3780,6 +3812,7 @@ bool Session::SelectCandidateInternal(commands::Command* command) {
     LOG(WARNING) << "input.command or input.command.id did not exist.";
     return false;
   }
+  PromoteOrdinaryZenzConversionForCandidateSelection(*command);
   // Passive live suggestions belong to a cloned ImeContext, not the real
   // converter.  Candidate IDs are local to their owning candidate list.  Never
   // resolve a displayed suggestion ID against the hidden real converter.
@@ -3879,6 +3912,7 @@ bool Session::CommitCandidate(commands::Command* command) {
     LOG(WARNING) << "input.command or input.command.id did not exist.";
     return false;
   }
+  PromoteOrdinaryZenzConversionForCandidateSelection(*command);
 
   // Live conversion deliberately keeps the real converter in CONVERSION while
   // rendering a passive SUGGESTION list generated from a cloned ImeContext.
@@ -5131,7 +5165,7 @@ bool Session::IgnoreStaleDelayedLiveConversion(commands::Command* command) {
           command->mutable_output()->mutable_preedit());
     }
 
-    command->mutable_output()->set_live_conversion(true);
+    command->mutable_output()->set_live_conversion(live_conversion_from_composition_);
     command->mutable_output()->set_live_conversion_pending(false);
     AttachCachedLiveConversionSuggestionCandidateWindow(
         command->mutable_output());
@@ -6544,7 +6578,7 @@ void Session::OverrideOutputWithDeferredZenzLivePresentation(
   }
   *output->mutable_preedit() =
       deferred_zenz_live_presentation_->visible_preedit;
-  output->set_live_conversion(true);
+  output->set_live_conversion(live_conversion_from_composition_);
   output->set_live_conversion_pending(false);
   output->set_zenz_live_correction_pending(true);
   output->set_zenz_live_correction_applied(false);
@@ -6612,6 +6646,7 @@ bool Session::CommitDeferredZenzLivePresentationForSubmit(
 
   const std::string visible_key = visible_presentation.key;
   const std::string visible_value = visible_presentation.value;
+  const bool restore_live_presentation = live_conversion_from_composition_;
 
   RestoreDeferredZenzLivePresentationForEditing();
 
@@ -6620,15 +6655,17 @@ bool Session::CommitDeferredZenzLivePresentationForSubmit(
         command, context_->GetRequest().zero_query_suggestion());
   }
 
-  // Model this as the same visible-pending state used by delayed live
-  // conversion so Undo restores exactly what the user saw before Enter.
-  ++live_conversion_generation_;
-  live_conversion_pending_ = true;
-  pending_live_conversion_generation_ = live_conversion_generation_;
-  pending_live_conversion_key_ =
-      context_->composer().GetQueryForConversion();
-  pending_live_conversion_input_ = command->input();
-  pending_live_conversion_presentation_ = std::move(visible_presentation);
+  // Live input needs its presentation snapshot on Undo. Ordinary Space input
+  // is already restored to raw composition and must not schedule live work.
+  if (restore_live_presentation) {
+    ++live_conversion_generation_;
+    live_conversion_pending_ = true;
+    pending_live_conversion_generation_ = live_conversion_generation_;
+    pending_live_conversion_key_ =
+        context_->composer().GetQueryForConversion();
+    pending_live_conversion_input_ = command->input();
+    pending_live_conversion_presentation_ = std::move(visible_presentation);
+  }
 
   PushDirectCommitUndoContext();
   ClearPendingRerankedPreeditCommitAfterConvertCancel();
@@ -7403,7 +7440,7 @@ bool Session::OutputCurrentLiveConversionWithZenzPending(
     }
 
     commands::Output* output = command->mutable_output();
-    output->set_live_conversion(true);
+    output->set_live_conversion(live_conversion_from_composition_);
     output->set_live_conversion_pending(false);
     output->set_zenz_live_correction_pending(true);
     AttachCachedLiveConversionSuggestionCandidateWindow(output);
@@ -7432,7 +7469,7 @@ bool Session::OutputCurrentLiveConversionAfterZenzStop(
     }
 
     commands::Output* output = command->mutable_output();
-    output->set_live_conversion(true);
+    output->set_live_conversion(live_conversion_from_composition_);
     output->set_live_conversion_pending(false);
     output->set_zenz_live_correction_pending(false);
     if (!debug.empty()) {
@@ -7522,7 +7559,7 @@ bool Session::AdvancePendingZenzLiveCorrection(
       result = OutputCurrentLiveConversionWithZenzPending(command);
     } else {
       commands::Output* output = command->mutable_output();
-      output->set_live_conversion(true);
+      output->set_live_conversion(live_conversion_from_composition_);
       output->set_live_conversion_pending(false);
       output->set_zenz_live_correction_pending(true);
       AttachCachedLiveConversionSuggestionCandidateWindow(output);
@@ -9659,6 +9696,12 @@ bool Session::AttachCachedLiveConversionSuggestionCandidateWindow(
     commands::Output* output) {
   DCHECK(output);
 
+  // Ordinary Space/manual conversion owns its real candidate list. Its Zenz
+  // callbacks must not replace that list with a passive live-input suggestion.
+  // Deferred and accepted presentations clear the window at their output sites.
+  if (live_conversion_active_ && !live_conversion_from_composition_) {
+    return false;
+  }
   output->clear_candidate_window();
 
   if (ShouldSuppressShiftedAsciiAutoSuggestion(context_->GetConfig(),
