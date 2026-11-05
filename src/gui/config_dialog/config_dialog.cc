@@ -6466,17 +6466,16 @@ void ConfigDialog::SelectLiveConversionSetting(int state) {
 
 void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
   const bool enabled = static_cast<bool>(state);
-  const bool live_enabled = enabled && liveConversionCheckBox->isChecked();
 
-  zenzLiveCorrectionDelayLabel->setEnabled(live_enabled);
-  zenzLiveCorrectionDelaySpinBox->setEnabled(live_enabled);
-  zenzDeferLiveConversionDisplayCheckBox->setEnabled(live_enabled);
+  zenzLiveCorrectionDelayLabel->setEnabled(enabled);
+  zenzLiveCorrectionDelaySpinBox->setEnabled(enabled);
+  zenzDeferLiveConversionDisplayCheckBox->setEnabled(enabled);
   SelectZenzDeferredPresentationSetting(
-      live_enabled ? static_cast<int>(
-                         zenzDeferLiveConversionDisplayCheckBox->isChecked())
-                   : 0);
-  zenzLiveCorrectionMinKeyLengthLabel->setEnabled(live_enabled);
-  zenzLiveCorrectionMinKeyLengthSpinBox->setEnabled(live_enabled);
+      enabled ? static_cast<int>(
+                    zenzDeferLiveConversionDisplayCheckBox->isChecked())
+              : 0);
+  zenzLiveCorrectionMinKeyLengthLabel->setEnabled(enabled);
+  zenzLiveCorrectionMinKeyLengthSpinBox->setEnabled(enabled);
   zenzLiveCorrectionProfileLabel->setEnabled(enabled);
   zenzLiveCorrectionProfileLineEdit->setEnabled(enabled);
   zenzLiveCorrectionTopicLabel->setEnabled(enabled);
@@ -6499,7 +6498,6 @@ void ConfigDialog::SelectZenzLiveCorrectionSetting(int state) {
 
 void ConfigDialog::SelectZenzDeferredPresentationSetting(int state) {
   const bool enabled =
-      liveConversionCheckBox->isChecked() &&
       zenzLiveCorrectionCheckBox->isChecked() &&
       static_cast<bool>(state);
 

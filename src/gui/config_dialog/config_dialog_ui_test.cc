@@ -107,16 +107,20 @@ TEST_F(ConfigDialogUiTest, TogglesZenzForSpaceWithoutEnablingLiveConversion) {
   EXPECT_TRUE(profile->isEnabled());
   EXPECT_TRUE(right->isEnabled());
   EXPECT_TRUE(right_length->isEnabled());
-  EXPECT_FALSE(delay->isEnabled());
-  EXPECT_FALSE(min_length->isEnabled());
-  EXPECT_FALSE(deferred->isEnabled());
-  EXPECT_FALSE(timeout->isEnabled());
+  EXPECT_TRUE(delay->isEnabled());
+  EXPECT_TRUE(min_length->isEnabled());
+  EXPECT_TRUE(deferred->isEnabled());
+  EXPECT_TRUE(timeout->isEnabled());
 
   zenz->setChecked(false);
   EXPECT_FALSE(live->isChecked());
   EXPECT_FALSE(profile->isEnabled());
   EXPECT_FALSE(right->isEnabled());
   EXPECT_FALSE(right_length->isEnabled());
+  EXPECT_FALSE(delay->isEnabled());
+  EXPECT_FALSE(min_length->isEnabled());
+  EXPECT_FALSE(deferred->isEnabled());
+  EXPECT_FALSE(timeout->isEnabled());
 
   zenz->setChecked(true);
   EXPECT_FALSE(live->isChecked());
@@ -132,8 +136,13 @@ TEST_F(ConfigDialogUiTest, TogglesZenzForSpaceWithoutEnablingLiveConversion) {
   live->setChecked(false);
   EXPECT_TRUE(zenz->isEnabled());
   EXPECT_TRUE(zenz->isChecked());
-  EXPECT_FALSE(delay->isEnabled());
+  EXPECT_TRUE(delay->isEnabled());
+  EXPECT_TRUE(timeout->isEnabled());
+  deferred->setChecked(false);
   EXPECT_FALSE(timeout->isEnabled());
+  EXPECT_TRUE(delay->isEnabled());
+  deferred->setChecked(true);
+  EXPECT_TRUE(timeout->isEnabled());
   right->setChecked(false);
   EXPECT_FALSE(right_length->isEnabled());
   right->setChecked(true);

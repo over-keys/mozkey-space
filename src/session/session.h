@@ -800,7 +800,7 @@ class Session {
       mozc::commands::Command* command,
       bool bypass_automatic_feedback = false);
   bool StartZenzCorrectionFromConversion(
-      mozc::commands::Command* command, bool from_composition,
+      mozc::commands::Command* command, bool from_composition, bool forced,
       bool bypass_automatic_feedback = false);
   bool ResumeCommandSequence(mozc::commands::Command* command);
   void AttachZenzLiveCorrectionStartCallback(

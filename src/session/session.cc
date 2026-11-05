@@ -7003,12 +7003,13 @@ bool Session::ForceZenzLiveCorrection(
   command->mutable_output()->set_consumed(true);
   Output(command);
   return StartZenzCorrectionFromConversion(
-      command, originally_live_composition, bypass_automatic_feedback);
+      command, originally_live_composition, /*forced=*/true,
+      bypass_automatic_feedback);
 }
 
 bool Session::StartZenzCorrectionFromConversion(
     commands::Command* command, const bool from_composition,
-    const bool bypass_automatic_feedback) {
+    const bool forced, const bool bypass_automatic_feedback) {
   // Reuse the conversion and output already produced by the caller. A second
   // Convert()/Output() would reset candidates or consume the output twice.
   const bool previously_live = live_conversion_active_;
@@ -7032,12 +7033,30 @@ bool Session::StartZenzCorrectionFromConversion(
   live_conversion_preedit_output_ = command->output().preedit();
   live_conversion_protected_spans_ = BuildZenzProtectedConversionSpans(
       context_->converter(), command->output(), key, mozc_value);
-  if (!MaybeScheduleZenzLiveCorrection(
-          command, /*forced=*/true, bypass_automatic_feedback) &&
-      !previously_live) {
+  const bool scheduled = MaybeScheduleZenzLiveCorrection(
+      command, forced, bypass_automatic_feedback);
+  if (!scheduled && !previously_live) {
     // Rejected by the regular privacy/eligibility gates. Preserve ordinary
     // conversion semantics rather than leaving a spurious live-conversion mode.
     ClearLiveConversionState();
+  }
+  if (scheduled && !forced && pending_zenz_live_.pending &&
+      context_->GetConfig().defer_live_conversion_display_until_zenz_result()) {
+    // Ordinary Space conversion starts from raw composition. Preserve exactly
+    // that visible text until Zenz responds, using the same presentation and
+    // cancellation machinery as deferred live conversion.
+    commands::Command visible_command;
+    OutputComposition(&visible_command);
+    if (visible_command.output().has_preedit()) {
+      DeferredZenzLivePresentation state;
+      state.visible_preedit = visible_command.output().preedit();
+      state.visible_key = key;
+      state.visible_raw_preedit = live_conversion_preedit_;
+      ExtractPreeditKeyAndValue(state.visible_preedit, &unused_key,
+                               &state.visible_value);
+      deferred_zenz_live_presentation_ = std::move(state);
+      OverrideOutputWithDeferredZenzLivePresentation(command);
+    }
   }
   return true;
 }
@@ -7051,7 +7070,8 @@ bool Session::MaybeScheduleZenzLiveCorrection(
     return false;
   }
 
-  if (!forced && !config.use_live_conversion()) {
+  if (!forced && live_conversion_from_composition_ &&
+      !config.use_live_conversion()) {
     return false;
   }
 
@@ -8541,7 +8561,7 @@ bool Session::InsertCharacter(commands::Command* command) {
   }
 
   // Handle shortcut keys selecting a candidate from a list.
-  if (MaybeSelectCandidate(command)) {
+  if (!HasDeferredZenzLivePresentation() && MaybeSelectCandidate(command)) {
     ClearPendingRerankedPreeditCommitAfterConvertCancel();
     if (ordinary_zenz_conversion) {
       if (HasVisibleZenzLiveCorrection()) {
@@ -8571,7 +8591,8 @@ bool Session::InsertCharacter(commands::Command* command) {
     // next composition, including a visible Zenz overlay. Live-origin input
     // still follows the editing path above instead of implicitly committing.
     if (!ordinary_zenz_conversion ||
-        !CommitZenzLiveCorrectionResult(command)) {
+        (!CommitDeferredZenzLivePresentationForSubmit(command) &&
+         !CommitZenzLiveCorrectionResult(command))) {
       CommitNotTriggeringZeroQuerySuggest(command);
     }
     committed_conversion_before_insert = true;
@@ -8676,6 +8697,7 @@ bool Session::InsertCharacter(commands::Command* command) {
     }
 
     if (!learned_reranked_preedit_after_cancel &&
+        !committed_conversion_before_insert &&
         (live_conversion_pending_ || was_pending_live_conversion ||
          was_deferred_zenz_live_presentation)) {
       return CommitPendingLiveConversionDisplayDirectly(command);
@@ -10109,7 +10131,7 @@ bool Session::Convert(commands::Command* command) {
       context_->GetConfig().use_zenz_live_correction() &&
       context_->composer().GetInputFieldType() != commands::Context::PASSWORD) {
     return StartZenzCorrectionFromConversion(
-        command, /*from_composition=*/false);
+        command, /*from_composition=*/false, /*forced=*/false);
   }
   return true;
 }

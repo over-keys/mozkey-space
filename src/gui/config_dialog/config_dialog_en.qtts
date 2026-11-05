@@ -556,9 +556,17 @@
         <translation>Live conversion</translation>
     </message>
     <message>
+        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。</source>
+        <translation>Time to wait after live conversion or Space conversion before starting Zenz correction.</translation>
+    </message>
+    <message>
+        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</source>
+        <translation>Time to wait after live conversion or Space conversion before starting Zenz correction. Set to 0 ms to start immediately.</translation>
+    </message>
+    <message>
         <location filename="config_dialog.ui" line="0"/>
-        <source>Zenz ライブ補正</source>
-        <translation>Zenz live correction</translation>
+        <source>Zenz 補正</source>
+        <translation>Zenz correction</translation>
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>
@@ -567,12 +575,12 @@
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>
-        <source>Zenz 補正結果が返るまで通常のライブ変換結果を表示しない</source>
-        <translation>Hide the normal live-conversion result until Zenz correction finishes</translation>
+        <source>Zenz 補正結果が返るまで通常の変換結果を表示しない</source>
+        <translation>Hide the normal conversion result until Zenz correction finishes</translation>
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>
-        <source>Zenz 補正が実行される場合、補正結果が確定するまで通常の Mozc ライブ変換結果を表示しません。Zenz が採用されなかった場合は Mozc 結果を表示します。</source>
+        <source>Zenz 補正が実行される場合、補正結果が確定するまで通常の Mozc 変換結果を表示しません。Zenz が採用されなかった場合は Mozc 結果を表示します。</source>
         <translation>When Zenz correction runs, keep the previous preedit visible until the correction finishes. If Zenz is not adopted, show the Mozc result.</translation>
     </message>
     <message>
@@ -582,8 +590,8 @@
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>
-        <source>「通常のライブ変換結果を表示しない」が有効な場合、Zenz 補正要求の送信後、この時間以内に結果が返らなければ、その回の Zenz 補正を中止して通常の Mozc ライブ変換結果を表示します。</source>
-        <translation>When deferred presentation is enabled, if no Zenz result is available within this time after the correction request is submitted, cancel Zenz for that input and show the normal Mozc live-conversion result.</translation>
+        <source>「通常の変換結果を表示しない」が有効な場合、Zenz 補正要求の送信後、この時間以内に結果が返らなければ、その回の Zenz 補正を中止して通常の Mozc 変換結果を表示します。</source>
+        <translation>When deferred presentation is enabled, if no Zenz result is available within this time after the correction request is submitted, cancel Zenz for that input and show the normal Mozc conversion result.</translation>
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>

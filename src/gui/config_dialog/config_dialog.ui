@@ -1035,7 +1035,7 @@
                    <item>
                     <widget class="QLabel" name="zenzLiveCorrectionSectionLabel">
                      <property name="text">
-                      <string>Zenz ライブ補正</string>
+                      <string>Zenz 補正</string>
                      </property>
                     </widget>
                    </item>
@@ -1559,7 +1559,7 @@
                 <item row="17" column="0" colspan="3">
                  <widget class="QLabel" name="zenzLiveCorrectionDelayLabel">
                   <property name="toolTip">
-                   <string>ライブ変換後、Zenz 補正を開始するまでの待ち時間です。</string>
+                   <string>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。</string>
                   </property>
                   <property name="text">
                    <string>Zenz 補正開始の遅延</string>
@@ -1569,7 +1569,7 @@
                 <item row="17" column="3" colspan="5">
                  <widget class="QSpinBox" name="zenzLiveCorrectionDelaySpinBox">
                   <property name="toolTip">
-                   <string>ライブ変換後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</string>
+                   <string>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</string>
                   </property>
                   <property name="minimum">
                    <number>0</number>
@@ -1626,17 +1626,17 @@
                 <item row="19" column="0" colspan="8">
                  <widget class="QCheckBox" name="zenzDeferLiveConversionDisplayCheckBox">
                   <property name="toolTip">
-                   <string>Zenz 補正が実行される場合、補正結果が確定するまで通常の Mozc ライブ変換結果を表示しません。Zenz が採用されなかった場合は Mozc 結果を表示します。</string>
+                   <string>Zenz 補正が実行される場合、補正結果が確定するまで通常の Mozc 変換結果を表示しません。Zenz が採用されなかった場合は Mozc 結果を表示します。</string>
                   </property>
                   <property name="text">
-                   <string>Zenz 補正結果が返るまで通常のライブ変換結果を表示しない</string>
+                   <string>Zenz 補正結果が返るまで通常の変換結果を表示しない</string>
                   </property>
                  </widget>
                 </item>
                 <item row="20" column="0" colspan="3">
                  <widget class="QLabel" name="zenzDeferredPresentationTimeoutLabel">
                   <property name="toolTip">
-                   <string>「通常のライブ変換結果を表示しない」が有効な場合、Zenz 補正要求の送信後、この時間以内に結果が返らなければ、その回の Zenz 補正を中止して通常の Mozc ライブ変換結果を表示します。</string>
+                   <string>「通常の変換結果を表示しない」が有効な場合、Zenz 補正要求の送信後、この時間以内に結果が返らなければ、その回の Zenz 補正を中止して通常の Mozc 変換結果を表示します。</string>
                   </property>
                   <property name="text">
                    <string>Zenz 補正開始後の最大待機時間</string>
@@ -1646,7 +1646,7 @@
                 <item row="20" column="3" colspan="5">
                  <widget class="QSpinBox" name="zenzDeferredPresentationTimeoutSpinBox">
                   <property name="toolTip">
-                   <string>「通常のライブ変換結果を表示しない」が有効な場合、Zenz 補正要求の送信後、この時間以内に結果が返らなければ、その回の Zenz 補正を中止して通常の Mozc ライブ変換結果を表示します。</string>
+                   <string>「通常の変換結果を表示しない」が有効な場合、Zenz 補正要求の送信後、この時間以内に結果が返らなければ、その回の Zenz 補正を中止して通常の Mozc 変換結果を表示します。</string>
                   </property>
                   <property name="minimum">
                    <number>50</number>

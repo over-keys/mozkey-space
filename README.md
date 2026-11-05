@@ -17,7 +17,7 @@
 
 <br>
 
-**mozkey-space 1.0.0** は [本家 Mozkey v1.0.0](https://github.com/koyasi777/mozkey/tree/v1.0.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
+**mozkey-space 1.0.1** は [本家 Mozkey v1.0.0](https://github.com/koyasi777/mozkey/tree/v1.0.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
 
 設定は **ライブ変換 OFF / Zenz 補正 ON** とし、Space は標準の通常変換を使用します。旧版や手動設定から移行する場合の詳細は [Space 変換の Zenz 補正](#space-変換の-zenz-補正) を参照してください。旧 5.x からはバージョン体系が変わるため自動更新には対応しません。設定・辞書をバックアップし、旧版をアンインストールしてから導入してください。以下には本家から引き継いだ機能説明も含まれます。
 
@@ -191,7 +191,7 @@ Windows の `universal` MSI は、製品全体が x64 / ARM64 の両方でネイ
 - Windows の Zenz named pipe では、同名パイプの先取りとリモート接続を拒否し、クライアントが接続先 scorer のセッション・ユーザー SID・実行イメージパスを入力送信前に照合。検証できない接続先にはプロンプトを送信しない
 - Zenz 補正開始までの遅延時間を設定画面から変更可能。新規・未設定時のデフォルトは 700 ms（保存済みの設定値は維持）
 - Zenz 補正開始の最小文字数を設定画面から変更可能
-- 「Zenz 補正結果が返るまで通常のライブ変換結果を表示しない」opt-in 設定を追加。待機中は直前まで安定して表示されていた Zenz 補正部分を可能な範囲で維持し、未解決のローマ字 suffix はその表示へ追従。Zenz が採用されない場合は現在の Mozc ライブ変換結果へフォールバック
+- 「Zenz 補正結果が返るまで通常の変換結果を表示しない」opt-in 設定を追加。待機中は直前まで安定して表示されていた Zenz 補正部分を可能な範囲で維持し、未解決のローマ字 suffix はその表示へ追従。Zenz が採用されない場合は現在の Mozc ライブ変換結果へフォールバック
 - deferred 表示専用の最大待機時間を設定画面から変更可能。既定は Zenz 補正要求の送信後 250 ms で、期限を超えた generation は破棄して、すでに計算済みの Mozc ライブ変換結果へフォールバック
 - deferred 表示中の Enter / Shift による英字入力では、裏側の Mozc baseline ではなく、その時点でユーザーに見えている presentation を確定。Enter 確定後の Undo でも同じ presentation を復元
 - Zenz 出力が確定済み左文脈の長い suffix を現在入力の先頭へ反復する context echo を検出して拒否し、通常の Mozc ライブ変換結果へフォールバック
@@ -360,15 +360,17 @@ Windows 版では、追加のオフライン防御層として、インストー
 
 ライブ変換を OFF にしても、設定画面の「Zenz 補正を有効にする」を ON にすると、通常の Space 変換で Mozc の変換結果を表示し、Zenz に非同期で補正を依頼します。キーのカスタム割り当ては不要です。通常変換コマンド `Convert` に組み込んでいるため、別のキーから通常変換する場合も同じように動作します。
 
-補正結果が返る前に確定すると Mozc の結果を、補正結果が表示された後に確定すると表示中の結果を確定します。そのまま次の文字を入力した場合も、表示中の変換結果を確定して新しい入力を始めます。Zenz 補正を OFF にすると通常の Mozc 変換になります。ライブ変換用の補正待機時間・最小文字数・応答待ち表示設定は Space 変換には適用しません。
+Space 変換にも、Zenz 補正開始の遅延・最小文字数・応答待ちの表示設定・補正開始後の最大待機時間を適用します。「Zenz 補正結果が返るまで通常の変換結果を表示しない」を ON にすると、応答待ちの間は未変換の入力を表示します。最大待機時間は要求の送信時から数え、補正開始までの遅延時間は含みません。失敗・タイムアウト・不採用時は Mozc の結果を表示します。待機中にもう一度 Space を押すと、候補を進めずに Mozc の結果を表示します。
 
-以前の回避策として Space に `ForceZenzLiveCorrection` を割り当てている場合は、未変換入力中の Space を通常の `Convert` に戻してください。`ForceZenzLiveCorrection` は手動実行用のため、Zenz 補正の ON/OFF 設定にかかわらず実行されます。
+Enter や続け入力では、その時点で画面に表示されている文字列を確定します。表示待機中なら未変換の入力、補正結果が表示された後なら補正結果を確定して、新しい入力を始めます。Zenz 補正を OFF にすると通常の Mozc 変換になります。
+
+以前の回避策として Space に `ForceZenzLiveCorrection` を割り当てている場合は、未変換入力中の Space を通常の `Convert` に戻してください。`ForceZenzLiveCorrection` は手動実行用のため、Zenz 補正の ON/OFF 設定・補正開始の遅延・最小文字数・応答待ち表示設定にかかわらず実行されます。
 
 ### Zenz ライブ補正
 
 ライブ変換と Zenz ライブ補正の両方を有効にすると、通常は Mozc のライブ変換結果を表示したうえで、ローカルの Zenz runtime に非同期で補正を依頼します。
 
-設定画面の「Zenz 補正結果が返るまで通常のライブ変換結果を表示しない」を有効にすると、Zenz 補正を実行する入力では、新しい Mozc ライブ変換結果を応答待ちの間は先に表示しません。すでに安定して表示できている Zenz 補正部分がある場合は、その表示を可能な範囲で維持し、入力途中の未解決ローマ字 suffix はその後ろへ追従表示します。Mozc 側の再文節化だけを理由に、一度安定した Zenz 表示を不用意に細分化・巻き戻ししないように扱います。Zenz が失敗、タイムアウト、検証拒否、または Mozc と同一の結果になって採用されなかった場合は、その時点の通常 Mozc ライブ変換結果へフォールバックします。
+設定画面の「Zenz 補正結果が返るまで通常の変換結果を表示しない」を有効にすると、Zenz 補正を実行する入力では、新しい Mozc ライブ変換結果を応答待ちの間は先に表示しません。すでに安定して表示できている Zenz 補正部分がある場合は、その表示を可能な範囲で維持し、入力途中の未解決ローマ字 suffix はその後ろへ追従表示します。Mozc 側の再文節化だけを理由に、一度安定した Zenz 表示を不用意に細分化・巻き戻ししないように扱います。Zenz が失敗、タイムアウト、検証拒否、または Mozc と同一の結果になって採用されなかった場合は、その時点の通常 Mozc ライブ変換結果へフォールバックします。
 
 この deferred 表示には、Zenz 補正要求を実際に送信してからの最大待機時間を設定できます。既定は 250 ms です。この期限までに結果が得られなければ、その generation の Zenz 補正を中止して、すでに計算済みの Mozc ライブ変換結果を表示します。遅れて返った同じ generation の Zenz 結果は採用しません。Zenz 補正開始前のデバウンス時間はこの 250 ms には含まれません。
 
@@ -1282,15 +1284,22 @@ apply asynchronous Zenz correction after ordinary Space conversion. No custom
 key assignment is required. This is part of the normal `Convert` command, so
 other keys assigned to normal conversion behave the same way.
 
-Committing before the response arrives uses the Mozc result; committing after
-the correction appears uses the visible result. Continuing to type also commits
-the visible conversion and starts a new composition. Disabling Zenz correction
-restores ordinary Mozc conversion. The live-conversion debounce, minimum reading
-length, and deferred-presentation settings do not apply to Space conversion.
+Space conversion honors the Zenz delay, minimum reading length, deferred-display
+option, and maximum wait after request submission. With deferred display enabled,
+the raw composition stays visible while waiting. The maximum wait starts when the
+request is submitted and excludes the configured delay. Failure, timeout, or a
+rejected correction reveals the Mozc result. Pressing Space again while waiting
+also reveals the Mozc result without advancing the candidate.
+
+Enter and continued typing commit exactly the text currently displayed. While
+deferred display is waiting, this is the raw composition; after correction it is
+the Zenz result. Continued typing then starts a new composition. Disabling Zenz
+correction restores ordinary Mozc conversion.
 
 If Space was previously assigned to `ForceZenzLiveCorrection` as a workaround,
 restore its Composition assignment to `Convert`. The manual force command runs
-regardless of the Zenz correction checkbox.
+regardless of the Zenz correction checkbox, delay, minimum reading length, or
+deferred-display option.
 
 ### Zenz live correction
 
