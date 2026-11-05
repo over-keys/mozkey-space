@@ -99,6 +99,8 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
   bool eventFilter(QObject *obj, QEvent *event) override;
 
  private:
+  friend class ConfigDialogTestPeer;
+
   bool GetConfig(config::Config *config);
   bool SetConfig(const config::Config &config);
   void ConvertToProto(config::Config *config) const;
@@ -113,6 +115,12 @@ class ConfigDialog : public QDialog, private Ui::ConfigDialog {
   void UpdateDependentControls();
   void RecordCurrentStateAsApplied();
   bool IsModified() const;
+
+  // The visible delay edits the active conversion mode; retain the other
+  // mode's value when switching the live-conversion checkbox.
+  uint32_t zenz_live_correction_delay_msec_ = 700;
+  uint32_t zenz_conversion_correction_delay_msec_ = 0;
+  bool zenz_delay_is_live_ = false;
 
   QWidget* conversion_status_preview_ = nullptr;
   std::unique_ptr<client::ClientInterface> client_;

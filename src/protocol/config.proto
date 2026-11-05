@@ -349,6 +349,10 @@ message Config {
   // previous preedit visible instead.
   optional uint32 zenz_live_correction_delay_msec = 1004 [default = 700];
 
+  // Delay for explicit normal conversion while live conversion is off.
+  // Keep it independent of the live-typing debounce, including saved values.
+  optional uint32 zenz_conversion_correction_delay_msec = 1050 [default = 0];
+
   // Keep the pre-Zenz preedit visible while Zenz live correction is pending.
   // Mozc conversion still runs first and remains the validation baseline and
   // fallback. If Zenz is not scheduled or its result is not adopted, the Mozc

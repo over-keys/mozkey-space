@@ -360,7 +360,7 @@ Windows 版では、追加のオフライン防御層として、インストー
 
 ライブ変換を OFF にしても、設定画面の「Zenz 補正を有効にする」を ON にすると、通常の Space 変換で Mozc の変換結果を表示し、Zenz に非同期で補正を依頼します。キーのカスタム割り当ては不要です。通常変換コマンド `Convert` に組み込んでいるため、別のキーから通常変換する場合も同じように動作します。
 
-Space 変換にも、Zenz 補正開始の遅延・最小文字数・応答待ちの表示設定・補正開始後の最大待機時間を適用します。「Zenz 補正結果が返るまで通常の変換結果を表示しない」を ON にすると、応答待ちの間は未変換の入力を表示します。最大待機時間は要求の送信時から数え、補正開始までの遅延時間は含みません。失敗・タイムアウト・不採用時は Mozc の結果を表示します。待機中にもう一度 Space を押すと、候補を進めずに Mozc の結果を表示します。
+Space 変換にも、Zenz 補正開始の遅延・最小文字数・応答待ちの表示設定・補正開始後の最大待機時間を適用します。Space 変換の補正開始遅延は既定で 0 ms（即時）、ライブ変換は従来どおり 700 ms です。ライブ変換の ON/OFF に応じて遅延欄に対応する値を表示し、それぞれ別々に保存します。以前に保存したライブ変換用の遅延値は Space 変換へ引き継ぎません。「Zenz 補正結果が返るまで通常の変換結果を表示しない」を ON にすると、応答待ちの間は未変換の入力を表示します。最大待機時間は要求の送信時から数え、補正開始までの遅延時間は含みません。失敗・タイムアウト・不採用時は Mozc の結果を表示します。待機中にもう一度 Space を押すと、候補を進めずに Mozc の結果を表示します。
 
 Enter や続け入力では、その時点で画面に表示されている文字列を確定します。表示待機中なら未変換の入力、補正結果が表示された後なら補正結果を確定して、新しい入力を始めます。Zenz 補正を OFF にすると通常の Mozc 変換になります。
 
@@ -1283,6 +1283,11 @@ With live conversion OFF, enable **Zenz correction** in the config dialog to
 apply asynchronous Zenz correction after ordinary Space conversion. No custom
 key assignment is required. This is part of the normal `Convert` command, so
 other keys assigned to normal conversion behave the same way.
+
+Space correction defaults to 0 ms (immediate), while live correction keeps its
+700 ms default. The delay control shows the value for the active conversion mode;
+the two values are saved independently. Previously saved live delays do not become
+the Space delay.
 
 Space conversion honors the Zenz delay, minimum reading length, deferred-display
 option, and maximum wait after request submission. With deferred display enabled,

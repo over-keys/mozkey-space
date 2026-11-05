@@ -1559,7 +1559,7 @@
                 <item row="17" column="0" colspan="3">
                  <widget class="QLabel" name="zenzLiveCorrectionDelayLabel">
                   <property name="toolTip">
-                   <string>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。</string>
+                   <string>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。</string>
                   </property>
                   <property name="text">
                    <string>Zenz 補正開始の遅延</string>
@@ -1569,7 +1569,7 @@
                 <item row="17" column="3" colspan="5">
                  <widget class="QSpinBox" name="zenzLiveCorrectionDelaySpinBox">
                   <property name="toolTip">
-                   <string>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</string>
+                   <string>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。0 ms にすると即時補正します。</string>
                   </property>
                   <property name="minimum">
                    <number>0</number>

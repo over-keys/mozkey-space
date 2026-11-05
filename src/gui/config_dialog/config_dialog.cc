@@ -1095,7 +1095,6 @@ constexpr uint32_t kMaxLiveConversionDelayMsec = 1000;
 constexpr uint32_t kDefaultLiveConversionMinKeyLength = 2;
 constexpr uint32_t kMinLiveConversionMinKeyLength = 1;
 constexpr uint32_t kMaxLiveConversionMinKeyLength = 20;
-constexpr uint32_t kDefaultZenzLiveCorrectionDelayMsec = 700;
 constexpr uint32_t kMaxZenzLiveCorrectionDelayMsec = 5000;
 constexpr uint32_t kDefaultZenzDeferredPresentationTimeoutMsec = 250;
 constexpr uint32_t kMinZenzDeferredPresentationTimeoutMsec = 50;
@@ -4878,6 +4877,12 @@ void ConfigDialog::ConvertFromProto(const config::Config &config) {
   // tab3
   SET_CHECKBOX(autoSwitchCompositionMode, auto_switch_composition_mode);
 
+  zenz_live_correction_delay_msec_ = std::min(
+      config.zenz_live_correction_delay_msec(), kMaxZenzLiveCorrectionDelayMsec);
+  zenz_conversion_correction_delay_msec_ = std::min(
+      config.zenz_conversion_correction_delay_msec(),
+      kMaxZenzLiveCorrectionDelayMsec);
+  zenz_delay_is_live_ = config.use_live_conversion();
   SET_CHECKBOX(liveConversionCheckBox, use_live_conversion);
   SET_CHECKBOX(showCandidateWindowOnInitialConversionCheckBox,
                show_candidate_window_on_initial_conversion);
@@ -4911,15 +4916,9 @@ void ConfigDialog::ConvertFromProto(const config::Config &config) {
   SET_CHECKBOX(zenzDeferLiveConversionDisplayCheckBox,
                defer_live_conversion_display_until_zenz_result);
 
-  const uint32_t zenz_live_correction_delay_msec =
-      config.has_zenz_live_correction_delay_msec()
-          ? config.zenz_live_correction_delay_msec()
-          : kDefaultZenzLiveCorrectionDelayMsec;
-  zenzLiveCorrectionDelaySpinBox->setValue(
-      static_cast<int>(
-          std::clamp(zenz_live_correction_delay_msec,
-                     0u,
-                     kMaxZenzLiveCorrectionDelayMsec)));
+  zenzLiveCorrectionDelaySpinBox->setValue(static_cast<int>(
+      zenz_delay_is_live_ ? zenz_live_correction_delay_msec_
+                          : zenz_conversion_correction_delay_msec_));
 
   const uint32_t zenz_deferred_presentation_timeout_msec =
       config.has_zenz_deferred_presentation_timeout_msec()
@@ -5295,8 +5294,13 @@ void ConfigDialog::ConvertToProto(config::Config *config) const {
                use_zenz_strict_reading_preservation);
   GET_CHECKBOX(zenzDeferLiveConversionDisplayCheckBox,
                defer_live_conversion_display_until_zenz_result);
+  const uint32_t visible_zenz_delay =
+      static_cast<uint32_t>(zenzLiveCorrectionDelaySpinBox->value());
   config->set_zenz_live_correction_delay_msec(
-      static_cast<uint32_t>(zenzLiveCorrectionDelaySpinBox->value()));
+      zenz_delay_is_live_ ? visible_zenz_delay : zenz_live_correction_delay_msec_);
+  config->set_zenz_conversion_correction_delay_msec(
+      zenz_delay_is_live_ ? zenz_conversion_correction_delay_msec_
+                          : visible_zenz_delay);
   config->set_zenz_deferred_presentation_timeout_msec(
       static_cast<uint32_t>(
           zenzDeferredPresentationTimeoutSpinBox->value()));
@@ -6450,6 +6454,17 @@ void ConfigDialog::SelectInputModeSetting(int index) {
 
 void ConfigDialog::SelectLiveConversionSetting(int state) {
   const bool enabled = static_cast<bool>(state);
+
+  if (enabled != zenz_delay_is_live_) {
+    uint32_t& previous_delay = zenz_delay_is_live_
+                                   ? zenz_live_correction_delay_msec_
+                                   : zenz_conversion_correction_delay_msec_;
+    previous_delay = zenzLiveCorrectionDelaySpinBox->value();
+    zenz_delay_is_live_ = enabled;
+    zenzLiveCorrectionDelaySpinBox->setValue(static_cast<int>(
+        enabled ? zenz_live_correction_delay_msec_
+                : zenz_conversion_correction_delay_msec_));
+  }
 
   liveConversionDelayLabel->setEnabled(enabled);
   liveConversionDelaySpinBox->setEnabled(enabled);

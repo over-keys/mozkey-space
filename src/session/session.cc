@@ -994,7 +994,12 @@ bool ShouldExposePreLiveConversionReading(const ImeContext& context) {
       key, kMinLiveConversionMinKeyLength);
 }
 
-uint32_t GetZenzLiveCorrectionDelayMsec(const config::Config& config) {
+uint32_t GetZenzCorrectionDelayMsec(const config::Config& config,
+                                    const bool from_composition) {
+  if (!from_composition) {
+    return std::min(config.zenz_conversion_correction_delay_msec(),
+                    kMaxZenzLiveCorrectionDelayMsec);
+  }
   if (!config.has_zenz_live_correction_delay_msec()) {
     return kDefaultZenzLiveCorrectionDelayMsec;
   }
@@ -7196,7 +7201,8 @@ bool Session::MaybeScheduleZenzLiveCorrection(
       protected_prompt.placeholder_count));
 
   const uint32_t delay_msec =
-      forced ? 0 : GetZenzLiveCorrectionDelayMsec(config);
+      forced ? 0 : GetZenzCorrectionDelayMsec(
+                       config, live_conversion_from_composition_);
   if (delay_msec == 0) {
     ZenzDebugOutput("[zenz] start immediately");
     // The current command already contains the freshly generated live
@@ -7227,7 +7233,8 @@ void Session::AttachZenzLiveCorrectionStartCallback(
   session_command->set_live_conversion_key(pending_zenz_live_.key);
 
   callback->set_delay_millisec(
-      GetZenzLiveCorrectionDelayMsec(context_->GetConfig()));
+      GetZenzCorrectionDelayMsec(context_->GetConfig(),
+                                live_conversion_from_composition_));
 }
 
 void Session::AttachZenzLiveCorrectionPollCallback(

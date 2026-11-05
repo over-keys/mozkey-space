@@ -10,6 +10,7 @@
 #include <QSpinBox>
 #include <QTranslator>
 #include <memory>
+#include <optional>
 
 #include "client/client.h"
 #include "client/client_mock.h"
@@ -18,12 +19,23 @@
 #include "testing/gunit.h"
 
 namespace mozc::gui {
+class ConfigDialogTestPeer {
+ public:
+  static config::Config ReadSettings(const ConfigDialog& dialog) {
+    config::Config value;
+    dialog.ConvertToProto(&value);
+    return value;
+  }
+};
+
 namespace {
 
 class TestClientFactory : public client::ClientFactoryInterface {
  public:
   bool live = false;
   bool zenz = true;
+  std::optional<uint32_t> live_delay;
+  std::optional<uint32_t> space_delay;
 
   std::unique_ptr<client::ClientInterface> NewClient() override {
     auto mock = std::make_unique<::testing::StrictMock<client::ClientMock>>();
@@ -32,6 +44,10 @@ class TestClientFactory : public client::ClientFactoryInterface {
     EXPECT_CALL(*mock, GetConfig(::testing::_))
         .WillOnce([this](config::Config* value) {
           value->set_use_live_conversion(live);
+          if (live_delay) value->set_zenz_live_correction_delay_msec(*live_delay);
+          if (space_delay) {
+            value->set_zenz_conversion_correction_delay_msec(*space_delay);
+          }
           value->set_use_zenz_live_correction(zenz);
           value->set_use_zenz_live_correction_right_context(true);
           value->set_defer_live_conversion_display_until_zenz_result(true);
@@ -71,7 +87,53 @@ TEST_F(ConfigDialogUiTest, LoadsZenzIndependentlyOfLiveConversion) {
       EXPECT_EQ(check->isChecked(), zenz);
       EXPECT_EQ(check->text(), "Enable Zenz correction");
       EXPECT_TRUE(check->toolTip().contains("Space"));
+      auto* delay =
+          settings.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+      ASSERT_NE(delay, nullptr);
+      EXPECT_EQ(delay->value(), live ? 700 : 0);
     }
+  }
+}
+
+TEST_F(ConfigDialogUiTest, RetainsIndependentLiveAndSpaceCorrectionDelays) {
+  for (const bool initially_live : {false, true}) {
+    factory_.live = initially_live;
+    // A legacy profile's saved live delay must not become the Space default.
+    factory_.live_delay = 1300;
+    factory_.space_delay.reset();
+    ConfigDialog settings;
+    auto* live = settings.findChild<QCheckBox*>("liveConversionCheckBox");
+    auto* delay =
+        settings.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+    ASSERT_NE(live, nullptr);
+    ASSERT_NE(delay, nullptr);
+    EXPECT_EQ(delay->value(), initially_live ? 1300 : 0);
+    live->setChecked(false);
+    EXPECT_EQ(delay->value(), 0);
+    delay->setValue(150);
+    auto saved = ConfigDialogTestPeer::ReadSettings(settings);
+    EXPECT_EQ(saved.zenz_conversion_correction_delay_msec(), 150);
+    EXPECT_EQ(saved.zenz_live_correction_delay_msec(), 1300);
+    live->setChecked(true);
+    EXPECT_EQ(delay->value(), 1300);
+    delay->setValue(800);
+    saved = ConfigDialogTestPeer::ReadSettings(settings);
+    EXPECT_EQ(saved.zenz_conversion_correction_delay_msec(), 150);
+    EXPECT_EQ(saved.zenz_live_correction_delay_msec(), 800);
+    live->setChecked(false);
+    EXPECT_EQ(delay->value(), 150);
+    saved = ConfigDialogTestPeer::ReadSettings(settings);
+    EXPECT_EQ(saved.zenz_conversion_correction_delay_msec(), 150);
+    EXPECT_EQ(saved.zenz_live_correction_delay_msec(), 800);
+
+    factory_.live = initially_live;
+    factory_.live_delay = saved.zenz_live_correction_delay_msec();
+    factory_.space_delay = saved.zenz_conversion_correction_delay_msec();
+    ConfigDialog reloaded;
+    auto* reloaded_delay =
+        reloaded.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+    ASSERT_NE(reloaded_delay, nullptr);
+    EXPECT_EQ(reloaded_delay->value(), initially_live ? 800 : 150);
   }
 }
 

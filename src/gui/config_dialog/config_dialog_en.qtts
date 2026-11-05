@@ -556,12 +556,12 @@
         <translation>Live conversion</translation>
     </message>
     <message>
-        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。</source>
-        <translation>Time to wait after live conversion or Space conversion before starting Zenz correction.</translation>
+        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。</source>
+        <translation>Time to wait after live conversion or Space conversion before starting Zenz correction. Live and Space conversion delays are saved separately.</translation>
     </message>
     <message>
-        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</source>
-        <translation>Time to wait after live conversion or Space conversion before starting Zenz correction. Set to 0 ms to start immediately.</translation>
+        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。0 ms にすると即時補正します。</source>
+        <translation>Time to wait after live conversion or Space conversion before starting Zenz correction. Live and Space conversion delays are saved separately. Set to 0 ms to start immediately.</translation>
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>

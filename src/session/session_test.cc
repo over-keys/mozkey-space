@@ -18451,7 +18451,7 @@ TEST_F(SessionTest, OrdinaryZenzConversionCommitsBeforeContinuedInput) {
           config.set_use_live_conversion(false);
           config.set_use_zenz_live_correction(standard_conversion);
           config.set_use_zenz_synthetic_candidate(true);
-          config.set_zenz_live_correction_delay_msec(0);
+          config.set_zenz_conversion_correction_delay_msec(0);
           config.set_defer_live_conversion_display_until_zenz_result(deferred);
           config.set_use_direct_commit(punctuation);
           config.set_direct_commit_key(config::Config::DIRECT_COMMIT_KUTEN);
@@ -18526,7 +18526,9 @@ TEST_F(SessionTest, SpaceConversionUsesZenzSettingWithLiveConversionOff) {
     config.set_use_live_conversion(false);
     config.set_use_zenz_live_correction(zenz_enabled);
     config.set_use_zenz_synthetic_candidate(true);
-    config.set_zenz_live_correction_delay_msec(0);
+    // Existing live-typing settings do not delay explicit Space conversion.
+    config.set_zenz_live_correction_delay_msec(1300);
+    ASSERT_FALSE(config.has_zenz_conversion_correction_delay_msec());
     config.set_session_keymap(config::Config::CUSTOM);
     config.set_custom_keymap_table(
         "status\tkey\tcommand\n"
@@ -18579,7 +18581,7 @@ TEST_F(SessionTest, SpaceZenzHonorsDelayMinimumLengthAndDeferredDisplay) {
         config::ConfigHandler::GetDefaultConfig(&config);
         config.set_use_live_conversion(false);
         config.set_use_zenz_live_correction(true);
-        config.set_zenz_live_correction_delay_msec(delay);
+        config.set_zenz_conversion_correction_delay_msec(delay);
         config.set_zenz_live_correction_min_key_length(min_length);
         config.set_defer_live_conversion_display_until_zenz_result(deferred);
         config.set_session_keymap(config::Config::CUSTOM);
@@ -18639,7 +18641,7 @@ TEST_F(SessionTest, SpaceZenzDeferredDisplayResolvesAndCancelsSafely) {
       config.set_use_live_conversion(false);
       config.set_use_zenz_live_correction(true);
       config.set_use_zenz_synthetic_candidate(true);
-      config.set_zenz_live_correction_delay_msec(delay);
+      config.set_zenz_conversion_correction_delay_msec(delay);
       config.set_defer_live_conversion_display_until_zenz_result(true);
       config.set_zenz_deferred_presentation_timeout_msec(300);
       config.set_show_candidate_window_on_initial_conversion(true);
@@ -18735,7 +18737,7 @@ TEST_F(SessionTest, SpaceZenzCandidateShortcutPreservesOrdinarySelection) {
   config.set_use_live_conversion(false);
   config.set_use_zenz_live_correction(true);
   config.set_use_zenz_synthetic_candidate(true);
-  config.set_zenz_live_correction_delay_msec(0);
+  config.set_zenz_conversion_correction_delay_msec(0);
   config.set_show_candidate_window_on_initial_conversion(true);
   config.set_selection_shortcut(config::Config::SHORTCUT_123456789);
   config.set_session_keymap(config::Config::CUSTOM);

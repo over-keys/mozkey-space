@@ -556,12 +556,12 @@
         <translation>ライブ変換</translation>
     </message>
     <message>
-        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。</source>
-        <translation>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。</translation>
+        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。</source>
+        <translation>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。</translation>
     </message>
     <message>
-        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</source>
-        <translation>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。0 ms にすると即時補正します。</translation>
+        <source>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。0 ms にすると即時補正します。</source>
+        <translation>ライブ変換または Space 変換の後、Zenz 補正を開始するまでの待ち時間です。ライブ変換用と Space 変換用の値は別々に保存されます。0 ms にすると即時補正します。</translation>
     </message>
     <message>
         <location filename="config_dialog.ui" line="0"/>
