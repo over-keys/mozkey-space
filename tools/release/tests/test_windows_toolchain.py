@@ -75,6 +75,37 @@ class WindowsToolchainTest(unittest.TestCase):
                          '"vcvarsall.bat" amd64_arm64  -vcvars_ver=14.44.35207')
         self.assertIn('architecture = "amd64"):', patch)
 
+    def test_native_probe_compiles_links_runs_and_rejects_failures(self):
+        spec = importlib.util.spec_from_file_location('arm64_probe', ROOT / 'tools/release/verify_windows_arm64_toolchain.py')
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        env = {'PROCESSOR_ARCHITECTURE': 'ARM64', 'BAZEL_VC_FULL_VERSION': '14.44.35207'}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(probe.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSVERSION': '14.44.35207'}) as get_env, mock.patch.object(probe.subprocess, 'run') as run, mock.patch('builtins.print'):
+            probe.verify()
+            self.assertEqual(run.call_count, 4)
+            self.assertEqual(get_env.call_args_list, [mock.call('arm64'), mock.call('amd64_arm64')])
+            compile_call, execute_call = run.call_args_list[:2]
+            self.assertIn('-fuse-ld=lld', compile_call.args[0])
+            self.assertIn('--target=aarch64-pc-windows-msvc', compile_call.args[0])
+            self.assertTrue(compile_call.kwargs['check'])
+            self.assertTrue(execute_call.kwargs['check'])
+            run.reset_mock()
+            run.side_effect = probe.subprocess.CalledProcessError(1, 'clang-cl')
+            with self.assertRaises(probe.subprocess.CalledProcessError):
+                probe.verify()
+            self.assertEqual(run.call_count, 1)
+        with mock.patch.dict(os.environ, {'PROCESSOR_ARCHITECTURE': 'AMD64'}, clear=True), self.assertRaises(RuntimeError):
+            probe.verify()
+
+    def test_matching_atl_is_verified_before_expensive_qt_build(self):
+        text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
+        self.assertLess(text.index('- name: Ensure matching MSVC 14.44 ARM64 ATL component'), text.index('- name: Select LLVM 20 compatible'))
+        self.assertLess(text.index('python tools/release/verify_windows_arm64_toolchain.py'), text.index('- name: Build Qt for release'))
+        self.assertIn('Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', text)
+        self.assertIn("'atlmfc/include/atlbase.h'", text)
+        self.assertIn("'atlmfc/lib/arm64/atls.lib'", text)
+        self.assertIn("'--norestart'", text)
+
     def test_workflow_pin_is_arm64_only_and_before_qt(self):
         text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
         pin = text.index('- name: Select LLVM 20 compatible native ARM64 MSVC toolset')

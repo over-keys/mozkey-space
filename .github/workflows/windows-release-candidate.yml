@@ -184,6 +184,29 @@ jobs:
           python build_tools/update_deps.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned dependency retrieval failed.' }
 
+      - name: Ensure matching MSVC 14.44 ARM64 ATL component
+        timeout-minutes: 30
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        working-directory: src
+        run: |
+          $vc = (python build_tools/vs_util.py --arch arm64).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Visual Studio discovery failed.' }
+          $versions = @(Get-ChildItem -LiteralPath (Join-Path $vc 'Tools/MSVC') -Directory |
+            Where-Object { $_.Name -match '^14\.44\.[0-9]+$' } |
+            Sort-Object { [version]$_.Name } -Descending)
+          if ($versions.Count -eq 0) { throw 'Required MSVC 14.44 ARM64 toolset is not installed.' }
+          $toolset = $versions[0].FullName
+          if (-not (Test-Path "$toolset/atlmfc/include/atlbase.h") -or -not (Test-Path "$toolset/atlmfc/lib/arm64/atls.lib")) {
+            $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/setup.exe'
+            if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Visual Studio Installer is unavailable.' }
+            $installPath = Split-Path -Parent $vc
+            $arguments = @('modify', '--installPath', "`"$installPath`"", '--add',
+              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', '--quiet', '--norestart')
+            $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+            if ($process.ExitCode -notin @(0, 3010)) { throw "Matching ATL installation failed: $($process.ExitCode)" }
+          }
+
       # LLVM 20.1.1 cannot use the VS 2026 latest STL (requires Clang 22).
       # Keep the checksum-pinned LLVM and select the installed v143 toolset.
       - name: Select LLVM 20 compatible native ARM64 MSVC toolset
@@ -198,7 +221,7 @@ jobs:
             Sort-Object { [version]$_.Name } -Descending)
           if ($versions.Count -eq 0) { throw 'Required MSVC 14.44 ARM64 toolset is not installed.' }
           $version = $versions[0].Name
-          foreach ($relative in @('bin/Hostarm64/arm64/cl.exe', 'include/yvals_core.h', 'lib/arm64/libcmt.lib')) {
+          foreach ($relative in @('bin/Hostarm64/arm64/cl.exe', 'include/yvals_core.h', 'lib/arm64/libcmt.lib', 'lib/arm64/oldnames.lib', 'lib/arm64/libcpmt.lib', 'atlmfc/include/atlbase.h', 'atlmfc/lib/arm64/atls.lib')) {
             if (-not (Test-Path -LiteralPath (Join-Path $versions[0].FullName $relative) -PathType Leaf)) {
               throw "Incomplete MSVC $version ARM64 toolset: $relative"
             }
@@ -209,6 +232,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'MSVC toolset activation verification failed.' }
           "BAZEL_VC=$vc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "BAZEL_VC_FULL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify native ARM64 CRT STL and ATL compile link and execution
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          python tools/release/verify_windows_arm64_toolchain.py
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 CRT/STL/ATL toolchain probe failed.' }
 
       - name: Build Qt for release target architecture
         shell: pwsh
