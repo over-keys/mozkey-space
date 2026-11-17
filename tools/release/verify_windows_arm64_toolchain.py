@@ -9,8 +9,10 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'src/build_tools'))
 import vs_util
+from win32.installer import build_installer
 
 SOURCE = '''#include <vector>
 #include <atlbase.h>
@@ -63,6 +65,11 @@ def verify():
     if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() != 'ARM64':
         raise RuntimeError('This probe requires a native ARM64 Windows runner')
     expected = os.environ['BAZEL_VC_FULL_VERSION']
+    # Exercise the exact MSI CRT selector before spending time on Qt/product
+    # compilation. Compiler probes alone cannot validate packaging inputs.
+    for arch in ('x64', 'arm64'):
+        redist = build_installer.get_redist_crt_dir(arch)
+        print(f'INSTALLER_CRT_PREFLIGHT arch={arch} directory={redist}', flush=True)
     # ARM64 MSI also contains x86 and x64 TIP DLLs. Probe every target and
     # both Qt's native ARM64 and Bazel's cross-host ARM64 environment.
     targets = (

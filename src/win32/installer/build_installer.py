@@ -31,8 +31,10 @@
 """Runs wix.exe to build the installer."""
 
 import argparse
+import hashlib
 import os
 import pathlib
+import re
 import subprocess
 
 from build_tools import mozc_version
@@ -70,37 +72,74 @@ def exec_command(args: list[str], cwd: str) -> None:
     raise ChildProcessError('\n'.join(msgs))
 
 
+REDIST_CRT_FILES = (
+    'msvcp140.dll',
+    'msvcp140_1.dll',
+    'msvcp140_2.dll',
+    'vcruntime140.dll',
+    'vcruntime140_1.dll',
+)
+
+
 def find_redist_crt_dir(redist_root: pathlib.Path, arch: str) -> pathlib.Path:
+    if arch not in ('x64', 'arm64'):
+        raise ValueError(f'Unsupported installer CRT architecture: {arch}')
     arch_dir = redist_root.joinpath(arch).resolve()
-    required = (
-        'msvcp140.dll',
-        'msvcp140_1.dll',
-        'msvcp140_2.dll',
-        'vcruntime140.dll',
-        'vcruntime140_1.dll',
-    )
+    required = REDIST_CRT_FILES
 
     def is_valid_dir(path: pathlib.Path) -> bool:
-        return path.is_dir() and all(path.joinpath(name).exists() for name in required)
+        return path.is_dir() and all(path.joinpath(name).is_file() for name in required)
 
-    # まず標準的な Microsoft.VC*.CRT を直接見る
-    direct_candidates = sorted(
-        [p for p in arch_dir.glob('Microsoft.VC*.CRT') if is_valid_dir(p)],
-        key=lambda p: p.name,
+    # Only the standard layout is supported. Never silently select arbitrary
+    # nested DLLs or resolve multiple complete runtimes by filesystem ordering.
+    candidates = sorted(
+        p for p in arch_dir.glob('Microsoft.VC*.CRT')
+        if re.fullmatch(r'Microsoft\.VC[0-9]+\.CRT', p.name) and p.is_dir()
     )
-    if direct_candidates:
-        return direct_candidates[-1]
-
-    # 次に再帰的に探索して、実際に DLL が入っているディレクトリを拾う
-    for dll_name in ('msvcp140.dll', 'vcruntime140.dll'):
-        for match in arch_dir.rglob(dll_name):
-            candidate = match.parent
-            if is_valid_dir(candidate):
-                return candidate.resolve()
+    if len(candidates) == 1 and is_valid_dir(candidates[0]):
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError(f'Ambiguous CRT redistributable directories: {candidates}')
 
     raise FileNotFoundError(
         f'Could not find CRT redistributable directory containing {required} under: {arch_dir}'
     )
+
+
+def validate_redist_crt_architecture(directory: pathlib.Path, arch: str) -> None:
+  # ARM64X final images retain the native ARM64 PE machine type. An x64/EC-only
+  # image must not be packaged as the native ARM64 runtime.
+  expected = {'x64': 0x8664, 'arm64': 0xAA64}[arch]
+  for name in REDIST_CRT_FILES:
+    dll = directory / name
+    with dll.open('rb') as binary:
+      header = binary.read(64)
+      if len(header) != 64 or header[:2] != b'MZ':
+        raise ValueError(f'Invalid CRT PE header: {dll}')
+      offset = int.from_bytes(header[60:64], 'little')
+      if offset < 64 or offset > dll.stat().st_size - 6:
+        raise ValueError(f'Invalid CRT PE offset: {dll}')
+      binary.seek(offset)
+      signature = binary.read(6)
+      if signature[:4] != b'PE\0\0':
+        raise ValueError(f'Invalid CRT PE signature: {dll}')
+      machine = int.from_bytes(signature[4:6], 'little')
+      if machine != expected:
+        raise ValueError(f'CRT architecture mismatch: {dll}: {machine:#06x}, expected {expected:#06x}')
+
+
+def get_redist_crt_dir(arch: str, vcvarsall_hint=None) -> pathlib.Path:
+  # The installed redistributable can be newer than the selected compiler.
+  # VCTOOLSVERSION=14.44 does not imply a VC143 folder inside a 14.52 redist.
+  vs_env = vs_util.get_vs_env_vars('x64', vcvarsall_hint)
+  redist_root = pathlib.Path(vs_env['VCTOOLSREDISTDIR']).resolve()
+  directory = find_redist_crt_dir(redist_root, arch)
+  validate_redist_crt_architecture(directory, arch)
+  for name in REDIST_CRT_FILES:
+    digest = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+    print(f'INSTALLER_CRT_SHA256 arch={arch} file={directory / name} sha256={digest}', flush=True)
+  return directory
+
 
 def run_wix4(args) -> None:
   """Run 'dotnet tool run wix build ...'.
@@ -118,21 +157,8 @@ def run_wix4(args) -> None:
         )
     )
 
-  # 'VCTOOLSREDISTDIR' environment variable is the same among x86, x64 and arm64
-  # architectures, so just using 'x64' should be fine here.
-  vs_env = vs_util.get_vs_env_vars('x64', vcvarsall_hint)
-  redist_root = pathlib.Path(vs_env['VCTOOLSREDISTDIR']).resolve()
-  # The CRT redist subfolder is named after the platform toolset, not the
-  # MSVC compiler version: VS 2022 ships 'Microsoft.VC143.CRT' (toolset v143,
-  # MSVC 14.3x/14.4x) while VS 2026 ships 'Microsoft.VC145.CRT' (toolset
-  # v145, MSVC 14.50+). v144 was skipped. Pick the subfolder by reading the
-  # MSVC compiler minor version that vcvarsall.bat exports as
-  # 'VCTOOLSVERSION'.
-  vc_tools_minor = int(vs_env['VCTOOLSVERSION'].split('.')[1])
-  crt_subdir = (
-      'Microsoft.VC145.CRT' if vc_tools_minor >= 50 else 'Microsoft.VC143.CRT'
-  )
-  redist_64bit = redist_root.joinpath(arch).joinpath(crt_subdir)
+  redist_64bit = get_redist_crt_dir(arch, vcvarsall_hint)
+  print(f'INSTALLER_CRT_DIRECTORY={redist_64bit}', flush=True)
   version_file = pathlib.Path(args.version_file).resolve()
   version = mozc_version.MozcVersion(version_file)
   credit_file = pathlib.Path(args.credit_file).resolve()

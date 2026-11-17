@@ -80,9 +80,10 @@ class WindowsToolchainTest(unittest.TestCase):
         probe = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(probe)
         env = {'PROCESSOR_ARCHITECTURE': 'ARM64', 'BAZEL_VC_FULL_VERSION': '14.44.35207'}
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(probe.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSVERSION': '14.44.35207'}) as get_env, mock.patch.object(probe.subprocess, 'run') as run, mock.patch('builtins.print'):
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(probe.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSVERSION': '14.44.35207'}) as get_env, mock.patch.object(probe.build_installer, 'get_redist_crt_dir', return_value=Path('validated-CRT')) as redist, mock.patch.object(probe.subprocess, 'run') as run, mock.patch('builtins.print'):
             probe.verify()
             self.assertEqual(run.call_count, 16)
+            self.assertEqual(redist.call_args_list, [mock.call('x64'), mock.call('arm64')])
             self.assertEqual(get_env.call_args_list, [mock.call('arm64'), mock.call('amd64_arm64'), mock.call('amd64_x86'), mock.call('amd64')])
             compiles = [call.args[0] for call in run.call_args_list[::2]]
             self.assertEqual(sum('/MT' in command for command in compiles), 4)
@@ -109,6 +110,10 @@ class WindowsToolchainTest(unittest.TestCase):
                 probe.verify()
             self.assertEqual(run.call_count, 9)
             self.assertIn('--target=i686-pc-windows-msvc', run.call_args.args[0])
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(probe.build_installer, 'get_redist_crt_dir', side_effect=FileNotFoundError('missing installer CRT')), mock.patch.object(probe.subprocess, 'run') as run:
+            with self.assertRaisesRegex(FileNotFoundError, 'missing installer CRT'):
+                probe.verify()
+            run.assert_not_called()
         with mock.patch.dict(os.environ, {'PROCESSOR_ARCHITECTURE': 'AMD64'}, clear=True), self.assertRaises(RuntimeError):
             probe.verify()
 
