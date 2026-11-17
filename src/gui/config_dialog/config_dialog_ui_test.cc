@@ -169,6 +169,49 @@ TEST_F(ConfigDialogUiTest, ReloadReplacesBothEditedDelayValues) {
   }
 }
 
+TEST_F(ConfigDialogUiTest, ManualZenzContextStaysEditableWithAutomaticZenzOff) {
+  for (const bool live_enabled : {false, true}) {
+    factory_.live = live_enabled;
+    factory_.zenz = false;
+    ConfigDialog settings;
+    auto* zenz = settings.findChild<QCheckBox*>("zenzLiveCorrectionCheckBox");
+    auto* profile =
+        settings.findChild<QLineEdit*>("zenzLiveCorrectionProfileLineEdit");
+    auto* right =
+        settings.findChild<QCheckBox*>("zenzLiveCorrectionRightContextCheckBox");
+    auto* length = settings.findChild<QSpinBox*>(
+        "zenzLiveCorrectionRightContextLengthSpinBox");
+    auto* delay = settings.findChild<QSpinBox*>("zenzLiveCorrectionDelaySpinBox");
+    ASSERT_NE(zenz, nullptr);
+    ASSERT_NE(profile, nullptr);
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(length, nullptr);
+    ASSERT_NE(delay, nullptr);
+    EXPECT_TRUE(profile->isEnabled());
+    EXPECT_TRUE(right->isEnabled());
+    EXPECT_TRUE(length->isEnabled());
+    EXPECT_FALSE(delay->isEnabled());
+    profile->setText("manual-profile");
+    length->setValue(37);
+    for (const bool automatic : {true, false}) {
+      zenz->setChecked(automatic);
+      EXPECT_TRUE(profile->isEnabled());
+      EXPECT_TRUE(right->isEnabled());
+      EXPECT_EQ(delay->isEnabled(), automatic);
+      right->setChecked(false);
+      EXPECT_FALSE(length->isEnabled());
+      right->setChecked(true);
+      EXPECT_TRUE(length->isEnabled());
+      const auto saved = ConfigDialogTestPeer::ReadSettings(settings);
+      EXPECT_EQ(saved.use_live_conversion(), live_enabled);
+      EXPECT_EQ(saved.use_zenz_live_correction(), automatic);
+      EXPECT_TRUE(saved.use_zenz_live_correction_right_context());
+      EXPECT_EQ(saved.zenz_live_correction_right_context_length(), 37);
+      EXPECT_EQ(saved.zenz_live_correction_profile(), "manual-profile");
+    }
+  }
+}
+
 TEST_F(ConfigDialogUiTest, TogglesZenzForSpaceWithoutEnablingLiveConversion) {
   ConfigDialog settings;
   auto* live = settings.findChild<QCheckBox*>("liveConversionCheckBox");
@@ -208,9 +251,11 @@ TEST_F(ConfigDialogUiTest, TogglesZenzForSpaceWithoutEnablingLiveConversion) {
 
   zenz->setChecked(false);
   EXPECT_FALSE(live->isChecked());
-  EXPECT_FALSE(profile->isEnabled());
-  EXPECT_FALSE(right->isEnabled());
-  EXPECT_FALSE(right_length->isEnabled());
+  // These fields are shared with explicit manual Zenz correction, which is
+  // available even with automatic correction disabled.
+  EXPECT_TRUE(profile->isEnabled());
+  EXPECT_TRUE(right->isEnabled());
+  EXPECT_TRUE(right_length->isEnabled());
   EXPECT_FALSE(delay->isEnabled());
   EXPECT_FALSE(min_length->isEnabled());
   EXPECT_FALSE(deferred->isEnabled());

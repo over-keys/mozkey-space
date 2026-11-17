@@ -6999,8 +6999,9 @@ void ConfigDialog::SelectZenzFeedbackAutoBlockSetting(int state) {
 }
 
 void ConfigDialog::SelectZenzRightContextSetting(int state) {
-  const bool enabled = zenzLiveCorrectionCheckBox->isChecked() &&
-                       static_cast<bool>(state);
+  // Explicit manual correction also uses right context when automatic Zenz
+  // correction is disabled. Only the right-context preference gates its length.
+  const bool enabled = static_cast<bool>(state);
 
   zenzLiveCorrectionRightContextLengthLabel->setEnabled(enabled);
   zenzLiveCorrectionRightContextLengthSpinBox->setEnabled(enabled);
