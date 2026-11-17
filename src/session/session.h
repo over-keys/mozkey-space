@@ -495,6 +495,9 @@ class Session {
     std::string mozc_value;
     std::string symbol_style_source;
     std::string prompt;
+    // Input actually sent to the model; original key remains unchanged.
+    std::string prompt_reading;
+    bool proper_name_proxy_active = false;
     std::vector<ProtectedConversionSpan> protected_spans;
     std::vector<ZenzBaselineSegment> baseline_segments;
     absl::Time issued_at;
@@ -828,7 +831,8 @@ class Session {
       absl::string_view value,
       mozc::commands::Command* command);
   bool RevertZenzLiveCorrectionToNormalConversion(
-      mozc::commands::Command* command);
+      mozc::commands::Command* command, bool record_rejection = true);
+  bool BlockVisibleZenzCorrection(mozc::commands::Command* command);
   bool CommitZenzLiveCorrectionResult(mozc::commands::Command* command);
 
   std::string BuildZenzFeedbackContextClass(

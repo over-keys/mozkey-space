@@ -2,7 +2,7 @@
   <img src="src/data/images/icon.svg" width="112" height="112" alt="Mozkey icon">
 </p>
 
-<h1 align="center">mozkey-space 1.0.0</h1>
+<h1 align="center">mozkey-space 1.1.0</h1>
 
 <p align="center">
   <strong>Mozc をベースに、通常変換・遅延付きライブ変換・ローカル Zenz 補正を組み合わせ、<br>縦書き対応・外観カスタマイズ・柔軟な入力操作と学習制御を備えた日本語入力ソフトウェアです。</strong>
@@ -17,7 +17,11 @@
 
 <br>
 
-**mozkey-space 1.0.1** は [本家 Mozkey v1.0.0](https://github.com/koyasi777/mozkey/tree/v1.0.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
+**mozkey-space 1.1.0** は [本家 Mozkey v1.1.0](https://github.com/koyasi777/mozkey/tree/v1.1.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
+
+新規設定と「初期設定に戻す」では、ライブ変換・リアルタイム変換・句読点による自動変換／直接確定を OFF、Zenz 補正を ON、Space 変換の Zenz 補正遅延を 0 ms にします。既存の明示的に保存された設定値は更新時にも保持します。ライブ入力用の独立した遅延は 700 ms のままで、ライブ変換 OFF 中には使用しません。
+
+本家 Mozkey v1.1.0 と本 fork では設定フィールドの割り当てが異なるため、本家のバイナリ設定ファイルを直接流用しないでください。mozkey-space 1.0.1 の Space 遅延設定は保持します。
 
 設定は **ライブ変換 OFF / Zenz 補正 ON** とし、Space は標準の通常変換を使用します。旧版や手動設定から移行する場合の詳細は [Space 変換の Zenz 補正](#space-変換の-zenz-補正) を参照してください。旧 5.x からはバージョン体系が変わるため自動更新には対応しません。設定・辞書をバックアップし、旧版をアンインストールしてから導入してください。以下には本家から引き継いだ機能説明も含まれます。
 
@@ -36,9 +40,10 @@ upstream Mozc との追従性および既存インストールとの互換性を
 
 - **遅延付きライブ変換とルビ表示：** スペースキーを押す前から未確定文字列を変換。開始までの待機時間や文字数、読みを示すルビ風の表示を調整できます。
 - **Mozc と Zenz の二層構成：** Mozc の通常変換を維持しながら、ローカルの Zenz で文脈に応じた補正を追加。補正が適さない場合は Mozc の結果へ戻せます。
-- **文脈と表記を尊重する補正：** 前後の文脈を利用し、助詞・機能語や文節のつながりを改善。ユーザー辞書、英字・技術用語、数字、記号の表記を不用意に置き換えないための保護も備えています。
+- **文脈と表記を尊重する補正：** 前後の文脈を利用し、助詞・機能語や文節のつながりを改善。ユーザー辞書に加え、システム辞書由来の人名・地名・組織名などの固有名詞、英字・技術用語、数字、記号の表記を不用意に置き換えないための保護も備えています。ただし、一般表現と競合する一部の地名は、Zenz の文脈補正を妨げないよう強制保護の対象から除外しています。
+- **Zenz 補正結果の採用条件：** 厳密な読み保持と、Zenz が絵文字を意図せず追加・変更・削除することを抑制する設定を用意。自動ライブ補正と手動補正の両方に適用できます。
 - **選べる Zenz の表示タイミング：** 通常のライブ変換結果を先に表示する動作に加え、Zenz の応答を一定時間待ってから表示する方式も選択できます。
-- **学習と候補のコントロール：** Zenz の採用・却下フィードバック、保存済み結果の再利用、Mozc 変換履歴への学習を個別に設定。学習データの管理、候補の履歴削除・非表示、確定直後の取り消しにも対応します。
+- **学習と候補のコントロール：** Zenz の採用・却下フィードバック、保存済み結果の再利用、Mozc 変換履歴への学習を個別に設定。表示中の Zenz 補正は `Ctrl+Delete` で明示的にブロックでき、学習データの管理、通常候補の履歴削除・非表示、確定直後の取り消しにも対応します。
 - **縦書きに対応した入力 UI（Windows / macOS）：** 候補・サジェスト・用例・ルビを縦書きに合わせて配置し、対応するキー設定では候補や文節の移動方向も調整します。
 - **変換状態インジケータ（Windows / macOS）：** 未確定文字の近くで「入力中・Mozc・Zenz処理中・Zenz適用済み」を表示し、配色・形状・位置を調整できます。macOS での新しいインジケータの実機検証は未完了です。
 - **幅広い外観カスタマイズ：** 候補・サジェスト・ルビの配色（ライト／ダーク／自動／カスタム）、サイズ、角丸、透明度、影を個別に設定。Windows ではフォント・文字の太さ・未確定文字の色や下線、IME インジケータも調整できます。
@@ -54,6 +59,8 @@ upstream Mozc との追従性および既存インストールとの互換性を
 --------------------------
 
 Mozkey のインストーラーは [GitHub Releases](https://github.com/over-keys/mozkey-space/releases) の各リリースの **Assets** に掲載されています。リリースごとに配布対象が異なるため、利用する OS と CPU に合うファイルを選んでください。
+
+今後のリリース用ファイル名は `Mozkey_v{バージョン}_{OS}_{アーキテクチャ}` を基本とし、Windows x64 は `Mozkey_vX.Y.Z_windows_x64.msi`、Windows ARM64 は `Mozkey_vX.Y.Z_windows_arm64.msi`、macOS Universal は `Mozkey_vX.Y.Z_macos_universal.pkg` です。過去のリリースは異なる命名の場合があるため、各リリースの Assets に表示される実際の名前を確認してください。
 
 | 環境 | 選ぶファイル | インストール方法 |
 | --- | --- | --- |
@@ -91,7 +98,7 @@ Windows 向けの未署名 MSI は、Microsoft Defender SmartScreen によって
 
 1. [GitHub Releases](https://github.com/over-keys/mozkey-space/releases) の対象リリースにある **Assets** から、macOS 用 Universal `.pkg` をダウンロードします。PKG が掲載されていないリリースでは、macOS 用インストーラーは配布されていません。
 2. Finder でダウンロードした PKG を**ダブルクリック**します。Gatekeeper の警告で開けない場合は、下記の [macOS でセキュリティ警告が表示された場合](#macos-でセキュリティ警告が表示された場合) に従い、対象の PKG だけを個別に許可してください。インストーラーが開いたら、画面の案内に従ってインストールします。
-3. **インストール完了後は、macOS から一度ログアウトして再ログインしてください。** インストール直後に「キーボード」の設定画面が自動で開くことがありますが、その時点では Mozkey が入力ソースの候補にまだ表示されないことがあります。再ログインを先に行ってください。
+3. **インストール完了時にログアウトを求められたら、作業内容を保存してから案内に従い、再ログインしてください。** ログアウトの案内が表示されない場合も、入力ソースを有効にする前に手動で一度ログアウト・再ログインしてください。インストール直後に「キーボード」の設定画面が自動で開いても、再ログインを先に行ってください。
 4. 再ログイン後、**システム設定 → キーボード → テキスト入力 → 編集** を開きます。**「ひらがな（Mozkey）」**（環境によっては「Hiragana (Mozkey)」）がすでに登録されていれば、そのまま次へ進みます。未登録の場合は **「+」→「日本語」** から Mozkey のひらがな入力ソースを追加します。
 5. メニューバーの入力メニューから **ひらがな（Mozkey）** を選択し、実際に日本語を入力できることを確認します。表示されない場合は、再ログインが完了していることを確認し、入力ソースの追加画面をもう一度開いてください。
 
@@ -105,7 +112,7 @@ Apple Developer ID 署名・公証のない PKG は、macOS の Gatekeeper に�
 2. **Apple メニュー → システム設定 → プライバシーとセキュリティ** を開き、右側を下へスクロールして **「セキュリティ」** 欄を探します。
 3. **「アプリケーションの実行許可」** の下に、**「お使いの Mac を保護するために “Mozkey_…pkg” がブロックされました。」** というメッセージが表示されます。**このメッセージの右側にある「このまま開く」** をクリックします。
 4. **「“Mozkey_v1.0.0_macos_universal.pkg” を開きますか？」** という確認ダイアログが表示されたら、ファイル名を再確認し、**確認ダイアログ内の「このまま開く」** をクリックします。認証を求められた場合は画面の指示に従います。
-5. PKG インストーラーが起動したら、画面の案内に従ってインストールします。完了後は上記のインストール手順に戻り、**ログアウト・再ログインしてから**日本語入力を有効化してください。
+5. PKG インストーラーが起動したら、画面の案内に従ってインストールします。完了後は上記のインストール手順に戻り、**インストーラの案内に従ってログアウト・再ログインしてから**日本語入力を有効化してください。
 
 「このまま開く」が見つからない場合は、Finder で同じ PKG をもう一度開こうとしてから「プライバシーとセキュリティ」を確認してください。macOS のバージョンによって文言や配置が多少異なることがあります。
 
@@ -146,6 +153,7 @@ Windows の `universal` MSI は、製品全体が x64 / ARM64 の両方でネイ
 - キー設定エディタで、1つのキー入力に対して複数のコマンドを順序付きで割り当て可能
 - `ForceZenzLiveCorrection` により、未確定文字列へ手動で Zenz 補正を要求可能。Zenz の自動ライブ補正が OFF でもキー設定から明示実行できる
 - `ForceZenzLiveCorrectionWithoutFeedback` により、保存済み Zenz feedback の自動利用をこの実行に限り無視して手動補正可能。通常の Mozc 履歴・ユーザー辞書および明示的な手動ブロックは維持し、新しい確定結果の学習も設定に従う
+- `BlockVisibleZenzCorrection` を追加。Zenz 補正結果が表示されている間に標準キー設定の `Ctrl+Delete` を押すと、その補正を手動ブロック（`hard_reject`）として保存し、通常の Mozc 変換結果へ戻す。通常の候補に対する `DeleteSelectedCandidate` とは別の操作
 - キー設定のコマンド列に `Delay(700)` などの待機ステップ（0～5000 ms）を追加。選択文字列の再変換後に待機して手動 Zenz 補正する操作にも対応
 - 変換候補・予測候補をキー操作から履歴削除または非表示にできる機能を追加。標準キー設定では `Ctrl+Delete` を使用し、履歴から削除できる候補はまず学習履歴だけを削除。それでも残る候補はユーザー辞書「非表示候補」の抑制単語として登録し、元のユーザー辞書候補そのものは削除しない。「非表示候補」から該当する抑制単語を削除すると再表示可能。候補ウィンドウのフッターには、選択中の候補の状態と現在のキー設定に応じて履歴削除または候補非表示の操作案内を表示
 - 通常変換では、Mozc が顔文字として意味的に識別できる候補（標準の顔文字候補、およびユーザー辞書で品詞「顔文字」として登録された候補）が、学習によって第1候補へ上がらないように制御。候補自体は一覧に残し、同じ表記でも「顔文字」以外の品詞として登録した候補は通常の順位付け・学習を許可。Zenz が独立して生成した表記は、文字列の見た目だけを理由に顔文字扱いしない
@@ -197,6 +205,8 @@ Windows の `universal` MSI は、製品全体が x64 / ARM64 の両方でネイ
 - Zenz 出力が確定済み左文脈の長い suffix を現在入力の先頭へ反復する context echo を検出して拒否し、通常の Mozc ライブ変換結果へフォールバック
 - Zenz の最終候補が通常 Mozc 変換結果の明白な先頭・末尾の欠落になっている場合は、逆変換を使わない軽量な検証で拒否。保存済みフィードバック由来の候補にも適用し、確定済み左文脈の表記と現在の入力が重なる境界が曖昧な場合は、無理に左文脈を削らず通常 Mozc 結果へ戻す
 - 「厳密な読み保持（実験的）」を追加。初期値は OFF で、ON の場合のみ Zenz 最終候補を逆変換して入力した読み全体と照合。読みが一致しない場合や取得できない場合は通常 Mozc 結果へ戻すが、正しい候補や保存済みフィードバックの補正が採用されない場合があり、処理時間も増える可能性がある
+- 「Zenz による絵文字変換を抑制する」を追加。初期値は ON。Zenz の最終候補に含まれる絵文字の並びを通常 Mozc の変換結果と比較し、絵文字の追加・削除・別の絵文字への置換を検出した場合は Zenz の結果を採用せず、通常 Mozc の結果を維持する。保存済みフィードバック由来の補正にも適用し、通常 Mozc の絵文字候補や手動選択は妨げない
+- 設定画面で「Zenz ライブ補正」と「Zenz 補正結果の採用条件」を分離。後者の厳密な読み保持と絵文字抑制は、ライブ補正の ON/OFF にかかわらず操作でき、手動 Zenz 補正にも適用される
 - Zenz の学習機能を「Zenz 学習（Mozc変換履歴）」と「Zenz 学習（補正フィードバック）」に整理し、次の3設定を**独立して** ON/OFF 可能にした。A：Zenz 補正の採用・却下を TSV に記録する、B：保存済み feedback を候補順位・高速再利用・自動ブロックへ利用する、C：明示的に確定した Zenz 補正を Mozc の通常変換履歴へ追加学習する。A=OFF でも B=ON なら既存 feedback を利用でき、A=OFF でも C=ON なら Mozc 履歴へ追加学習できる。旧統合設定からは未設定の新項目だけ値を引き継ぐ
 - 同音異義語が多く文脈によって適切な表記が変わりやすい短い読みで、Zenz feedback の過剰な学習反映を避けるため、保存済み feedback の自動適用を既定では読み全体が 7 文字以上の場合に限定。設定画面から ON/OFF と最小読み文字数（1～20 文字）を変更可能。短い読みの採用・却下履歴は記録・保持し、手動ブロックは引き続き有効
 - シークレットモードでは Zenz のローカル推論を継続したまま Zenz feedback personalization（学習・保存済み feedback の再利用）を無効化。新しい feedback は保存せず、既存 feedback 自体は削除しない
@@ -209,6 +219,7 @@ Windows の `universal` MSI は、製品全体が x64 / ARM64 の両方でネイ
 - Zenz 補正表示中に Space で Mozc 通常変換結果へ戻した場合は、次の文字入力や句読点・記号の単打確定で、戻した通常 Mozc の結果を先に最終確定値として取得する。句読点・記号の単打確定後も短い rollback window を維持し、直後の Backspace / Escape / Ctrl+Z / Revert / Undo などでは pending な Zenz reject を破棄する。次の通常入力や確定後の context transition、Windows Search などでの pass-through Enter を含む通常の pass-through 操作へ進んだ時点で rollback window を閉じ、最終確定結果に基づいて feedback を確定する
 - Zenz の**フィードバック学習データ**を設定画面から管理できる UI を追加。TSV を直接編集せず検索、インポート、エクスポート、選択項目削除、全削除が可能。ここで管理・削除するのは A/B の記録であり、C で Mozc の通常変換履歴に学習済みの内容は削除しない
 - フィードバック学習データ管理画面から、選択した Zenz 補正を明示的に手動ブロック可能。手動ブロックは B の自動利用設定が OFF でも Zenz 補正の採用判定に有効。解除するには該当エントリを削除し、必要なら再学習する
+- Zenz 補正表示中の `Ctrl+Delete` からも手動ブロックを実行可能。同じ読み全体・文脈クラス・補正文字列の組に対する永続的な `hard_reject` として保存し、同時に通常 Mozc 変換へ戻る。通常却下の統計記録は二重に行わず、通常候補の学習履歴や「非表示候補」の辞書項目も削除しない
 - B が ON の場合は Zenz feedback を通常変換候補の ranking に利用。1 文節の通常変換では保存済み feedback を score 化し、既存候補の cost を調整するか synthetic candidate を自然な位置へ追加。accepted は順位を上げ、通常操作由来の rejected は候補を除外せず順位を下げる
 - 文節境界を壊さないため、複数文節に分かれた通常変換では Zenz feedback による通常候補 ranking を行わない
 - 複数文節に分かれるライブ変換では、全文補正の学習を保つため、accepted Zenz feedback を session-level live correction fast path として再利用
@@ -218,10 +229,13 @@ Windows の `universal` MSI は、製品全体が x64 / ARM64 の両方でネイ
 - 通常 Mozc ライブ変換で現在の結果として現れているユーザー辞書由来候補や ASCII / mixed-script 表記を、Zenz live correction の採用時に保護
 - ASCII / mixed-script 表記は、読みを安全に特定できる場合に Zenz prompt 内で一時 placeholder 化し、応答後に元の表記へ復元。`もずきー -> Mozkey` のような表記が `モズキー` へ上書きされるのを避けつつ、前後の文は補正できるようにした
 - 通常 Mozc が選んだ表記を orthographic baseline として保持し、`東京 -> Tokyo`、`コンピュータ -> computer` のように Zenz だけが新しい英字表記を持ち込む場合は、文節へ安全に逆投影できる範囲で該当部分だけ通常 Mozc 表記へ戻す。`GitHub`、`iPhone`、`AI`、`C++`、`GPT-5` など、通常 Mozc がすでに選んでいる Latin / technical token は維持する
-- ASCII の数字リテラル（符号付き整数・小数を含む）は Latin / technical token とは分離して保護し、Zenz prompt 内では placeholder 化せずに残す。数字表記そのものと非日本語の隣接境界は維持しつつ、`1日`、`100円`、`スマートフォン1台`、`第1回`、`3.14倍` のような日本語隣接部分は Zenz で補正可能にする
+- ASCII の数字リテラル（符号付き整数・小数を含む）について、通常 Mozc の preedit から抽出する場合は、出力に数字があるだけでは保護せず、変換セグメントの読み側にも対応する数値トークンが確認できる場合に保護する。ユーザー辞書由来など、別の根拠に基づく保護は維持する。保護対象の数字は Zenz prompt 内で placeholder 化せず、`100円` や `スマートフォン1台` のような明示入力数字と非日本語の隣接境界を維持する。一方、`いつかきっと` → `5日キット` のように読みから生成された数字は Zenz の補正を妨げない。同じ数字が混在する場合は、安全に対応位置を確認できる範囲だけ読み由来の数字の変更を許可する
 - Zenz が `（ ）` / `( )`、`？` / `?`、`！` / `!`、`：` / `:` などの記号幅・記号スタイルを正規化して返した場合でも、元の未確定文字列または通常 Mozc ライブ変換結果でユーザーが使っていた表記へ復元
 - Zenz が左文脈などから `！` / `!`、`？` / `?`、`。`、`…`、`〜` などの文末・表現記号を、現在の未確定文字列または通常 Mozc ライブ変換結果の末尾にある数を超えて追加した場合は、余分な末尾記号だけを抑制し、漢字・語彙などの補正結果は保持
 - 日本語のみのユーザー辞書語は、自然な読みを Zenz prompt に残したまま、Zenz 応答後に表記の境界を検証し、余分なかな付着を安全に修復できる場合だけ採用するようにした
+- システム辞書由来の固有名詞について、Mozc が実際に選択した候補の品詞・読み・表記・位置情報を検証し、人名・地名・組織名などの不用意な書き換えを抑制。すべての固有名詞を無条件に固定するものではない
+- 地名を表す単一辞書ノードで、地域固有名詞の品詞と、市・区・県・町・駅などの接尾辞種別・読み・表記が整合する場合も固有名詞候補として認識。一方、`あきたし / 秋田市` や `さくし / 佐久市` など、一般表現と競合する監査済みの60組は読みと表記の組で強制保護を除外し、Zenz による文脈補正の余地を残す
+- 検証済みの姓名に限り、Zenz への入力中で読みと表記を自然な代理語へ一時的に置き換え、応答後に元の姓名へ復元。出現回数・復元条件などを確認し、安全に復元できない場合は通常 Mozc の変換結果を維持。地名や組織名は代理語化しない
 - Zenz prompt に使う左文脈は sanitizer を通し、URL、email、file path、token、長い数字列など sensitive-like な文脈は prompt に含めない
 - Zenz feedback は full-sequence 単位だけを保存し、raw left context や segment-local feedback は保存せず、非可逆な context class のみを保存
 - Zenz model / llama.cpp runtime の third-party license notice を MSI に同梱
@@ -260,10 +274,13 @@ Windows TSF の `IS_PRIVATE` は、Mozkey のシークレットモードとは�
 
 Windows 版では、追加のオフライン防御層として、インストーラーが Mozc の実行ファイルに outbound 通信をブロックする Windows Firewall rule を追加します。Zenz 同梱構成では `mozc_zenz_scorer.exe` と `llama-server.exe` も対象です。これらの rule はアンインストール時に削除されます。
 
+macOS の Zenz 同梱構成では、Mozc から scorer へユーザーごとの Unix ドメインソケットで接続し、scorer から同梱の `llama-server` へは `127.0.0.1` のランダムポートとランダム API キーを使って接続します。ソース監査と、PKG から展開した Zenz の実推論中に `ps` / `lsof` で通信先をサンプリングする検証を追加しています。**サンプリングで外部通信が観測されないことは、全プロセスの通信禁止や OS レベルの外向き通信遮断を証明するものではありません。** 公開リリース本体の監査とも区別します。詳細は [macOS オフライン監査仕様](docs/security/macos_offline_audit.md) を参照してください。
+
 関連ドキュメント:
 
 - [Secure Offline Guarantee](docs/security/offline_guarantee.md)
 - [Secure Offline Release Checklist](docs/security/release_checklist.md)
+- [macOS オフライン監査仕様](docs/security/macos_offline_audit.md)
 
 <br>
 
@@ -390,7 +407,11 @@ deferred 表示で Zenz の応答を待っている間に Space を押した場�
 
 Zenz 出力は表示前に検証されます。空出力、短すぎる入力、Mozc 結果と同一の出力、長すぎる出力、不正な文字列、安全でない可能性のある文字列は拒否されます。さらに、確定済み左文脈の長い末尾部分を Zenz 出力の先頭へ繰り返す context echo についても、現在の読み・Mozc 結果から見て不自然に長い反復だけを検出して拒否します。短い一致や、現在の読みそのものが同じ語句の反復を要求している場合は一律には拒否しません。拒否された場合は、その時点の通常 Mozc ライブ変換結果へフォールバックします。
 
-#### Zenz の明白な欠落防止と厳密な読み保持（実験的）
+#### Zenz 補正結果の採用条件（ライブ・手動共通）
+
+設定画面では「Zenz ライブ補正」の設定とは別に「Zenz 補正結果の採用条件」を設けています。ここにある「厳密な読み保持（実験的）」と「Zenz による絵文字変換を抑制する」は、自動ライブ補正だけでなく、キー操作による手動 Zenz 補正にも適用されます。ライブ補正を OFF にしても設定を変更できます。
+
+**明白な欠落の防止と厳密な読み保持**
 
 通常設定では、Zenz の最終候補が通常 Mozc 変換結果の明白な先頭・末尾の欠落になっている場合、候補を拒否して通常 Mozc 結果へ戻します。この軽量な検証は、Zenz の新しい応答だけでなく保存済みフィードバック由来の候補にも適用します。確定済み左文脈の末尾と今回の入力が表記上重なる場合も、左文脈の反復なのか入力自体の一部なのか安全に区別できなければ、先頭を機械的に削らず通常 Mozc 結果へ戻します。
 
@@ -400,11 +421,23 @@ Zenz 出力は表示前に検証されます。空出力、短すぎる入力、
 
 厳密モードは保守的な検証です。漢字の複数の読みや逆変換の限界により、正しい候補でも拒否される場合があります。また、読みを検証できない保存済みフィードバックによる通常候補の順位調整・候補追加などは制限され、追加の逆変換処理によって応答が遅くなる可能性があります。通常の Zenz 補正やフィードバック活用を優先する場合は、既定の OFF のまま利用してください。
 
+**Zenz による絵文字変換の抑制**
+
+設定画面の **「Zenz による絵文字変換を抑制する」** は、**初期値が ON** です。ON の場合は、Zenz の補正結果に含まれる絵文字の並びを通常 Mozc の変換結果（基準表記）と比較し、絵文字の追加・削除・別の絵文字への置換が検出された補正結果を採用しません。採用できない場合は通常 Mozc の結果を維持します。新たな Zenz 推論だけでなく、保存済みフィードバック由来の補正にも適用します。
+
+この設定は **Zenz が生成・変更する絵文字の抑制** であり、通常 Mozc の `EmojiRewriter` が生成する絵文字候補を削除する機能ではありません。ユーザーが候補一覧から絵文字を明示的に選ぶ操作も妨げません。また、上記の比較は絵文字の並びを対象としており、文章内の絵文字の位置を含めた完全な同一性を保証するものではありません。設定を OFF にすると、この追加の絵文字検証を行わず、ほかの採用条件を満たした Zenz 補正を採用できるようにします。
+
+通常変換の絵文字候補を第1候補へ学習で昇格させない [`EmojiRewriter` の順位制御](#絵文字候補の第1候補抑制) は、これとは別の機能です。
+
 通常 Mozc ライブ変換で現在の結果として現れているユーザー辞書由来候補や ASCII / mixed-script 表記は、Zenz 採用時に保護されます。ASCII / mixed-script 表記は、読みを安全に特定できる場合に Zenz prompt 内で一時 placeholder 化し、Zenz 応答後に元の表記へ復元します。これにより、`もずきー -> Mozkey` のような表記が `モズキー` のように上書きされることを避けつつ、対象語の前後にある文の補正は採用できるようにしています。
 
 通常 Mozc が選んだ表記は、Zenz 採用時の orthographic baseline としても扱います。Zenz だけが `東京 -> Tokyo` や `コンピュータ -> computer` のような Latin 表記を新たに導入したり、通常 Mozc が選んだ Latin / technical token を削除・変形したりした場合、文節境界へ安全に逆投影できるときは問題のある文節だけを通常 Mozc の表記へ戻し、ほかの Zenz 補正は維持します。安全に逆投影できない場合や、保存していた baseline 文節が欠落・不整合な場合は、表記上安全でない遷移を含む Zenz 結果を採用しません。一方、通常 Mozc がすでに `GitHub`、`iPhone`、`AI`、`C++`、`GPT-5`、`UTF-8`、`HTTP/2`、`Windows11` などを選んでいる場合、それらは正当な baseline として維持します。
 
-ASCII の数字リテラルは、この Latin / technical identity とは別に扱います。符号付き整数・小数を含む数字表記そのものは Zenz prompt 内で placeholder 化せず、応答後も同じ表記・同じ出現数を要求します。各数字リテラルの左右について、通常 Mozc の baseline で隣接文字が日本語なら Zenz 側でも日本語文字であることを要求し、日本語部分の変更は許可します。一方、baseline の隣接文字が非日本語なら同じ文字を、文字列端なら同じ端位置を要求します。これにより `1代 -> 1台` のような助数詞・単位側の補正や周囲の文脈補正を許可しつつ、`100円 -> 100¥`、`100% -> 100$`、`2026/09/23 -> 2026-09-23`、`HTTP/2 -> HTTP 2` のように数字自体または非日本語境界を変える出力は採用しません。
+ASCII の数字リテラルは、Latin / technical identity とは別に扱います。**通常 Mozc の preedit から数値を抽出する際は、変換結果に数字が現れたことだけを理由に、その数字を保護しません。** 変換セグメントの読み側にも対応する ASCII 数値トークンが確認できる場合、その数字を保護対象とします。ユーザー辞書由来の候補など、別経路で根拠を確認できた保護は従来どおり維持します。例えば、読みが `いつかきっと` なのに Mozc が `5日キット` と変換した場合、Mozc が生成した `5` を固定せず、Zenz が `いつかきっと` に補正できる余地を残します。
+
+保護対象として確認された符号付き整数・小数などは、Zenz prompt 内で placeholder 化せずに渡します。通常は数字の表記・出現回数を維持し、左右の隣接文字が日本語なら日本語への変更を許可する一方、非日本語の隣接文字や文字列境界は保持します。これにより `1代` → `1台` のような助数詞の補正や周囲の日本語の補正を許可しつつ、`100円` → `100¥`、`100%` → `100$`、`2026/09/23` → `2026-09-23`、`HTTP/2` → `HTTP 2` のような数字・記号の不適切な変更を防ぎます。
+
+同じ数字が明示入力由来と Mozc の変換生成由来の両方に現れる場合は、単純な出現回数の一致だけには依存しません。**明示入力数字が先頭または末尾の独立した変換セグメントにあり、そのセグメント全体と隣接境界が Zenz の出力で維持されていることを検証できる場合に限り**、残りの同じ数字の変更を許可します。数字の由来や対応位置が曖昧な場合、特に一つのセグメント内で混在する場合は、従来の保守的な保護判定を維持します。
 
 また、Zenz が括弧、疑問符、感嘆符、一部の全角 ASCII 記号 などを正規化して返した場合でも、採用前にユーザー可視の記号スタイルを復元します。これは全角化ではなく、現在の未確定文字列または通常 Mozc ライブ変換結果に現れていた表記の保存です。たとえば `（テスト）` は `（ ）` のまま、`(test)` は `( )` のまま維持します。URL、path、ASCII token 風の文脈では、ASCII 記号を不用意に全角化しないよう保守的に扱います。
 
@@ -417,6 +450,22 @@ Zenz が保護対象の表記を落としたり変更したりし、placeholder 
 Zenz ライブ補正は password field では実行されません。また、入力途中の raw romaji のように日本語文字シグナルを含まない読みは補正対象外です。日本語文字を含む英字混じりの入力は、privacy gate を通る場合に限り補正対象になり得ます。
 
 Windows TSF の password input scope と macOS の Secure Event Input では、application の surrounding text を Zenz 用に取得せず、Zenz extended context acquisition も実行しません。
+
+#### システム辞書由来の固有名詞と検証済み姓名の保護
+
+Zenz が、Mozc の通常変換で正しく選択された人名・地名・組織名などを別の表記へ変更してしまう場合があります。Mozkey は、実際に選択された候補の辞書ノードから品詞・読み・表記・位置情報を調べ、固有名詞として十分な根拠を確認できた部分を保護します。ユーザー辞書の登録語は、従来からの別の保護経路でも扱います。
+
+地名については、複数ノードの「秋田 + 市」のような構成に加え、単一の辞書ノードが「秋田市」を表す場合にも対応しています。単一ノードでは地域固有名詞の左品詞と、`区`・`市`・`府`・`村`・`町`・`県`・`郡`・`駅`の種別を持つ地域接尾辞の右品詞を照合し、読み・表記の末尾がその種別と整合する場合だけ固有名詞候補として認識します。単に表記が「市」などで終わるだけでは保護根拠にしません。
+
+ただし、辞書上の地名であることは、入力文中でも地名が正解であることを意味しません。例えば `あきたし` は「秋田市」と「飽きたし」の両方に解釈できます。Mozkey は辞書監査で一般語・活用形との競合を確認した60組の地名を、**読み全体と表記の完全一致**によってシステム固有名詞の強制保護から除外します。1ノード・複数ノードのどちらで選択されても同じ方針です。これにより Zenz が文脈に応じた一般表現を選べる余地を残しますが、Zenz の出力検証や既存のユーザー辞書保護を省略するものではなく、正しい変換を保証するものでもありません。60組以外の同音異義・活用形の衝突は網羅されていません。
+
+人名は姓・名の品詞と構造を検証します。選択経路が一般名詞などになっていても、ラティス上の代替辞書経路と読み・表記が整合すれば、姓名を検出できる場合があります。
+
+珍しい姓名は、表記をそのままZenzへ渡しても書き換えられることがあるため、**検証済みの姓名に限り**、読みと表記を一時的な代理語へ置き換えます。例えば「見上愛」（みかみあい）の条件が成立した場合、Zenz に渡す部分を「木村」（きむら）へ置き換え、応答後に元の「見上愛」へ復元します。出現回数や不適切な敬称付加などを検査し、復元条件を満たさなければ通常のMozc変換結果を維持します。
+
+この代理語方式を地名・組織名や単独の姓・名へ拡張するものではありません。また、辞書に登録された全固有名詞を一律に保護するわけではなく、現在の変換結果について十分な根拠が得られた範囲に限定します。周囲の文脈補正は可能な限り維持します。
+
+固有名詞情報は通常のMozc候補生成時に収集するため、Zenz補正をOFFにしていても追加探索が行われる場合があります。現時点では、後から手動でZenz補正を実行する際の候補情報の整合性を優先しています。
 
 #### Zenz 学習の独立設定
 
@@ -645,9 +694,25 @@ ZenzConversion + Space -> RevertZenzToMozc
 
 「通常のMozc変換に戻す」（`RevertZenzToMozc`）は、キー設定エディタで別のキーにも割り当てられます。このコマンドは単独で指定してください。カスタムキー設定で明示的に割り当てた操作がある場合は、その設定が優先されます。
 
+### 表示中の Zenz 補正を Ctrl+Delete で手動ブロック
+
+標準キー設定では、**Zenz の補正結果が実際に表示されている間**に `Ctrl+Delete` を押すと、現在の補正を明示的な手動ブロック（`hard_reject`）としてローカルの Zenz feedback に記録し、入力中の読みを失わずに通常の Mozc 変換結果へ戻します。未確定文字列の確定操作ではありません。
+
+```text
+ZenzConversion + Ctrl Delete -> BlockVisibleZenzCorrection
+```
+
+`Space` の `RevertZenzToMozc` は補正の表示を通常変換へ戻す操作であり、それだけで永続的な手動ブロックは行いません。一方、`BlockVisibleZenzCorrection` はその場で `hard_reject` の保存を試み、通常操作由来の統計的な rejected feedback を重複して記録しません。Zenz 補正が表示されていない状態では、このコマンド自体は何もしません。
+
+ブロックの対象は **読み全体・粗い文脈クラス・補正文字列**の組です。すべての文脈でその単語を禁止する機能ではなく、通常 Mozc の辞書候補やユーザー学習履歴を削除する機能でもありません。保存済みの手動ブロックは、Zenz feedback の自動記録（A）と自動利用（B）が OFF でも有効です。解除するには、設定画面の Zenz フィードバック学習データ管理から対応するエントリを削除してください。
+
+**保存条件と制約：** シークレットモード、Windows TSF の `IS_PRIVATE`、パスワード欄、その他のプライバシー保護条件では、新しい永続ブロックを保存しません。また、フィードバックファイルへの書き込みが失敗しても画面上の補正は通常 Mozc 変換へ戻ります。この場合は永続ブロックされず、現在の画面には保存成功・失敗の通知を表示しません。
+
+**CUSTOM キー設定：** `Conversion + Ctrl Delete -> DeleteSelectedCandidate` が既定どおり1行あり、`ZenzConversion` / `LiveConversion` に `Delete` を含む独自のキー割り当てがない場合だけ、専用の `ZenzConversion + Ctrl Delete` 行を自動追加します。既存の左右 Ctrl 指定などを上書きしないため、これらの条件に当てはまらない CUSTOM 設定では、必要に応じてキー設定エディタから `BlockVisibleZenzCorrection` を手動割り当てしてください。`RevertZenzToMozc` と同様に、このコマンドは**単独で**指定する必要があります。
+
 ### 候補の履歴削除・非表示
 
-変換中または予測候補の表示中に `DeleteSelectedCandidate` を実行すると、選択中の候補を履歴から削除するか、候補一覧から非表示にできます。標準キー設定では Prediction / Conversion の `Ctrl+Delete` にこの操作を割り当てています。
+Zenz 補正結果が表示されていない通常変換中、または予測候補の表示中に `DeleteSelectedCandidate` を実行すると、選択中の候補を履歴から削除するか、候補一覧から非表示にできます。標準キー設定では Prediction / Conversion の `Ctrl+Delete` にこの操作を割り当てています。**Zenz 補正表示中の `Ctrl+Delete` は上記の手動ブロック操作になり、通常候補の履歴削除・非表示とは区別されます。**
 
 操作時は、まず選択候補に対応するユーザー履歴の削除を試みます。履歴削除に成功した場合はそこで処理を終え、候補を抑制単語として登録しません。履歴削除の対象ではなく、それでも非表示可能な候補である場合だけ、読みと候補文字列の組をユーザー辞書「非表示候補」へ `SUPPRESSION_WORD` として登録します。
 
@@ -917,6 +982,7 @@ daily local 辞書は主に以下を元に生成できます。
 - [Windows ビルド手順](docs/build_mozc_in_windows.md)
 - [macOS Universal Zenz runtime / PKG ビルド手順](src/mac/installer/zenz_runtime/README.md)
 - [macOS インストーラーの検証手順](src/mac/MOZKEY_MACOS_INSTALL_TESTING.md)
+- [macOS オフライン監査仕様](docs/security/macos_offline_audit.md)
 - [Linux ビルド手順](docs/build_mozc_for_linux.md)
 
 # English
@@ -929,9 +995,10 @@ Mozkey is not an official Google Japanese Input or google/mozc distribution.
 
 - **Delayed live conversion and reading overlay:** Converts compositions before Space is pressed, with adjustable debounce delay, minimum length, and ruby-like display of the reading.
 - **Layered Mozc + Zenz conversion:** Keeps normal Mozc conversion as the baseline and adds optional local Zenz correction, falling back to Mozc when a correction is not adopted.
-- **Context-aware correction with spelling safeguards:** Uses available preceding and following context while protecting user-dictionary entries, Latin/technical spellings, numeric literals, and punctuation choices.
+- **Context-aware correction with spelling safeguards:** Uses available preceding and following context while protecting user-dictionary entries, verified proper nouns from the system dictionary (including personal and place names and organization names), Latin/technical spellings, numeric literals, and punctuation choices. Some ambiguous place names are exempted from hard protection so that Zenz can still correct ordinary expressions in context.
+- **Zenz correction acceptance criteria:** Optional strict reading preservation and default-on protection against Zenz adding, replacing, or removing emoji. These checks apply to both automatic live correction and explicit manual correction.
 - **Optional deferred presentation:** Choose whether to display Mozc live conversion immediately or briefly wait for Zenz before showing a result.
-- **Controllable learning and candidates:** Configure Zenz accept/reject recording, feedback reuse, and Mozc-history learning independently; manage feedback, hide unwanted candidates, and undo recent commits.
+- **Controllable learning and candidates:** Configure Zenz accept/reject recording, feedback reuse, and Mozc-history learning independently; use `Ctrl+Delete` to explicitly block a visible Zenz correction, manage feedback, hide ordinary candidates, and undo recent commits.
 - **Vertical-writing UI on Windows and macOS:** Candidate, suggestion, infolist, and ruby layouts adapt to vertical text; supported keymaps can follow the visual navigation direction.
 - **Conversion-status indicator (Windows / macOS):** Displays Reading, Mozc, Zenz processing, or Zenz applied near the composition, with adjustable position, shape, and colors. The new macOS indicator has not yet been verified on native macOS hardware.
 - **Extensive appearance customization:** Configure colors (light/dark/system/custom), dimensions, rounded corners, opacity, and shadows per window. Windows additionally supports font/weight, preedit colors and underlines, and IME-indicator styling.
@@ -945,6 +1012,8 @@ Download / platform availability
 --------------------------------
 
 Get installers from the **Assets** section of the appropriate [GitHub Release](https://github.com/over-keys/mozkey-space/releases). Available platforms and packages vary by release; select the package for your OS and CPU architecture.
+
+For future releases, public asset names use `Mozkey_v{version}_{os}_{architecture}`: `Mozkey_vX.Y.Z_windows_x64.msi`, `Mozkey_vX.Y.Z_windows_arm64.msi`, and `Mozkey_vX.Y.Z_macos_universal.pkg`. Earlier releases may use different filenames; always check the actual Assets for the selected release.
 
 | Platform | Package | Instructions |
 | --- | --- | --- |
@@ -1082,10 +1151,21 @@ Mozc runtime executables as an additional offline hardening layer. For
 Zenz-bundled builds, the rules also cover `mozc_zenz_scorer.exe` and
 `llama-server.exe`. These rules are removed during uninstall.
 
+On macOS Zenz-bundled builds, Mozc communicates with its scorer over a private
+per-user Unix-domain socket. The scorer contacts the packaged `llama-server`
+only on a randomized `127.0.0.1` port with a randomized API key. The macOS
+source gate and package verifier audit selected code paths and sample network
+sockets during real inference using `ps` / `lsof`. **A passing sampled audit
+is not proof that all IME processes are unable to access the Internet, nor an
+OS-enforced outbound network restriction.** Audited development packages must
+also be distinguished from published release artifacts. See the
+[macOS offline audit contract](docs/security/macos_offline_audit.md).
+
 See also:
 
 - [Secure Offline Guarantee](docs/security/offline_guarantee.md)
 - [Secure Offline Release Checklist](docs/security/release_checklist.md)
+- [macOS offline audit contract](docs/security/macos_offline_audit.md)
 
 
 Main branches
@@ -1121,6 +1201,7 @@ Main features added in this fork
 - Allows assigning multiple commands to a single key binding as an ordered command sequence
 - Adds `ForceZenzLiveCorrection` to explicitly request Zenz correction for uncommitted text, including when automatic Zenz live correction is disabled
 - Adds `ForceZenzLiveCorrectionWithoutFeedback` to request a one-shot correction without automatically reusing stored Zenz feedback, while retaining normal Mozc history, user-dictionary entries, explicit manual blocks, and settings-controlled learning of newly committed results
+- Adds `BlockVisibleZenzCorrection`: while a Zenz correction is visibly applied, the built-in `Ctrl+Delete` shortcut records a persistent manual hard rejection and restores ordinary Mozc conversion. This differs from deleting or hiding an ordinary candidate with `DeleteSelectedCandidate`.
 - Adds `Delay(700)`-style waiting steps (0–5000 ms) in keymap command sequences, including after selected-text reconversion
 - Adds a candidate history-delete / hide action for conversion and prediction candidates. The standard keymaps use `Ctrl+Delete`: history-backed candidates are removed from learned history first, while candidates that still remain can be stored as suppression words in the `非表示候補` user dictionary. The original user-dictionary entry is not deleted, and removing the corresponding suppression entry restores the candidate. The candidate footer shows history-delete or hide guidance for the currently selected candidate using the active key binding
 - Prevents candidates that Mozc can semantically identify as emoticons—built-in emoticon candidates and user-dictionary entries registered with the `顔文字` POS—from being promoted to the first candidate in ordinary conversion through learning. The candidates remain visible, while the same surface registered under a non-emoticon POS remains eligible for normal ranking and learning. Independently generated Zenz surfaces are not classified as emoticons from string shape alone
@@ -1172,6 +1253,8 @@ Main features added in this fork
 - Detects and rejects likely context echo where Zenz repeats a long suffix of already committed left context at the beginning of the current output, then falls back to the normal Mozc live-conversion result
 - Applies lightweight omission guards to fresh Zenz responses and stored-feedback candidates, rejecting obvious leading/trailing truncation relative to the normal Mozc result. Ambiguous overlaps with committed left context fall back to Mozc rather than blindly stripping a matching prefix
 - Adds **Strict Reading Preservation (Experimental)** as an opt-in setting, **OFF by default**. When enabled, the final Zenz candidate undergoes reverse-reading verification against the complete typed reading; mismatch or unavailable reading falls back to Mozc. Valid candidates and saved-feedback corrections can be rejected, and additional processing may increase latency
+- Adds **Suppress emoji conversion by Zenz**, **ON by default**. Mozkey compares emoji sequences in Zenz output against the normal Mozc baseline, rejecting corrections that add, remove, or replace emoji; this also constrains saved-feedback corrections without removing ordinary Mozc emoji candidates or manual selection
+- Splits the settings UI into **Zenz live correction** and **Zenz correction acceptance criteria**. Strict reading preservation and emoji suppression remain editable with automatic live correction disabled and also apply to manual Zenz invocations
 - Separates Zenz personalization into three independent settings: **A** records Zenz accept/reject observations to a local TSV; **B** automatically reuses existing feedback for candidate ranking, fast-path correction, and statistical auto-blocking; **C** learns explicitly committed Zenz corrections into regular Mozc conversion history. Recording can be disabled without disabling reuse or Mozc-history learning, and pre-existing legacy preferences are inherited only for new settings that have not yet been explicitly saved
 - Limits automatic reuse of stored Zenz feedback to full readings of at least 7 Unicode code points by default, to avoid over-applying learned preferences to short readings with many homophones and context-dependent interpretations. The threshold (1–20) and the gate can be configured; shorter readings are still recorded, and explicit manual hard blocks still apply
 - In Secret / Incognito mode, keeps local Zenz inference enabled while disabling Zenz feedback personalization; stored feedback is not reused or consulted for decisions, no new feedback is persisted, and existing feedback is left intact
@@ -1184,6 +1267,7 @@ Main features added in this fork
 - When Space restores the underlying Mozc normal conversion from a visible Zenz correction, the next text input commits that restored conversion before starting a new composition
 - Adds a feedback-learning data management UI to the config dialog. Users can search, import, export, delete entries, and clear the feedback TSV. Deleting this feedback does **not** delete separately learned Mozc conversion history from C
 - Allows explicitly blocking selected Zenz corrections from the feedback management UI. Manual hard rejects continue to apply even when automatic feedback reuse (B) is OFF; unblocking requires deleting the corresponding entry
+- Allows manually blocking a currently visible Zenz correction with `Ctrl+Delete`, persisting a `hard_reject` for the full reading, context class, and corrected value, then restoring the underlying Mozc result without double-counting an ordinary rejection or deleting regular Mozc candidate history.
 - When automatic reuse (B) is ON, ranks normal single-segment candidates using stored feedback and may insert synthetic candidates at feedback-adjusted positions. Accepted observations raise ranking; ordinary rejections lower it without deleting the candidate
 - Does not apply Zenz feedback ranking to multi-segment normal conversions, to avoid collapsing phrase boundaries
 - Reuses accepted Zenz feedback via the session-level live-correction fast path for multi-segment live conversion to preserve learned full-phrase corrections
@@ -1193,10 +1277,13 @@ Main features added in this fork
 - Protects user-dictionary candidates and ASCII / mixed-script surfaces that appear in the current normal Mozc live-conversion result before adopting Zenz live-correction output
 - For ASCII / mixed-script surfaces, temporarily replaces the reading with a placeholder in the Zenz prompt when it can be identified safely, then restores the selected surface after the response, so entries such as `もずきー -> Mozkey` are not silently overwritten as `モズキー` while surrounding text can still be corrected
 - Treats the surface selected by normal Mozc as an orthographic baseline. When Zenz alone introduces or mutates a Latin / technical spelling such as `東京 -> Tokyo` or `コンピュータ -> computer`, Mozkey restores the affected safely projectable segment to the Mozc surface; Latin / technical tokens already selected by Mozc, such as `GitHub`, `iPhone`, `AI`, `C++`, `GPT-5`, `UTF-8`, `HTTP/2`, and `Windows11`, remain valid
-- Protects ASCII numeric literals, including signed integers and decimals, separately from Latin / technical tokens and leaves them visible in the Zenz prompt instead of replacing them with placeholders. The exact numeric spelling and non-Japanese boundaries are preserved, while adjacent Japanese text in expressions such as `1日`, `100円`, `スマートフォン1台`, `第1回`, and `3.14倍` remains eligible for Zenz correction
+- Protects ASCII numeric literals, including signed integers and decimals, only when the corresponding reading contains that numeric token if the number is extracted from the normal Mozc preedit. Digits generated by kana-to-kanji conversion are not automatically protected. Independently evidenced user-dictionary protections remain in place. Protected numbers remain visible in the Zenz prompt (without placeholders); their spelling and non-Japanese boundaries are preserved, while adjacent Japanese text such as `1代` → `1台` may be corrected. Kana-derived numerals, such as `5` in `いつかきっと` → `5日キット`, do not block Zenz correction. Identical numerals from mixed origins are handled conservatively unless their positions can be verified.
 - Preserves user-visible punctuation style when adopting Zenz live-correction output, so brackets and symbols such as `（ ）` / `( )`, `？` / `?`, and `！` / `!` stay in the style chosen by the current composition or Mozc live-conversion result
 - Suppresses only excess trailing sentence-final or expressive punctuation introduced by contextual Zenz output beyond what is already present at the end of the current composition or normal Mozc live-conversion result, while preserving the rest of the correction
 - For Japanese-only user-dictionary surfaces, keeps the natural reading in the Zenz prompt and validates the selected surface boundaries after the response, accepting the result only when any extra kana attachment can be repaired safely
+- Protects proper nouns from the system dictionary when the POS, reading, surface, and position of the actual Mozc-selected candidate provide sufficient evidence, including personal names, place names, and organization names; it does not indiscriminately lock every dictionary entry
+- Recognizes single-node geographic compounds when the geographic proper-noun POS, typed regional-suffix POS, reading, and surface ending agree. Exempts 60 reviewed ambiguous reading/surface pairs (for example, `あきたし / 秋田市` and `さくし / 佐久市`) from hard system-name protection so Zenz can resolve ordinary expressions in context
+- Temporarily substitutes a natural proxy reading and surface for verified full personal names in the Zenz input, then restores the original name after the response; validates occurrence counts and restoration conditions, and falls back to the normal Mozc result if restoration is unsafe. Place and organization names are not proxied
 - Sanitizes left context before using it in Zenz prompts, and excludes sensitive-like context such as URLs, email addresses, file paths, tokens, and long digit sequences
 - Stores only full-sequence Zenz feedback with non-reversible context classes, never raw left context or segment-local feedback
 - Bundles third-party license notices for the Zenz model and llama.cpp runtime in the MSI
@@ -1394,7 +1481,11 @@ unconditionally, and legitimate repetition supported by the current reading is
 still allowed. If validation fails, Mozkey falls back to the current normal
 Mozc live-conversion result.
 
-#### Obvious Zenz omission guards and strict reading preservation (experimental)
+#### Zenz correction acceptance criteria (live and manual)
+
+The config dialog separates **Zenz live correction** controls from **Zenz correction acceptance criteria**. The latter contains **Strict Reading Preservation (Experimental)** and **Suppress emoji conversion by Zenz**. Both apply to automatic and explicit manual Zenz corrections, and remain editable when automatic live correction is disabled.
+
+**Obvious omission guards and strict reading preservation**
 
 In the default configuration, lightweight checks reject a final Zenz candidate
 when it is an obvious leading or trailing truncation of the normal Mozc
@@ -1421,6 +1512,12 @@ reranking or insertion based on saved feedback that cannot be verified is also
 restricted, and the additional reverse conversion may increase latency.
 Leave strict mode OFF to retain the usual Zenz correction and feedback behavior.
 
+**Suppress emoji conversion by Zenz**
+
+The **Suppress emoji conversion by Zenz** checkbox is **ON by default**. When enabled, Mozkey compares the ordered emoji sequences extracted from Zenz output with the normal Mozc conversion baseline. If Zenz has added, removed, or replaced emoji, that correction is rejected and the ordinary Mozc result is kept. The safeguard covers both newly inferred Zenz responses and corrections reused from saved feedback.
+
+This is not a ban on emoji in ordinary Mozc conversion. Emoji candidates generated by the built-in `EmojiRewriter` remain available for explicit selection, and emoji already present in the Mozc baseline are not automatically removed. The comparison checks emoji sequences rather than guaranteeing that every emoji stays at precisely the same text position. Turning the setting OFF disables this additional Zenz-specific check but does not bypass other adoption safeguards. The separate `EmojiRewriter` first-candidate ranking constraint remains in effect.
+
 User-dictionary candidates and ASCII / mixed-script surfaces that appear in the
 current normal Mozc live-conversion result are protected before Zenz output is
 adopted. For ASCII / mixed-script surfaces, when the protected reading can be
@@ -1442,15 +1539,24 @@ technical tokens already selected by normal Mozc, including `GitHub`, `iPhone`,
 `AI`, `C++`, `GPT-5`, `UTF-8`, `HTTP/2`, and `Windows11`, remain valid baseline
 surfaces.
 
-ASCII numeric literals are handled separately from these Latin / technical identities.
-Numeric spellings, including signed integers and decimals, remain visible in the Zenz
-prompt instead of being replaced with placeholders, and the adopted output must preserve
-the same spelling and occurrence count. For each numeric occurrence, when the normal Mozc
-baseline has an adjacent Japanese character, the Zenz output may replace it with another
-Japanese character. A non-Japanese adjacent character must remain exactly the same, and a
-string boundary must remain a boundary. This allows corrections such as `1代 -> 1台` and
-surrounding-context corrections while rejecting changes such as `100円 -> 100¥`,
-`100% -> 100$`, `2026/09/23 -> 2026-09-23`, and `HTTP/2 -> HTTP 2`.
+ASCII numeric literals are handled separately from Latin / technical identities. A digit in
+normal Mozc output is **not by itself evidence of a user-typed numeric literal**. For
+preedit-derived numeric protection, the corresponding conversion reading must contain the
+ASCII numeric token; independent user-dictionary protections remain intact. For example, if `いつかきっと` is converted by Mozc to `5日キット`, the generated
+`5` is not automatically protected, allowing Zenz to correct the spelling.
+
+Protected signed integers, decimals, and other numeric spellings stay visible in the Zenz
+prompt instead of being replaced with placeholders. Ordinarily their spelling and number
+of occurrences must be preserved. Adjacent Japanese characters may change to other
+Japanese characters, while non-Japanese neighbors and string boundaries are preserved.
+This allows corrections such as `1代` → `1台` while rejecting unsafe changes such as
+`100円` → `100¥`, `100%` → `100$`, `2026/09/23` → `2026-09-23`, and `HTTP/2` → `HTTP 2`.
+
+When identical numbers occur both as explicitly typed tokens and as Mozc-generated text,
+Mozkey permits a count-changing correction only if the typed occurrences can be anchored
+in independent leading or trailing conversion segments, and the complete anchor segments
+and adjacent boundaries remain intact. If their provenance or positions cannot be verified,
+including mixed origins within a single segment, the conservative numeric guard remains.
 
 Zenz output may also normalize visible punctuation style. Before adoption,
 Mozkey restores the symbol style from the current composition or normal Mozc
@@ -1488,6 +1594,22 @@ gate.
 For Windows TSF password input scopes and macOS Secure Event Input, application
 surrounding text is not acquired for Zenz and extended Zenz context acquisition
 is skipped.
+
+#### Protecting system-dictionary proper nouns and verified full personal names
+
+Zenz may rewrite a personal name, place name, or organization name that normal Mozc conversion selected correctly. Mozkey uses the dictionary nodes underlying the actually selected candidate to inspect part-of-speech information, reading, surface, and position, and protects only spans for which it has sufficient evidence. User-dictionary entries continue to use their existing protection path as well.
+
+For place names, Mozkey handles both multi-node constructions such as `秋田 + 市` and single dictionary nodes such as `秋田市`. For a single node, the left POS must indicate a geographic proper noun and the right POS must identify a typed regional suffix (`区`, `市`, `府`, `村`, `町`, `県`, `郡`, or `駅`), with matching reading and surface endings. A matching surface suffix alone is not sufficient evidence.
+
+A place-name candidate is not proof that the writer intended a place. For example, `あきたし` could mean either `秋田市` (Akita City) or `飽きたし` ("I'm tired of it, and ..."). Based on a dictionary ambiguity audit, 60 reviewed place-name **full-reading/surface pairs** are exempted from hard system-proper-noun protection. The same policy applies whether a name is represented by one node or several nodes. Zenz can therefore propose an ordinary expression in context, but all independent output validation and user-dictionary protections still apply. Correct conversion is not guaranteed, and this curated set does not cover every possible geographic homophone or inflected expression.
+
+For personal names, Mozkey checks surname/given-name POS information and structure. Even if the selected path is classified as a general noun, an alternative lattice path may establish a verified full name when its reading and surface agree with the selected result.
+
+Uncommon full names can still be rewritten by Zenz even when passed unchanged. For **verified full personal names only**, Mozkey can temporarily substitute a natural proxy reading and surface. For example, when the conditions are met, `見上愛` (`みかみあい`) is passed to Zenz as `木村` (`きむら`), and the original `見上愛` is restored after the response. Occurrence counts and unsafe additions such as honorifics are checked; when restoration is not safe, the normal Mozc result is retained.
+
+This proxy mechanism does not apply to place or organization names or to standalone surnames/given names. Not every proper noun in a dictionary is protected: the selected conversion must provide adequate evidence. Mozkey retains surrounding contextual corrections when it can do so safely.
+
+Proper-noun evidence is collected during normal Mozc candidate generation, so additional exploration may also occur when automatic Zenz correction is OFF. For now, this preserves candidate consistency when Zenz is invoked manually after conversion.
 
 #### Independent Zenz learning controls
 
@@ -1852,9 +1974,25 @@ ZenzConversion + Space -> RevertZenzToMozc
 
 **Return to ordinary Mozc conversion** (`RevertZenzToMozc`) can also be assigned to another key. Configure it as a single command, not as part of a command sequence. Explicit bindings in CUSTOM keymaps take precedence.
 
+### Manually block a visible Zenz correction with Ctrl+Delete
+
+In built-in keymaps, pressing `Ctrl+Delete` **while a Zenz correction is visibly applied** records a manual `hard_reject` in the local Zenz feedback store and restores the underlying ordinary Mozc conversion without losing the current uncommitted reading. It does not commit the correction.
+
+```text
+ZenzConversion + Ctrl Delete -> BlockVisibleZenzCorrection
+```
+
+`Space` / `RevertZenzToMozc` only returns to ordinary conversion; it does not itself create a permanent manual block. In contrast, `BlockVisibleZenzCorrection` attempts to save the hard rejection immediately and does not also queue a statistical rejection. If no Zenz correction is visible, this command does nothing.
+
+The block applies to a **full reading, coarse context class, and correction value**. It is not a global word ban and does not delete normal Mozc dictionary candidates or learning history. Persisted manual blocks remain effective even when automatic feedback recording (A) or automatic reuse (B) is disabled. To unblock a correction, delete the corresponding entry from the Zenz feedback management dialog.
+
+**Privacy and write failures:** No new persistent hard rejection is written in Secret/Incognito mode, TSF `IS_PRIVATE` input, password fields, or other protected contexts. If the feedback store cannot be written, the visible correction still reverts to ordinary Mozc conversion, but no durable block is created; the current UI does not report whether saving succeeded.
+
+**CUSTOM keymaps:** Mozkey adds the dedicated Zenz `Ctrl Delete` rule automatically only if there is exactly one `Conversion + Ctrl Delete -> DeleteSelectedCandidate` row and no existing `Delete`-containing assignment in `ZenzConversion` or `LiveConversion`. Otherwise, existing custom bindings are preserved; assign `BlockVisibleZenzCorrection` explicitly in the keymap editor if desired. Like `RevertZenzToMozc`, it must be configured as a **standalone command**, not inside a multi-command sequence.
+
 ### Delete candidate history / hide candidate
 
-While conversion or prediction candidates are visible, `DeleteSelectedCandidate` removes the selected candidate from learned history when possible, or hides it from the candidate list. The standard keymaps bind this action to `Ctrl+Delete` in Prediction and Conversion states.
+Outside visible Zenz correction, `DeleteSelectedCandidate` removes a selected conversion or prediction candidate from learned history when possible, or hides it from the candidate list. The standard keymaps bind this action to `Ctrl+Delete` in Prediction and Conversion states. **When Zenz correction is visible, `Ctrl+Delete` instead performs the manual block described above.**
 
 The action first attempts to delete the selected candidate from user history. When that succeeds, the operation stops there and no suppression entry is created. Only when history deletion does not apply and the candidate is otherwise suppressible does Mozkey store the exact reading/value pair as a `SUPPRESSION_WORD` in the `非表示候補` user dictionary.
 
@@ -2230,6 +2368,7 @@ For source builds, Zenz runtime packaging, and installer validation, consult:
 - [Windows build instructions](docs/build_mozc_in_windows.md)
 - [macOS Universal Zenz runtime / PKG build guide](src/mac/installer/zenz_runtime/README.md)
 - [macOS installer regression test guide](src/mac/MOZKEY_MACOS_INSTALL_TESTING.md)
+- [macOS offline audit contract](docs/security/macos_offline_audit.md)
 - [Linux build instructions](docs/build_mozc_for_linux.md)
 
 ### Upstream and licensing

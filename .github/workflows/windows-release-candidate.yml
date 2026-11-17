@@ -1,7 +1,7 @@
 name: Windows release candidates (x64 / ARM64, unsigned)
 
 # Audited unsigned release candidates; no signing or automatic publication.
-# Pull requests execute contract tests only; MSI builds require dispatch from main or the 1.0.0 staging branch.
+# Pull requests execute contract tests only; MSI builds require dispatch from main or explicitly allowed staging branches.
 # Universal MSI remains supported by the regular Windows CI, NOT released here.
 on:
   push:
@@ -14,6 +14,14 @@ on:
     inputs:
       release_version:
         description: 'Exact public version in src/version.bzl (e.g. 1.0.0)'
+        type: string
+        required: true
+  # Reusable from the isolated SignPath TEST workflow. Existing dispatch and PR
+  # behavior stays unchanged; this workflow never signs its output.
+  workflow_call:
+    inputs:
+      release_version:
+        description: 'Exact release version for audited MSI candidates'
         type: string
         required: true
 
@@ -41,7 +49,7 @@ jobs:
   prepare-dictionary:
     name: Prepare one verified dictionary input for both architectures
     needs: source-contract-tests
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/1.0.0-space')
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/1.0.0-space' || github.ref == 'refs/heads/integration/upstream-1.1.0')
     runs-on: windows-2025
     timeout-minutes: 90
     env:
@@ -101,7 +109,7 @@ jobs:
   unsigned-candidate:
     name: Build and validate unsigned ${{ matrix.arch }} MSI (manual main / 1.0.0 staging)
     needs: [source-contract-tests, prepare-dictionary]
-    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/1.0.0-space')
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/1.0.0-space' || github.ref == 'refs/heads/integration/upstream-1.1.0')
     strategy:
       fail-fast: false
       matrix:
@@ -255,6 +263,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Config-dialog regression failed.' }
 
       - name: Verify MSI identity, architecture, Zenz hashes and stage candidate
+        id: verify_msi
         shell: pwsh
         run: |
           ./tools/release/Verify-WindowsMsiCandidate.ps1 `
@@ -265,12 +274,24 @@ jobs:
             -SourceSha $env:EXPECTED_SOURCE_SHA `
             -OutputDirectory "$env:RUNNER_TEMP/release-unsigned" `
             -EvidenceDirectory "$env:RUNNER_TEMP/release-evidence"
+          if ($LASTEXITCODE -ne 0) { throw 'MSI release candidate verification failed.' }
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'release-evidence/candidate-manifest.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+          $fileName = [string]$manifest.release_filename
+          if ([string]::IsNullOrWhiteSpace($fileName) -or $fileName -cne [IO.Path]::GetFileName($fileName)) {
+            throw 'Invalid release filename in MSI evidence.'
+          }
+          $staged = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'release-unsigned') -File -Filter '*.msi')
+          if ($staged.Count -ne 1 -or $staged[0].Name -cne $fileName) {
+            throw 'Staged MSI does not match exact release filename.'
+          }
+          "filename=$fileName" >> $env:GITHUB_OUTPUT
 
       - name: Upload verified unsigned MSI candidate (not a public release)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mozkey-unsigned-${{ matrix.arch }}-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-unsigned/*.msi
+          path: ${{ runner.temp }}/release-unsigned/${{ steps.verify_msi.outputs.filename }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

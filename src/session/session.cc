@@ -735,6 +735,10 @@ void AddOrUpdateProtectedSpan(
 
   if (ProtectedConversionSpan* existing =
           FindProtectedSurface(protected_spans, value)) {
+    // Direct user-dictionary evidence is never a preedit-only numeric anchor.
+    if (tier == ProtectedConversionSpan::Tier::kUserPreferred) {
+      existing->numeric_preedit_only = false;
+    }
     if (existing->required_occurrences < required_occurrences) {
       existing->required_occurrences = required_occurrences;
     }
@@ -762,7 +766,8 @@ void AddOrUpdateProtectedSpan(
 }
 
 void AddPreeditIdentityProtectedSpans(
-    const commands::Preedit& preedit, absl::string_view mozc_value,
+    const commands::Preedit& preedit, absl::string_view live_key,
+    absl::string_view mozc_value,
     std::vector<ProtectedConversionSpan>* protected_spans) {
   for (int i = 0; i < preedit.segment_size(); ++i) {
     const commands::Preedit::Segment& segment = preedit.segment(i);
@@ -774,16 +779,42 @@ void AddPreeditIdentityProtectedSpans(
         segment.has_key() ? segment.key() : std::string();
     const std::vector<std::string> identity_surfaces =
         ExtractAsciiIdentitySurfaces(segment.value());
+    // The preedit's selected surface is only a Mozc hypothesis.  A number
+    // generated from a kana reading (e.g. いつか -> 5日) must not become a
+    // mandatory numeric literal for Zenz adoption.  Treat only a numeric
+    // token present in the original conversion reading as a hard constraint.
+    // With no segment key, fall back conservatively to the full live key.
+    const absl::string_view numeric_reading =
+        segment_key.empty() ? live_key : absl::string_view(segment_key);
+    const std::vector<std::string> reading_surfaces =
+        ExtractAsciiIdentitySurfaces(numeric_reading);
     for (const std::string& surface : identity_surfaces) {
-      const std::string surface_key = InferProtectedKeyForEmbeddedSurface(
-          segment_key, segment.value(), surface);
       const ProtectedConversionSpan::Tier tier =
           ClassifyProtectedAsciiSurface(surface);
+      if (tier == ProtectedConversionSpan::Tier::kNumericLiteral &&
+          std::find(reading_surfaces.begin(), reading_surfaces.end(), surface) ==
+              reading_surfaces.end()) {
+        continue;
+      }
+      const std::string surface_key = InferProtectedKeyForEmbeddedSurface(
+          segment_key, segment.value(), surface);
+      // Numeric protection from a user-dictionary candidate has stronger
+      // provenance.  Do not relax it merely because the same number appears
+      // in the ordinary preedit.
+      const bool already_protected =
+          FindProtectedSurface(protected_spans, surface) != nullptr;
       AddOrUpdateProtectedSpan(
           surface_key, surface, tier,
           tier == ProtectedConversionSpan::Tier::kIdentityCritical &&
               !surface_key.empty(),
           mozc_value, protected_spans);
+      if (tier == ProtectedConversionSpan::Tier::kNumericLiteral &&
+          !already_protected) {
+        if (ProtectedConversionSpan* added =
+                FindProtectedSurface(protected_spans, surface)) {
+          added->numeric_preedit_only = true;
+        }
+      }
     }
   }
 }
@@ -928,14 +959,110 @@ std::vector<ProtectedConversionSpan> BuildZenzProtectedConversionSpans(
   }
 
   if (output.has_preedit()) {
-    AddPreeditIdentityProtectedSpans(output.preedit(), mozc_value,
+    AddPreeditIdentityProtectedSpans(output.preedit(), live_key, mozc_value,
                                      &protected_spans);
   }
 
   AddDirectUserDictionaryEntryProtectedSpans(converter, live_key, mozc_value,
                                              &protected_spans);
 
+  // Extend the existing output-side, non-placeholder guard to normal-Mozc
+  // system proper nouns, including embedded names in longer conversion paths.
+  // Retain lexical boundaries: never match an arbitrary dictionary word against
+  // the complete reading and never let the exception list weaken user entries.
+  std::vector<converter::ProperNounSpan> selected_names;
+  const bool has_selected_names =
+      converter.GetSelectedProperNounSpans(&selected_names);
+  if (has_selected_names) {
+    for (const converter::ProperNounSpan& name : selected_names) {
+      // Token boundaries differ between one-node and multi-node place names.
+      // Use the full selected reading + surface for reviewed ambiguities.
+      const bool protect_reading = ShouldProtectSelectedSystemProperNoun(
+          name.key, name.value, name.token_readings,
+          name.verified_personal_full_name);
+      if (!protect_reading) {
+        continue;
+      }
+      // Current ProtectedConversionSpan uses occurrence/boundary checks.
+      // Skip repeated surfaces until a positional adoption guard is available.
+      // This conservative rule prevents protecting the wrong occurrence.
+      if (name.value.empty() ||
+          CountSurfaceOccurrences(mozc_value, name.value) != 1 ||
+          name.value_offset > mozc_value.size() ||
+          mozc_value.compare(name.value_offset, name.value.size(),
+                             name.value) != 0 ||
+          name.key_offset > live_key.size() ||
+          live_key.compare(name.key_offset, name.key.size(), name.key) != 0) {
+        continue;
+      }
+      AddOrUpdateProtectedSpan(
+          name.key, name.value,
+          ProtectedConversionSpan::Tier::kSystemProperNoun, false,
+          mozc_value, &protected_spans);
+      // The selection is already checked against both the full key and value.
+      // Do not attach an offset to a preexisting user-dictionary protection.
+      if (ProtectedConversionSpan* added =
+              FindProtectedSurface(&protected_spans, name.value);
+          added != nullptr &&
+          added->tier == ProtectedConversionSpan::Tier::kSystemProperNoun) {
+        added->source_value_offset = name.value_offset;
+        added->source_key_offset = name.key_offset;
+        added->verified_personal_full_name = name.verified_personal_full_name;
+      }
+    }
+  }
+
   return protected_spans;
+}
+
+// Protect a single verified personal name with a natural proxy when the
+// selected source reading and surface are uniquely and positionally verified.
+// This never changes the original reading used for adoption and stale replies.
+bool TryApplySingleVerifiedNameProxy(
+    absl::string_view original_key, absl::string_view mozc_value,
+    absl::string_view left_context, absl::string_view right_context,
+    ZenzProtectedPromptResult* protected_prompt) {
+  constexpr absl::string_view kProxyReading = "きむら";
+  constexpr absl::string_view kProxySurface = "木村";
+  if (protected_prompt == nullptr || protected_prompt->placeholder_count != 0 ||
+      protected_prompt->protected_spans.size() != 1 ||
+      protected_prompt->key != original_key) {
+    return false;
+  }
+  ProtectedConversionSpan& name = protected_prompt->protected_spans.front();
+  if (name.tier != ProtectedConversionSpan::Tier::kSystemProperNoun ||
+      !name.verified_personal_full_name || name.key.empty() ||
+      name.value.empty() || !name.placeholder.empty() ||
+      name.source_key_offset == std::string::npos ||
+      name.source_value_offset == std::string::npos ||
+      name.source_key_offset > original_key.size() ||
+      name.source_value_offset > mozc_value.size() ||
+      original_key.substr(name.source_key_offset, name.key.size()) != name.key ||
+      mozc_value.substr(name.source_value_offset, name.value.size()) !=
+          name.value ||
+      CountSurfaceOccurrences(original_key, name.key) != 1 ||
+      CountSurfaceOccurrences(mozc_value, name.value) != 1 ||
+      absl::StrContains(original_key, kProxyReading) ||
+      absl::StrContains(mozc_value, kProxySurface) ||
+      absl::StrContains(left_context, kProxySurface) ||
+      absl::StrContains(right_context, kProxySurface) ||
+      absl::StrContains(left_context, kProxyReading) ||
+      absl::StrContains(right_context, kProxyReading)) {
+    return false;
+  }
+  // Do not proxy a name followed by an honorific in the original reading.
+  const absl::string_view suffix =
+      original_key.substr(name.source_key_offset + name.key.size());
+  for (absl::string_view honorific : {"さん", "さま", "ちゃん", "くん"}) {
+    if (absl::StartsWith(suffix, honorific)) {
+      return false;
+    }
+  }
+  protected_prompt->key.replace(name.source_key_offset, name.key.size(),
+                                std::string(kProxyReading));
+  name.placeholder = std::string(kProxySurface);
+  protected_prompt->placeholder_count = 1;
+  return true;
 }
 
 uint32_t GetLiveConversionDelayMillisec(const config::Config& config) {
@@ -2443,22 +2570,35 @@ bool Session::ExecuteCommandSequenceWithInitialOutput(
                             &accumulated_result,
                             &final_output);
 
-    if (command_name == "ReconvertSelectionOrInsertSpace" &&
-        i + 1 < command_sequence.size() &&
-        step_output.has_callback() &&
-        step_output.callback().has_session_command() &&
-        step_output.callback().session_command().type() ==
-            commands::SessionCommand::RECONVERT_SELECTION_OR_INSERT_SPACE) {
-      pending_command_sequence_.assign(command_sequence.begin() + i + 1,
-                                       command_sequence.end());
-      command_sequence_waits_for_reconversion_ = true;
-      pending_command_sequence_key_.clear();
-      ++command_sequence_generation_;
-      // The client still decides whether a selection is present. If not,
-      // it applies the already-generated fallback Space result.
-      final_output.set_consumed(consumed);
-      *command->mutable_output() = final_output;
-      return true;
+    // Reconvert and selected-text reconversion both need the TSF client to
+    // create and apply a new preedit. Running subsequent commands before that
+    // acknowledgement would resolve them in PRECOMPOSITION (or DIRECT) rather
+    // than CONVERSION. Neither callback's fallback resumes the sequence.
+    if (i + 1 < command_sequence.size() && step_output.has_callback() &&
+        step_output.callback().has_session_command()) {
+      const commands::SessionCommand::CommandType callback_type =
+          step_output.callback().session_command().type();
+#if defined(_WIN32)
+      // Only Windows TSF currently acknowledges application reconversion.
+      const bool is_regular_reconversion =
+          command_name == "Reconvert" &&
+          callback_type == commands::SessionCommand::CONVERT_REVERSE;
+#else
+      const bool is_regular_reconversion = false;
+#endif
+      if (is_regular_reconversion ||
+          (command_name == "ReconvertSelectionOrInsertSpace" &&
+           callback_type ==
+               commands::SessionCommand::RECONVERT_SELECTION_OR_INSERT_SPACE)) {
+        pending_command_sequence_.assign(command_sequence.begin() + i + 1,
+                                         command_sequence.end());
+        command_sequence_waits_for_reconversion_ = true;
+        pending_command_sequence_key_.clear();
+        ++command_sequence_generation_;
+        final_output.set_consumed(consumed);
+        *command->mutable_output() = final_output;
+        return true;
+      }
     }
   }
 
@@ -2806,6 +2946,8 @@ bool Session::ExecuteConversionCommand(
       return HasVisibleZenzLiveCorrection()
                  ? RevertZenzLiveCorrectionToNormalConversion(command)
                  : DoNothing(command);
+    case keymap::ConversionState::BLOCK_VISIBLE_ZENZ_CORRECTION:
+      return BlockVisibleZenzCorrection(command);
     case keymap::ConversionState::BACKSPACE:
       // Backspace() edits the composer, not the visible kanji surface. An
       // ordinary (non-live) conversion must first return to composition.
@@ -3131,6 +3273,13 @@ bool Session::SendKeyConversionState(commands::Command* command) {
       " has_mode=", ZenzBool(input_key.has_mode()),
       " mode=", input_key.has_mode() ? static_cast<int>(input_key.mode()) : -1,
       " input_style=", static_cast<int>(input_key.input_style())));
+
+  // Manual block must run while the visible Zenz snapshot still exists.
+  // It is not an ordinary Mozc candidate deletion.
+  if (key_command ==
+      keymap::ConversionState::BLOCK_VISIBLE_ZENZ_CORRECTION) {
+    return BlockVisibleZenzCorrection(command);
+  }
 
   // Explicit user-selected return to the baseline. Handle before the
   // generic live-conversion promotion clears the visible Zenz snapshot.
@@ -4380,8 +4529,12 @@ bool Session::MaybeStartLiveConversionInternal(
   ConversionPreferences live_preferences =
       context_->converter().conversion_preferences();
   live_preferences.prefer_zipcode_literal_top = true;
-  if (!context_->mutable_converter()->ConvertWithPreferences(
-          context_->composer(), live_preferences)) {
+  // Use the same client context as ordinary conversion.  The compatibility
+  // ConvertWithPreferences wrapper supplies an empty Context, which discards
+  // preceding_text needed by the contextual particle reranker in live mode.
+  if (!context_->mutable_converter()->Convert(
+          context_->composer(), context_->client_context(),
+          live_preferences)) {
     if (ShouldKeepPendingLiveConversionForTransientSokuon(live_conversion_key) &&
         OutputPendingLiveConversion(command)) {
       ClearZenzLiveCorrectionState();
@@ -6884,6 +7037,8 @@ bool Session::MaybeApplyZenzFeedbackLiveCorrection(
     validation_input.min_key_length = min_key_len;
     validation_input.allow_synthetic_candidate =
         config.use_zenz_synthetic_candidate();
+    validation_input.allow_zenz_emoji_changes =
+        config.allow_zenz_emoji_changes();
 
     const ZenzValidationResult validation =
         zenz_output_validator_.Validate(validation_input);
@@ -6920,6 +7075,16 @@ bool Session::MaybeApplyZenzFeedbackLiveCorrection(
           " context_class=", context_class,
           " accepted_count=", feedback_candidate.accepted_count,
           " rejected_count=", feedback_candidate.rejected_count));
+      continue;
+    }
+
+    // Apply the same policy to the final (potentially repaired) surface.
+    if (!config.allow_zenz_emoji_changes() &&
+        !ZenzOutputValidator::PreservesEmojiSequences(
+            live_conversion_value_, adoption.value)) {
+      ZenzDebugOutput(
+          "[zenz-feedback] rejected "
+          "reason=emoji_sequence_changed_after_adoption");
       continue;
     }
 
@@ -7041,6 +7206,11 @@ bool Session::ForceZenzLiveCorrection(
   } else if (context_->state() != ImeContext::CONVERSION) {
     return DoNothing(command);
   }
+
+  // A successful explicit conversion supersedes any earlier decision to
+  // commit the hiragana restored by ConvertCancel().  In particular, direct
+  // punctuation must commit the newly visible Zenz result, not the old preedit.
+  ClearPendingRerankedPreeditCommitAfterConvertCancel();
 
   command->mutable_output()->set_consumed(true);
   Output(command);
@@ -7192,8 +7362,11 @@ bool Session::MaybeScheduleZenzLiveCorrection(
   ZenzProtectedPromptInput protected_prompt_input;
   protected_prompt_input.key = live_conversion_key_;
   protected_prompt_input.protected_spans = live_conversion_protected_spans_;
-  const ZenzProtectedPromptResult protected_prompt =
+  ZenzProtectedPromptResult protected_prompt =
       zenz_adoption_policy_.ProtectPromptKey(protected_prompt_input);
+  const bool proper_name_proxy_active = TryApplySingleVerifiedNameProxy(
+      live_conversion_key_, live_conversion_value_, left_context_for_prompt,
+      right_context_for_prompt, &protected_prompt);
 
   ZenzPromptBuilder prompt_builder;
   const std::string prompt =
@@ -7211,6 +7384,8 @@ bool Session::MaybeScheduleZenzLiveCorrection(
       live_conversion_preedit_.empty() ? live_conversion_key_
                                        : live_conversion_preedit_;
   pending_zenz_live_.prompt = prompt;
+  pending_zenz_live_.prompt_reading = protected_prompt.key;
+  pending_zenz_live_.proper_name_proxy_active = proper_name_proxy_active;
   pending_zenz_live_.protected_spans = protected_prompt.protected_spans;
   pending_zenz_live_.baseline_segments = BuildZenzAdoptionBaselineSegments(
       live_conversion_preedit_output_, live_conversion_key_,
@@ -7536,8 +7711,10 @@ bool Session::AdvancePendingZenzLiveCorrection(
     request.issued_at = pending_zenz_live_.issued_at;
 
     ZenzPromptBuilder prompt_builder;
-    request.reading_katakana =
-        prompt_builder.HiraganaToKatakana(pending_zenz_live_.key);
+    request.reading_katakana = prompt_builder.HiraganaToKatakana(
+        pending_zenz_live_.prompt_reading.empty()
+            ? pending_zenz_live_.key
+            : pending_zenz_live_.prompt_reading);
 
     ZenzDebugOutput(absl::StrCat(
         "[zenz] async submit pipe_configured=",
@@ -7687,6 +7864,28 @@ bool Session::ApplyZenzLiveCorrectionResult(
         " context_class=", pending_zenz_live_.context_class));
   }
 
+  if (pending_zenz_live_.proper_name_proxy_active) {
+    // A single validated proxy must survive exactly once. The model may
+    // otherwise delete or duplicate the surrogate, so fail closed.
+    constexpr absl::string_view kProxySurface = "木村";
+    if (CountSurfaceOccurrences(zenz_value, kProxySurface) != 1) {
+      CancelPendingZenzLiveCorrection();
+      return OutputCurrentLiveConversionAfterZenzStop(
+          command, "natural_name_proxy_missing_or_ambiguous");
+    }
+    const size_t proxy_offset = zenz_value.find(kProxySurface);
+    const absl::string_view after_proxy =
+        absl::string_view(zenz_value).substr(proxy_offset + kProxySurface.size());
+    for (absl::string_view honorific : {"さん", "さま", "様", "ちゃん",
+                                       "くん", "君", "氏"}) {
+      if (absl::StartsWith(after_proxy, honorific)) {
+        CancelPendingZenzLiveCorrection();
+        return OutputCurrentLiveConversionAfterZenzStop(
+            command, "natural_name_proxy_unrequested_honorific");
+      }
+    }
+  }
+
   const std::string zenz_value_before_placeholder_restore = zenz_value;
   zenz_value = zenz_adoption_policy_.RestorePlaceholders(
       zenz_value, pending_zenz_live_.protected_spans);
@@ -7739,6 +7938,8 @@ bool Session::ApplyZenzLiveCorrectionResult(
       pending_zenz_live_.forced ? 0 : GetZenzLiveCorrectionMinKeyLength(config);
   validation_input.allow_synthetic_candidate =
       config.use_zenz_synthetic_candidate();
+  validation_input.allow_zenz_emoji_changes =
+      config.allow_zenz_emoji_changes();
 
   const ZenzValidationResult validation =
       zenz_output_validator_.Validate(validation_input);
@@ -7815,6 +8016,15 @@ bool Session::ApplyZenzLiveCorrectionResult(
   }
 
   zenz_value = adoption.value;
+
+  // Repairs and restored protected spans must not bypass the emoji policy.
+  if (!config.allow_zenz_emoji_changes() &&
+      !ZenzOutputValidator::PreservesEmojiSequences(
+          pending_zenz_live_.mozc_value, zenz_value)) {
+    CancelPendingZenzLiveCorrection();
+    return OutputCurrentLiveConversionAfterZenzStop(
+        command, "emoji_sequence_changed_after_adoption");
+  }
 
   // Validation already rejects a raw Zenz value that is identical to Mozc, but
   // adoption can repair an initially different candidate back to the exact
@@ -8024,8 +8234,40 @@ bool Session::OutputZenzLiveCorrection(
   return true;
 }
 
+bool Session::BlockVisibleZenzCorrection(commands::Command* command) {
+  if (!HasVisibleZenzLiveCorrection()) {
+    return DoNothing(command);
+  }
+
+  const std::string key = zenz_live_key_;
+  const std::string context_class =
+      zenz_live_context_class_.empty() ? "empty" : zenz_live_context_class_;
+  const std::string value = zenz_live_value_;
+
+  // A deliberate user hard-block is independent of automatic recording
+  // and automatic reuse, but never bypasses the privacy gate.
+  const bool can_persist =
+      CanPersistZenzLearningFromInput(*context_) &&
+      EvaluateZenzLiveKeyPrivacy(key).allow &&
+      EvaluateZenzLiveValuePrivacy(value).allow;
+  const bool saved =
+      can_persist &&
+      zenz_feedback_store_.RecordManualBlock(key, context_class, value);
+  ZenzDebugOutput(absl::StrCat(
+      "[zenz-feedback] manual block saved=", ZenzBool(saved),
+      " allowed=", ZenzBool(can_persist),
+      " ", ZenzRedactedTextStats("key", key),
+      " ", ZenzRedactedTextStats("value", value),
+      " context_class=", context_class));
+
+  // Unlike Space, a hard block is already the final user decision.
+  // Do not queue another statistical rejection for the same correction.
+  return RevertZenzLiveCorrectionToNormalConversion(
+      command, /*record_rejection=*/false);
+}
+
 bool Session::RevertZenzLiveCorrectionToNormalConversion(
-    commands::Command* command) {
+    commands::Command* command, bool record_rejection) {
   if (!HasVisibleZenzLiveCorrection()) {
     return false;
   }
@@ -8037,7 +8279,9 @@ bool Session::RevertZenzLiveCorrectionToNormalConversion(
       " ", ZenzRedactedTextStats("mozc_value", zenz_live_mozc_value_),
       " visible_generation=", zenz_live_visible_generation_));
 
-  SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  if (record_rejection) {
+    SetPendingZenzFeedbackRejected("space_revert_zenz_to_mozc");
+  }
 
   const commands::Preedit live_preedit = live_conversion_preedit_output_;
   const std::string live_value = live_conversion_value_;
@@ -8653,6 +8897,31 @@ bool Session::InsertCharacter(commands::Command* command) {
     // neutralize the observation before it is persisted as rejected feedback.
     if (!defer_pending_zenz_comparison_for_conversion_direct_commit) {
       ConfirmPendingZenzFeedback();
+    }
+
+    // This key commits the previous conversion and begins a new composition.
+    // The next key's client context may still describe the document *before*
+    // this commit.  Refresh it rather than replaying the previous composition's
+    // context when OnStartComposition() validates the newly committed history.
+    if (command->input().has_context()) {
+      *context_->mutable_client_context() = command->input().context();
+    } else {
+      context_->mutable_client_context()->Clear();
+    }
+    // Preserve client metadata (e.g. privacy and field type), but trust a
+    // supplied preceding_text only if it includes the result just committed.
+    // Otherwise discard its stale left text and revision so the converter's
+    // fresh committed history remains available for the next conversion.
+    commands::Context* next_client_context = context_->mutable_client_context();
+    if (command->output().has_result()) {
+      const std::string& committed_value = command->output().result().value();
+      if (!committed_value.empty() &&
+          (!next_client_context->has_preceding_text() ||
+           !absl::EndsWith(next_client_context->preceding_text(),
+                           committed_value))) {
+        next_client_context->clear_preceding_text();
+        next_client_context->clear_revision();
+      }
     }
 
     if (key.input_style() == commands::KeyEvent::DIRECT_INPUT) {
@@ -10172,6 +10441,8 @@ bool Session::Convert(commands::Command* command) {
     return true;
   }
 
+  // Re-conversion supersedes the hiragana choice implied by an earlier Cancel.
+  ClearPendingRerankedPreeditCommitAfterConvertCancel();
   SetSessionState(ImeContext::CONVERSION, context_.get());
   if (should_show_candidate_window_on_initial_conversion) {
     context_->mutable_converter()->SetCandidateListVisible(true);
@@ -10202,6 +10473,8 @@ bool Session::ConvertWithoutHistory(commands::Command* command) {
     return true;
   }
 
+  // The new conversion replaces a previous cancel-to-hiragana decision.
+  ClearPendingRerankedPreeditCommitAfterConvertCancel();
   SetSessionState(ImeContext::CONVERSION, context_.get());
   Output(command);
   return true;
