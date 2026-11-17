@@ -32,9 +32,11 @@
 
 import argparse
 import hashlib
+import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 
 from build_tools import mozc_version
@@ -106,9 +108,52 @@ def find_redist_crt_dir(redist_root: pathlib.Path, arch: str) -> pathlib.Path:
     )
 
 
+CRT_SIGNATURE_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$s = Get-AuthenticodeSignature -LiteralPath $env:MOZKEY_CRT_FILE
+$file = Get-Item -LiteralPath $env:MOZKEY_CRT_FILE
+$result = [ordered]@{
+  status = [string]$s.Status
+  signature_type = [string]$s.SignatureType
+  subject = [string]$s.SignerCertificate.Subject
+  issuer = [string]$s.SignerCertificate.Issuer
+  thumbprint = [string]$s.SignerCertificate.Thumbprint
+  timestamp_subject = [string]$s.TimeStamperCertificate.Subject
+  timestamp_thumbprint = [string]$s.TimeStamperCertificate.Thumbprint
+  version = $file.VersionInfo.FileVersion
+  original_filename = $file.VersionInfo.OriginalFilename
+  company = $file.VersionInfo.CompanyName
+}
+$result | ConvertTo-Json -Compress
+if ($s.Status -ne 'Valid') { exit 1 }
+'''
+
+
+# Microsoft CRT files can have embedded or catalog signatures from either
+# of these Microsoft signing identities (both observed in native CI).
+# Pin the two complete canonical certificate subjects, not a substring or a
+# leaf thumbprint that changes on renewal. Unknown identities fail closed.
+# Trust/chain/timestamp validation stays with Windows Authenticode, not a new
+# X509Chain.Build at today's date (which would mishandle timestamped binaries).
+APPROVED_SIGNATURE_SUBJECTS = frozenset({
+    'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
+    'CN=Microsoft Windows Software Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
+})
+
+
+def validate_crt_signature(evidence):
+    if (evidence.get('status') != 'Valid'
+            or evidence.get('signature_type') not in ('Authenticode', 'Catalog')
+            or evidence.get('subject') not in APPROVED_SIGNATURE_SUBJECTS):
+        raise ValueError('CRT signature must be Windows-trusted with an approved Microsoft subject')
+
+
 def validate_redist_crt_architecture(directory: pathlib.Path, arch: str) -> None:
-  # ARM64X final images retain the native ARM64 PE machine type. An x64/EC-only
-  # image must not be packaged as the native ARM64 runtime.
+  # The official ARM64 runtime includes an x64/EC FH4 helper named
+  # vcruntime140_1.dll. The other four files must remain native ARM64.
+  # Verified by signed official bytes and app-local ARM64/x64 loader probes
+  # in CI run 44145561658. This is not a general x64-in-ARM64 exception.
   expected = {'x64': 0x8664, 'arm64': 0xAA64}[arch]
   for name in REDIST_CRT_FILES:
     dll = directory / name
@@ -124,8 +169,29 @@ def validate_redist_crt_architecture(directory: pathlib.Path, arch: str) -> None
       if signature[:4] != b'PE\0\0':
         raise ValueError(f'Invalid CRT PE signature: {dll}')
       machine = int.from_bytes(signature[4:6], 'little')
-      if machine != expected:
+      allowed = (expected, 0x8664) if arch == 'arm64' and name == 'vcruntime140_1.dll' else (expected,)
+      if machine not in allowed:
         raise ValueError(f'CRT architecture mismatch: {dll}: {machine:#06x}, expected {expected:#06x}')
+
+
+def verify_redist_crt_signatures(directory: pathlib.Path, env) -> None:
+  # Resolve the runner's shell explicitly from the selected VS environment.
+  shell = shutil.which('pwsh.exe', path=env.get('PATH', ''))
+  if not shell:
+    shell = str(pathlib.Path(env['SYSTEMROOT']) / 'System32/WindowsPowerShell/v1.0/powershell.exe')
+  for name in REDIST_CRT_FILES:
+    signature_env = dict(env, MOZKEY_CRT_FILE=str(directory / name))
+    try:
+      result = subprocess.run([shell, '-NoProfile', '-NonInteractive', '-Command', CRT_SIGNATURE_SCRIPT],
+                              env=signature_env, capture_output=True, check=True, timeout=60)
+    except subprocess.CalledProcessError as error:
+      print(f'CRT signature verification failed: {directory / name}', flush=True)
+      print((error.stdout or b'').decode('utf-8-sig', errors='replace'), flush=True)
+      print((error.stderr or b'').decode('utf-8-sig', errors='replace'), flush=True)
+      raise
+    evidence = json.loads(result.stdout.decode('utf-8-sig'))
+    validate_crt_signature(evidence)
+    print(f'INSTALLER_CRT_SIGNATURE file={directory / name} evidence={json.dumps(evidence)}', flush=True)
 
 
 def get_redist_crt_dir(arch: str, vcvarsall_hint=None) -> pathlib.Path:
@@ -135,6 +201,7 @@ def get_redist_crt_dir(arch: str, vcvarsall_hint=None) -> pathlib.Path:
   redist_root = pathlib.Path(vs_env['VCTOOLSREDISTDIR']).resolve()
   directory = find_redist_crt_dir(redist_root, arch)
   validate_redist_crt_architecture(directory, arch)
+  verify_redist_crt_signatures(directory, vs_env)
   for name in REDIST_CRT_FILES:
     digest = hashlib.sha256((directory / name).read_bytes()).hexdigest()
     print(f'INSTALLER_CRT_SHA256 arch={arch} file={directory / name} sha256={digest}', flush=True)

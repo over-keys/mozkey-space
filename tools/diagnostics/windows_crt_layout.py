@@ -46,43 +46,10 @@ int wmain() {
 }
 '''
 
-SIGNATURE = r'''
-$ErrorActionPreference = 'Stop'
-$s = Get-AuthenticodeSignature -LiteralPath $env:MOZKEY_CRT_FILE
-$file = Get-Item -LiteralPath $env:MOZKEY_CRT_FILE
-$result = [ordered]@{
-  status = [string]$s.Status
-  signature_type = [string]$s.SignatureType
-  subject = [string]$s.SignerCertificate.Subject
-  issuer = [string]$s.SignerCertificate.Issuer
-  thumbprint = [string]$s.SignerCertificate.Thumbprint
-  timestamp_subject = [string]$s.TimeStamperCertificate.Subject
-  timestamp_thumbprint = [string]$s.TimeStamperCertificate.Thumbprint
-  version = $file.VersionInfo.FileVersion
-  original_filename = $file.VersionInfo.OriginalFilename
-  company = $file.VersionInfo.CompanyName
-}
-$result | ConvertTo-Json -Compress
-if ($s.Status -ne 'Valid') { exit 1 }
-'''
-
-
-# Windows may prefer a trusted catalog signature over the embedded signature.
-# Pin the two complete canonical certificate subjects, not a substring or a
-# leaf thumbprint that changes on renewal. Unknown identities fail closed.
-# Trust/chain/timestamp validation stays with Windows Authenticode, not a new
-# X509Chain.Build at today's date (which would mishandle timestamped binaries).
-APPROVED_SIGNATURE_SUBJECTS = frozenset({
-    'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
-    'CN=Microsoft Windows Software Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
-})
-
-
-def validate_signature(evidence):
-    if (evidence.get('status') != 'Valid'
-            or evidence.get('signature_type') not in ('Authenticode', 'Catalog')
-            or evidence.get('subject') not in APPROVED_SIGNATURE_SUBJECTS):
-        raise ValueError('CRT signature must be Windows-trusted with an approved Microsoft subject')
+# Use the same signature policy as the production MSI selector.
+SIGNATURE = build_installer.CRT_SIGNATURE_SCRIPT
+validate_signature = build_installer.validate_crt_signature
+APPROVED_SIGNATURE_SUBJECTS = build_installer.APPROVED_SIGNATURE_SUBJECTS
 
 
 def run(command, log, env, cwd, timeout=60):

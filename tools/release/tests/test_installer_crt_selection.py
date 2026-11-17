@@ -1,5 +1,7 @@
 """CRT packaging follows installed redistributables, not compiler version names."""
 from pathlib import Path
+import json
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -29,14 +31,15 @@ class InstallerCrtSelectionTest(unittest.TestCase):
             root = Path(directory) / '14.52.37025'
             for arch, machine in (('x64', 0x8664), ('arm64', 0xAA64)):
                 expected = crt(root / arch / 'Microsoft.VC145.CRT', machine)
-                with self.subTest(arch=arch), mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root), 'VCTOOLSVERSION': '14.44.35207'}):
+                with self.subTest(arch=arch), mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root), 'VCTOOLSVERSION': '14.44.35207'}), mock.patch.object(installer, 'verify_redist_crt_signatures') as signatures:
                     self.assertEqual(installer.get_redist_crt_dir(arch), expected)
+                    signatures.assert_called_once()
 
     def test_legacy_vc143_layout_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             expected = crt(root / 'x64' / 'Microsoft.VC143.CRT', 0x8664)
-            with mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root)}):
+            with mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root)}), mock.patch.object(installer, 'verify_redist_crt_signatures'):
                 self.assertEqual(installer.get_redist_crt_dir('x64'), expected)
 
     def test_each_required_dll_must_be_a_regular_file(self):
@@ -61,6 +64,58 @@ class InstallerCrtSelectionTest(unittest.TestCase):
             candidate = crt(Path(directory) / 'arm64' / 'Microsoft.VC145.CRT', 0x8664)
             with self.assertRaisesRegex(ValueError, 'architecture mismatch'):
                 installer.validate_redist_crt_architecture(candidate, 'arm64')
+
+    def test_official_mixed_arm64_layout_only_allows_the_named_fh4_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = crt(Path(directory) / 'arm64' / 'Microsoft.VC145.CRT', 0xAA64)
+            def machine(name, value):
+                path = candidate / name
+                data = bytearray(path.read_bytes())
+                data[68:70] = value.to_bytes(2, 'little')
+                path.write_bytes(data)
+            machine('vcruntime140_1.dll', 0x8664)
+            installer.validate_redist_crt_architecture(candidate, 'arm64')
+            for name in installer.REDIST_CRT_FILES[:-1]:
+                machine(name, 0x8664)
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'architecture mismatch'):
+                    installer.validate_redist_crt_architecture(candidate, 'arm64')
+                machine(name, 0xAA64)
+            machine('vcruntime140_1.dll', 0x14c)
+            with self.assertRaisesRegex(ValueError, 'architecture mismatch'):
+                installer.validate_redist_crt_architecture(candidate, 'arm64')
+            machine('vcruntime140_1.dll', 0xAA64)
+            with self.assertRaisesRegex(ValueError, 'architecture mismatch'):
+                installer.validate_redist_crt_architecture(candidate, 'x64')
+
+    def test_production_signature_checks_all_five_files_and_fails_closed(self):
+        evidence = {'status': 'Valid', 'signature_type': 'Authenticode', 'subject': sorted(installer.APPROVED_SIGNATURE_SUBJECTS)[0]}
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps(evidence).encode())
+        env = {'PATH': 'selected-path', 'SYSTEMROOT': 'C:/Windows'}
+        with mock.patch.object(installer.shutil, 'which', return_value='selected/pwsh.exe'), mock.patch.object(installer.subprocess, 'run', return_value=result) as run, mock.patch('builtins.print'):
+            installer.verify_redist_crt_signatures(Path('CRT'), env)
+            self.assertEqual(run.call_count, 5)
+            self.assertEqual([call.kwargs['env']['MOZKEY_CRT_FILE'] for call in run.call_args_list], [str(Path('CRT') / name) for name in installer.REDIST_CRT_FILES])
+            self.assertTrue(all(call.kwargs['check'] and call.kwargs['timeout'] == 60 for call in run.call_args_list))
+            run.reset_mock()
+            with mock.patch.object(installer.shutil, 'which', return_value=None):
+                installer.verify_redist_crt_signatures(Path('CRT'), env)
+            self.assertTrue(all(call.args[0][0] == str(Path('C:/Windows') / 'System32/WindowsPowerShell/v1.0/powershell.exe') for call in run.call_args_list))
+            run.reset_mock()
+            run.return_value.stdout = json.dumps(dict(evidence, status='HashMismatch')).encode()
+            with self.assertRaises(ValueError):
+                installer.verify_redist_crt_signatures(Path('CRT'), env)
+            self.assertEqual(run.call_count, 1)
+            run.side_effect = subprocess.TimeoutExpired('pwsh', 60)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                installer.verify_redist_crt_signatures(Path('CRT'), env)
+
+    def test_selector_does_not_return_unsigned_crt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            crt(root / 'x64' / 'Microsoft.VC145.CRT', 0x8664)
+            with mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root)}), mock.patch.object(installer, 'verify_redist_crt_signatures', side_effect=ValueError('untrusted signer')):
+                with self.assertRaisesRegex(ValueError, 'untrusted signer'):
+                    installer.get_redist_crt_dir('x64')
 
     def test_corrupt_pe_files_are_rejected(self):
         for corrupt in (b'not a PE', b'MZ' + bytes(62), b'MZ' + bytes(58) + (2**32-1).to_bytes(4, 'little')):
@@ -100,7 +155,7 @@ class InstallerCrtSelectionTest(unittest.TestCase):
                 expected = crt(root / arch / 'Microsoft.VC145.CRT', machine)
                 fields = ('version_file credit_file qt_core_dll icon_path mozc_tip32 mozc_tip64 mozc_tip64arm mozc_tip64x mozc_broker mozc_server mozc_cache_service mozc_renderer mozc_tool custom_action zenz_scorer zenz_llama_server zenz_model wix_path wxs_path output').split()
                 args = SimpleNamespace(**{name: str(root / name) for name in fields}, arch=arch, vs_install_dir='', branding='Mozc', debug_build=False, enable_win_universal_installer=False)
-                with mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root), 'VCTOOLSVERSION': '14.44.35207'}), mock.patch.object(installer.mozc_version, 'MozcVersion'), mock.patch.object(installer, 'exec_command') as execute, mock.patch('builtins.print'):
+                with mock.patch.object(installer.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSREDISTDIR': str(root), 'VCTOOLSVERSION': '14.44.35207'}), mock.patch.object(installer, 'verify_redist_crt_signatures'), mock.patch.object(installer.mozc_version, 'MozcVersion'), mock.patch.object(installer, 'exec_command') as execute, mock.patch('builtins.print'):
                     installer.run_wix4(args)
                 self.assertIn(f'ReleaseRedistCrt64Dir={expected}', execute.call_args.args[0])
                 self.assertFalse(any('Microsoft.VC143.CRT' in arg for arg in execute.call_args.args[0]))
