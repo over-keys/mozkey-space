@@ -41,7 +41,7 @@ class WindowsToolchainTest(unittest.TestCase):
     def test_workflow_activation_checks_windows_uppercase_environment(self):
         # Windows os.environ uppercases keys. JSON restores an ordinary,
         # case-sensitive dict, not Windows' case-insensitive environment mapping.
-        text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
+        text = (ROOT / 'tools/release/Prepare-WindowsToolchain.ps1').read_text()
         line = next(line.strip() for line in text.splitlines()
                     if 'ARM64_MSVC_TOOLSET=' in line)
         code = line[len('python -c "'):-1]
@@ -114,7 +114,8 @@ class WindowsToolchainTest(unittest.TestCase):
 
     def test_matching_atl_is_verified_before_expensive_qt_build(self):
         text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
-        self.assertLess(text.index('- name: Ensure complete MSVC 14.44 mixed-architecture toolset'), text.index('- name: Select LLVM 20 compatible'))
+        self.assertLess(text.index('run: ./tools/release/Prepare-WindowsToolchain.ps1'), text.index('python tools/release/verify_windows_arm64_toolchain.py'))
+        text += (ROOT / 'tools/release/Prepare-WindowsToolchain.ps1').read_text()
         self.assertLess(text.index('python tools/release/verify_windows_arm64_toolchain.py'), text.index('- name: Build Qt for release'))
         self.assertIn('Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', text)
         self.assertIn("'atlmfc/include/atlbase.h'", text)
@@ -136,9 +137,11 @@ class WindowsToolchainTest(unittest.TestCase):
         self.assertLess(pin, qt)
         step = text[pin:qt]
         self.assertIn("if: matrix.arch == 'arm64'", step)
-        self.assertIn("^14\\.44\\.[0-9]+$", step)
-        self.assertIn('BAZEL_VC_FULL_VERSION=$version', step)
-        self.assertIn('MSVC toolset activation verification failed.', step)
+        shared = (ROOT / 'tools/release/Prepare-WindowsToolchain.ps1').read_text()
+        self.assertIn("^14\\.44\\.[0-9]+$", shared)
+        self.assertIn('-Case llvm20-msvc1444', step)
+        self.assertIn('BAZEL_VC_FULL_VERSION=$($selected.Name)', shared)
+        self.assertIn('MSVC toolset activation verification failed.', shared)
         self.assertNotIn('_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH', text)
 
 

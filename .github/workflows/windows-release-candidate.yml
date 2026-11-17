@@ -184,74 +184,13 @@ jobs:
           python build_tools/update_deps.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned dependency retrieval failed.' }
 
-      - name: Ensure complete MSVC 14.44 mixed-architecture toolset
-        timeout-minutes: 30
-        if: matrix.arch == 'arm64'
-        shell: pwsh
-        working-directory: src
-        run: |
-          $vc = (python build_tools/vs_util.py --arch arm64).Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'Visual Studio discovery failed.' }
-          $versions = @(Get-ChildItem -LiteralPath (Join-Path $vc 'Tools/MSVC') -Directory |
-            Where-Object { $_.Name -match '^14\.44\.[0-9]+$' } |
-            Sort-Object { [version]$_.Name } -Descending)
-          if ($versions.Count -eq 0) { throw 'Required MSVC 14.44 ARM64 toolset is not installed.' }
-          $toolset = $versions[0].FullName
-          # ARM64 MSI embeds x86, x64, and ARM64 TIP DLLs, not just native code.
-          $required = @('include/yvals_core.h', 'atlmfc/include/atlbase.h')
-          foreach ($arch in @('x86', 'x64', 'arm64')) {
-            foreach ($lib in @('libcmt.lib', 'oldnames.lib', 'libcpmt.lib', 'libvcruntime.lib', 'msvcrt.lib', 'msvcprt.lib', 'vcruntime.lib')) {
-              $required += "lib/$arch/$lib"
-            }
-            $required += "atlmfc/lib/$arch/atls.lib"
-          }
-          $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $toolset $_) -PathType Leaf) })
-          if ($missing.Count -gt 0) {
-            Write-Host "Missing mixed-architecture components: $($missing -join ', ')"
-            $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/setup.exe'
-            if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Visual Studio Installer is unavailable.' }
-            $installPath = Split-Path -Parent $vc
-            $arguments = @('modify', '--installPath', "`"$installPath`"", '--add',
-              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64', '--add',
-              'Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64', '--add',
-              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', '--add',
-              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL', '--quiet', '--norestart')
-            $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
-            if ($process.ExitCode -notin @(0, 3010)) { throw "Matching ATL installation failed: $($process.ExitCode)" }
-          }
-
-      # LLVM 20.1.1 cannot use the VS 2026 latest STL (requires Clang 22).
-      # Keep the checksum-pinned LLVM and select the installed v143 toolset.
+      # Keep upstream's checksum-pinned LLVM 20.1.1. Provision all architectures
+      # embedded in the ARM64 MSI with the same setup proven by diagnostics.
       - name: Select LLVM 20 compatible native ARM64 MSVC toolset
         if: matrix.arch == 'arm64'
+        timeout-minutes: 30
         shell: pwsh
-        working-directory: src
-        run: |
-          $vc = (python build_tools/vs_util.py --arch arm64).Trim()
-          if ($LASTEXITCODE -ne 0) { throw 'Visual Studio discovery failed.' }
-          $versions = @(Get-ChildItem -LiteralPath (Join-Path $vc 'Tools/MSVC') -Directory |
-            Where-Object { $_.Name -match '^14\.44\.[0-9]+$' } |
-            Sort-Object { [version]$_.Name } -Descending)
-          if ($versions.Count -eq 0) { throw 'Required MSVC 14.44 ARM64 toolset is not installed.' }
-          $version = $versions[0].Name
-          $required = @('bin/Hostarm64/arm64/cl.exe', 'include/yvals_core.h', 'atlmfc/include/atlbase.h')
-          foreach ($arch in @('x86', 'x64', 'arm64')) {
-            foreach ($lib in @('libcmt.lib', 'oldnames.lib', 'libcpmt.lib', 'libvcruntime.lib', 'msvcrt.lib', 'msvcprt.lib', 'vcruntime.lib')) {
-              $required += "lib/$arch/$lib"
-            }
-            $required += "atlmfc/lib/$arch/atls.lib"
-          }
-          foreach ($relative in $required) {
-            if (-not (Test-Path -LiteralPath (Join-Path $versions[0].FullName $relative) -PathType Leaf)) {
-              throw "Incomplete MSVC $version ARM64 toolset: $relative"
-            }
-          }
-          $env:BAZEL_VC = $vc
-          $env:BAZEL_VC_FULL_VERSION = $version
-          python -c "import sys; sys.path.insert(0, 'build_tools'); import vs_util, os; e=vs_util.get_vs_env_vars('arm64'); actual=e.get('VCTOOLSVERSION', '').rstrip('/\\'); assert actual == os.environ['BAZEL_VC_FULL_VERSION'], (actual, os.environ['BAZEL_VC_FULL_VERSION']); print('ARM64_MSVC_TOOLSET=' + actual)"
-          if ($LASTEXITCODE -ne 0) { throw 'MSVC toolset activation verification failed.' }
-          "BAZEL_VC=$vc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "BAZEL_VC_FULL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        run: ./tools/release/Prepare-WindowsToolchain.ps1 -Case llvm20-msvc1444 -OutputDirectory '${{ runner.temp }}/candidate-toolchain'
 
       - name: Verify all MSI architectures with static and dynamic CRT STL and ATL
         if: matrix.arch == 'arm64'
@@ -373,6 +312,15 @@ jobs:
             throw 'Staged MSI does not match exact release filename.'
           }
           "filename=$fileName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload ARM64 toolchain selection evidence
+        if: always() && matrix.arch == 'arm64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-toolchain-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-toolchain/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload verified unsigned MSI candidate (not a public release)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

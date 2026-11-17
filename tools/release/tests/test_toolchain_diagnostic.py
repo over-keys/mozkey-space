@@ -40,6 +40,45 @@ class ToolchainDiagnosticTest(unittest.TestCase):
         self.assertIn('/*.log', uploads)
         self.assertNotIn('/*.dll', uploads)
 
+    def test_product_push_uses_same_commit_reusable_candidate_without_release(self):
+        text = (ROOT / '.github/workflows/windows-integration-build.yml').read_text()
+        self.assertIn("branches: ['integration/upstream-1.1.0']", text)
+        self.assertIn("github.repository == 'over-keys/mozkey-space'", text)
+        self.assertIn("github.ref == 'refs/heads/integration/upstream-1.1.0'", text)
+        self.assertIn("github.event_name == 'push'", text)
+        self.assertIn('contents: read', text)
+        self.assertIn('uses: ./.github/workflows/windows-release-candidate.yml', text)
+        self.assertIn("release_version: '1.1.0'", text)
+        for forbidden in ('secrets:', 'contents: write', 'workflow_dispatch', 'actions: write', 'gh-release'):
+            self.assertNotIn(forbidden, text)
+        candidate = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
+        self.assertIn('workflow_call:', candidate)
+        self.assertIn("github.event_name == 'push'", candidate)
+        self.assertIn('timeout-minutes: 240', candidate)
+
+    def test_diagnostic_and_product_pushes_are_mutually_exclusive(self):
+        diagnostic_workflow = (ROOT / '.github/workflows/windows-toolchain-diagnostic.yml').read_text()
+        candidate_entry = (ROOT / '.github/workflows/windows-integration-build.yml').read_text()
+        marker = "contains(github.event.head_commit.message, '[toolchain-diagnostic]')"
+        self.assertIn(' && ' + marker, diagnostic_workflow)
+        self.assertIn(' && !' + marker, candidate_entry)
+        for message in ('Build integration candidate', '[toolchain-diagnostic] compare toolchains'):
+            diagnostic_runs = '[toolchain-diagnostic]' in message
+            candidate_runs = not diagnostic_runs
+            self.assertNotEqual(diagnostic_runs, candidate_runs)
+
+    def test_candidate_and_diagnostic_share_one_component_definition(self):
+        candidate = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
+        diagnostic_entry = (ROOT / 'tools/diagnostics/Prepare-ToolchainComparison.ps1').read_text()
+        shared = (ROOT / 'tools/release/Prepare-WindowsToolchain.ps1').read_text()
+        self.assertIn('Prepare-WindowsToolchain.ps1 -Case llvm20-msvc1444', candidate)
+        self.assertIn('Prepare-WindowsToolchain.ps1" -Case $Case', diagnostic_entry)
+        self.assertNotIn('Microsoft.VisualStudio.Component.VC.', candidate)
+        self.assertNotIn('Microsoft.VisualStudio.Component.VC.', diagnostic_entry)
+        self.assertIn('Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64', shared)
+        self.assertIn("$env:GITHUB_ACTIONS -cne 'true'", shared)
+        self.assertIn("$env:GITHUB_REPOSITORY -cne 'over-keys/mozkey-space'", shared)
+
     def test_modern_llvm_is_official_exact_archive(self):
         self.assertEqual(diagnostic.LLVM22.sha256, 'de718c58ebbc5f61d58c17b90457fcf42983bc2c4a4aba3e010d108713bfd7f1')
         self.assertEqual(diagnostic.LLVM22.size, 737955068)
@@ -78,7 +117,9 @@ class ToolchainDiagnosticTest(unittest.TestCase):
                 diagnostic.compare('llvm22-default', Path(directory))
 
     def test_only_legacy_case_provisions_all_four_matching_components(self):
-        text = (ROOT / 'tools/diagnostics/Prepare-ToolchainComparison.ps1').read_text()
+        text = (ROOT / 'tools/release/Prepare-WindowsToolchain.ps1').read_text()
+        entry = (ROOT / 'tools/diagnostics/Prepare-ToolchainComparison.ps1').read_text()
+        self.assertIn('../release/Prepare-WindowsToolchain.ps1', entry)
         self.assertIn("if ($Case -eq 'llvm20-msvc1444')", text)
         for component in ('ARM64', 'x86.x64', 'ATL.ARM64', 'ATL'):
             self.assertIn("'Microsoft.VisualStudio.Component.VC.14.44.17.14." + component + "'", text)

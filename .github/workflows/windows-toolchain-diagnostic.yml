@@ -8,17 +8,18 @@ on:
       - 'tools/diagnostics/Prepare-ToolchainComparison.ps1'
       - 'tools/diagnostics/windows_toolchain_comparison.py'
       - 'tools/release/tests/test_toolchain_diagnostic.py'
+      - 'tools/release/Prepare-WindowsToolchain.ps1'
 
 permissions:
   contents: read
 
 concurrency:
-  group: isolated-toolchain-diagnostic-${{ github.ref }}
+  group: isolated-toolchain-diagnostic-${{ github.ref }}-${{ contains(github.event.head_commit.message, '[toolchain-diagnostic]') }}
   cancel-in-progress: true
 
 jobs:
   compare:
-    if: github.repository == 'over-keys/mozkey-space' && github.ref == 'refs/heads/integration/upstream-1.1.0' && github.event_name == 'push'
+    if: github.repository == 'over-keys/mozkey-space' && github.ref == 'refs/heads/integration/upstream-1.1.0' && github.event_name == 'push' && contains(github.event.head_commit.message, '[toolchain-diagnostic]')
     runs-on: windows-11-arm
     timeout-minutes: 30
     strategy:
