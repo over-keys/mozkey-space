@@ -205,7 +205,7 @@ jobs:
           }
           $env:BAZEL_VC = $vc
           $env:BAZEL_VC_FULL_VERSION = $version
-          python -c "import sys; sys.path.insert(0, 'build_tools'); import vs_util, os; e=vs_util.get_vs_env_vars('arm64'); actual=e.get('VCToolsVersion', '').rstrip('/\\'); assert actual == os.environ['BAZEL_VC_FULL_VERSION'], (actual, os.environ['BAZEL_VC_FULL_VERSION']); print('ARM64_MSVC_TOOLSET=' + actual)"
+          python -c "import sys; sys.path.insert(0, 'build_tools'); import vs_util, os; e=vs_util.get_vs_env_vars('arm64'); actual=e.get('VCTOOLSVERSION', '').rstrip('/\\'); assert actual == os.environ['BAZEL_VC_FULL_VERSION'], (actual, os.environ['BAZEL_VC_FULL_VERSION']); print('ARM64_MSVC_TOOLSET=' + actual)"
           if ($LASTEXITCODE -ne 0) { throw 'MSVC toolset activation verification failed.' }
           "BAZEL_VC=$vc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "BAZEL_VC_FULL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
