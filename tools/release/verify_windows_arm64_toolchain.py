@@ -1,9 +1,12 @@
 """Compile, link, and run a tiny CRT/STL/ATL probe before the expensive Qt build."""
 from pathlib import Path
+from contextlib import contextmanager
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'src/build_tools'))
@@ -17,6 +20,43 @@ int main() {
   return pointer == nullptr && values.at(1) == 44 ? 0 : 1;
 }
 '''
+
+
+
+def cleanup_probe_directory(directory):
+    """Retry only Windows access/sharing locks, at most 8 attempts / 9.75s sleep."""
+    for attempt in range(8):
+        try:
+            shutil.rmtree(directory)
+            return
+        except FileNotFoundError:
+            if not Path(directory).exists():
+                return
+            raise
+        except OSError as error:
+            if getattr(error, 'winerror', None) not in (5, 32, 33) or attempt == 7:
+                raise
+            time.sleep(min(0.25 * (2 ** attempt), 2.0))
+
+
+@contextmanager
+def probe_directory():
+    # Avoid TemporaryDirectory's finalizer: cleanup is explicit and bounded.
+    directory = tempfile.mkdtemp(prefix='mozkey-arm64-probe-')
+    try:
+        yield directory
+    except BaseException as original:
+        try:
+            cleanup_probe_directory(directory)
+        except OSError as cleanup_error:
+            note = f'Probe cleanup also failed for {directory}: {cleanup_error}'
+            if hasattr(original, 'add_note'):
+                original.add_note(note)
+            print(note, file=sys.stderr, flush=True)
+        raise
+    else:
+        # Cleanup exhaustion after a successful probe remains a real CI error.
+        cleanup_probe_directory(directory)
 
 
 def verify():
@@ -38,7 +78,7 @@ def verify():
         compiler = ROOT / 'src/third_party/llvm/bin/clang-cl.exe'
         for crt in ('/MT', '/MD'):
             print(f'TOOLCHAIN_PROBE architecture={architecture} crt={crt}', flush=True)
-            with tempfile.TemporaryDirectory(prefix='mozkey-arm64-probe-') as directory:
+            with probe_directory() as directory:
                 work = Path(directory)
                 source = work / 'probe.cc'
                 binary = work / 'probe.exe'
