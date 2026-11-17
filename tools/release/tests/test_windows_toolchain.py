@@ -52,6 +52,29 @@ class WindowsToolchainTest(unittest.TestCase):
             with self.subTest(env=env), mock.patch.dict(os.environ, {'BAZEL_VC_FULL_VERSION': '14.44.35207'}, clear=True), mock.patch.dict(sys.modules, {'vs_util': vs}), mock.patch.object(vs, 'get_vs_env_vars', return_value=env), mock.patch.object(sys, 'path', sys.path.copy()), self.assertRaises(AssertionError):
                 exec(compile(code, '<workflow activation check>', 'exec'), {})
 
+    def test_rules_cc_arm64_uses_real_target_environment(self):
+        patch = (ROOT / 'src/bazel/rules_cc_windows_cc_configure.bzl.patch').read_text()
+        additions = [line[1:] for line in patch.splitlines()
+                     if line.startswith('+') and not line.startswith('+++')]
+        start = additions.index('    if target_arch == "arm64":')
+        # Execute the actual new routing branch, not a duplicate implementation.
+        code = ('def route(repository_ctx, vc_path, target_arch):\n' +
+                '\n'.join(additions[start:start + 2]) + '\n    return "original-x64-path"\n')
+        native_env = {'LIB': r'VC\Tools\MSVC\14.44.35207\lib\arm64;SDK\um\arm64'}
+        setup = mock.Mock(return_value=native_env)
+        namespace = {'setup_vc_env_vars': setup}
+        exec(code, namespace)
+        self.assertEqual(namespace['route']('ctx', 'VC', 'arm64'), native_env)
+        setup.assert_called_once_with('ctx', 'VC', architecture='amd64_arm64')
+        self.assertEqual(namespace['route']('ctx', 'VC', 'x86'), 'original-x64-path')
+        self.assertEqual(namespace['route']('ctx', 'VC', 'x64'), 'original-x64-path')
+        setup.assert_called_once()
+        command = next(line.strip().removeprefix('cmd = ') for line in additions
+                       if line.strip().startswith('cmd = '))
+        self.assertEqual(eval(command, {}, dict(vcvars_script='vcvarsall.bat', architecture='amd64_arm64', winsdk_version='', vcvars_ver='-vcvars_ver=14.44.35207')),
+                         '"vcvarsall.bat" amd64_arm64  -vcvars_ver=14.44.35207')
+        self.assertIn('architecture = "amd64"):', patch)
+
     def test_workflow_pin_is_arm64_only_and_before_qt(self):
         text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
         pin = text.index('- name: Select LLVM 20 compatible native ARM64 MSVC toolset')

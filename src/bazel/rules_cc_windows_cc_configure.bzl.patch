@@ -1,6 +1,37 @@
 --- cc/private/toolchain/windows_cc_configure.bzl
 +++ cc/private/toolchain/windows_cc_configure.bzl
-@@ -920,11 +920,13 @@ def configure_windows_toolchain(repository_ctx):
+@@ -316,6 +316,12 @@
+     Returns:
+         dictionary of envvars
+     """
++    # An ARM64-only v143 installation need not include x64 CRT libraries.
++    # Deriving LIB by replacing x64 in the x64 environment loses those paths.
++    # Ask vcvarsall for the real target environment instead.
++    if target_arch == "arm64":
++        return setup_vc_env_vars(repository_ctx, vc_path, architecture = "amd64_arm64")
++
+     env = {}
+     if _is_vs_2017_or_newer(repository_ctx, vc_path):
+         lib = msvc_vars_x64["%{msvc_env_lib_x64}"]
+@@ -334,7 +340,7 @@
+     env["PATH"] = escape_string(tools_path.replace("\\", "\\\\")) + ";" + msvc_vars_x64["%{msvc_env_path_x64}"]
+     return env
+
+-def setup_vc_env_vars(repository_ctx, vc_path, envvars = [], allow_empty = False, escape = True):
++def setup_vc_env_vars(repository_ctx, vc_path, envvars = [], allow_empty = False, escape = True, architecture = "amd64"):
+     """Get environment variables set by VCVARSALL.BAT script. Doesn't %-escape the result!
+
+     Args:
+@@ -373,7 +379,7 @@
+         if _is_support_vcvars_ver(_get_latest_subversion(repository_ctx, vc_path)):
+             vcvars_ver = "-vcvars_ver=" + full_version
+
+-    cmd = "\"%s\" amd64 %s %s" % (vcvars_script, winsdk_version, vcvars_ver)
++    cmd = "\"%s\" %s %s %s" % (vcvars_script, architecture, winsdk_version, vcvars_ver)
+     print_envvars = ",".join(["{k}=%{k}%".format(k = k) for k in envvars])
+     repository_ctx.file(
+         "get_env.bat",
+@@ -920,11 +926,13 @@
 
      template_vars = dict()
      msvc_vars_x64 = _get_msvc_vars(repository_ctx, paths, "x64")
