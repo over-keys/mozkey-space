@@ -40,7 +40,7 @@ class CrtDiagnosticTest(unittest.TestCase):
                     if command[0] == 'pwsh':
                         if signature_failure:
                             raise subprocess.CalledProcessError(1, command)
-                        log.write_text('{"status":"Valid","subject":"CN=Microsoft Corporation"}')
+                        log.write_text(json.dumps({'status': 'Valid', 'signature_type': 'Catalog', 'subject': sorted(diag.APPROVED_SIGNATURE_SUBJECTS)[1]}))
                 out = root / 'output'
                 with mock.patch.dict(os.environ, SCOPE, clear=True), mock.patch.object(diag.subprocess, 'check_output', return_value='test-sha'), mock.patch.object(diag.vs_util, 'get_vs_env_vars', return_value=env), mock.patch.object(diag.shutil, 'which', side_effect=lambda name, path: '/selected/' + name), mock.patch.object(diag, 'run', side_effect=run):
                     if signature_failure:
@@ -60,11 +60,26 @@ class CrtDiagnosticTest(unittest.TestCase):
                         for name in diag.build_installer.REDIST_CRT_FILES:
                             self.assertEqual((out / f"{p['target']}-with-{p['bundle']}-crt" / name).read_bytes(), header)
 
+    def test_signature_policy_accepts_only_trusted_exact_publishers(self):
+        for subject in diag.APPROVED_SIGNATURE_SUBJECTS:
+            for kind in ('Authenticode', 'Catalog'):
+                evidence = {'status': 'Valid', 'signature_type': kind, 'subject': subject}
+                diag.validate_signature(evidence)
+                for status in ('NotSigned', 'HashMismatch', 'NotTrusted', 'UnknownError', '', None):
+                    with self.subTest(status=status), self.assertRaises(ValueError):
+                        diag.validate_signature(dict(evidence, status=status))
+                for wrong in (subject + ' Attacker', subject.replace('O=Microsoft Corporation', 'O=Other Company'), 'CN=Other Publisher, O=Microsoft Corporation', ''):
+                    with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                        diag.validate_signature(dict(evidence, subject=wrong))
+                with self.assertRaises(ValueError):
+                    diag.validate_signature(dict(evidence, signature_type='None'))
+        with self.assertRaises(ValueError):
+            diag.validate_signature({})
+
     def test_runtime_contract_and_signature(self):
         for text in ('LoadLibraryExW', 'GetModuleFileNameW(module', '_wcsicmp(actual, expected.c_str())', '__CxxFrameHandler4', 'throw std::vector', '#ifndef _M_ARM64'):
             self.assertIn(text, diag.SOURCE)
         self.assertIn("$s.Status -ne 'Valid'", diag.SIGNATURE)
-        self.assertIn('CN=Microsoft Corporation', diag.SIGNATURE)
         self.assertIn('-LiteralPath $env:MOZKEY_CRT_FILE', diag.SIGNATURE)
 
     def test_workflow_restricted_read_only_no_product_build(self):
