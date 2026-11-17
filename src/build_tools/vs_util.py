@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from typing import Union
@@ -177,14 +178,22 @@ def get_vs_env_vars(
     ChildProcessError: When 'vcvarsall.bat' cannot be executed.
     FileNotFoundError: When 'vcvarsall.bat' cannot be found.
   """
+  # Share Bazel's explicit toolchain selection with Qt and other native builds.
+  if vcvarsall_path_hint is None and os.environ.get('BAZEL_VC'):
+    vcvarsall_path_hint = str(pathlib.Path(os.environ['BAZEL_VC']).joinpath(
+        'Auxiliary', 'Build', 'vcvarsall.bat'))
   vcvarsall = get_vcvarsall(arch, vcvarsall_path_hint)
+  vc_version = os.environ.get('BAZEL_VC_FULL_VERSION', '')
+  if vc_version and not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', vc_version):
+    raise ValueError('Invalid BAZEL_VC_FULL_VERSION')
+  vc_version_arg = f' -vcvars_ver={vc_version}' if vc_version else ''
 
   pycmd = (
       r'import json;'
       r'import os;'
       r'print(json.dumps(dict(os.environ), ensure_ascii=True))'
   )
-  cmd = f'("{vcvarsall}" {arch}>nul)&&("{sys.executable}" -c "{pycmd}")'
+  cmd = f'("{vcvarsall}" {arch}{vc_version_arg}>nul)&&("{sys.executable}" -c "{pycmd}")'
   process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
   stdout, _ = process.communicate()
   exitcode = process.wait()
