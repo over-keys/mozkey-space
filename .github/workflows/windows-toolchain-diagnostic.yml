@@ -1,0 +1,62 @@
+name: Isolated Windows toolchain comparison (no product build)
+
+on:
+  push:
+    branches: ['integration/upstream-1.1.0']
+    paths:
+      - '.github/workflows/windows-toolchain-diagnostic.yml'
+      - 'tools/diagnostics/Prepare-ToolchainComparison.ps1'
+      - 'tools/diagnostics/windows_toolchain_comparison.py'
+      - 'tools/release/tests/test_toolchain_diagnostic.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-toolchain-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    if: github.repository == 'over-keys/mozkey-space' && github.ref == 'refs/heads/integration/upstream-1.1.0' && github.event_name == 'push'
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        case: ['llvm20-default', 'llvm20-msvc1444', 'llvm22-default']
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+    steps:
+      - name: Checkout exact diagnostic source without saved credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Validate diagnostic unit and scope contracts
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tools/release/tests -v
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic regression tests failed.' }
+      - name: Inventory runner and provision only the selected toolset
+        timeout-minutes: 20
+        shell: pwsh
+        run: ./tools/diagnostics/Prepare-ToolchainComparison.ps1 -Case '${{ matrix.case }}' -OutputDirectory '${{ runner.temp }}/toolchain-comparison'
+      - name: Compare pinned compiler and real small build targets
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          python tools/diagnostics/windows_toolchain_comparison.py --case '${{ matrix.case }}' --output '${{ runner.temp }}/toolchain-comparison'
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic case failed; inspect comparison.json and stage logs. No release validation is implied.' }
+      - name: Upload diagnostic text evidence only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: toolchain-diagnostic-${{ matrix.case }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/toolchain-comparison/*.json
+            ${{ runner.temp }}/toolchain-comparison/*.log
+          if-no-files-found: warn
+          retention-days: 7
