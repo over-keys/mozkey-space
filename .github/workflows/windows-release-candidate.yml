@@ -184,7 +184,7 @@ jobs:
           python build_tools/update_deps.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned dependency retrieval failed.' }
 
-      - name: Ensure matching MSVC 14.44 ARM64 ATL component
+      - name: Ensure complete MSVC 14.44 mixed-architecture toolset
         timeout-minutes: 30
         if: matrix.arch == 'arm64'
         shell: pwsh
@@ -197,12 +197,25 @@ jobs:
             Sort-Object { [version]$_.Name } -Descending)
           if ($versions.Count -eq 0) { throw 'Required MSVC 14.44 ARM64 toolset is not installed.' }
           $toolset = $versions[0].FullName
-          if (-not (Test-Path "$toolset/atlmfc/include/atlbase.h") -or -not (Test-Path "$toolset/atlmfc/lib/arm64/atls.lib")) {
+          # ARM64 MSI embeds x86, x64, and ARM64 TIP DLLs, not just native code.
+          $required = @('include/yvals_core.h', 'atlmfc/include/atlbase.h')
+          foreach ($arch in @('x86', 'x64', 'arm64')) {
+            foreach ($lib in @('libcmt.lib', 'oldnames.lib', 'libcpmt.lib', 'libvcruntime.lib', 'msvcrt.lib', 'msvcprt.lib', 'vcruntime.lib')) {
+              $required += "lib/$arch/$lib"
+            }
+            $required += "atlmfc/lib/$arch/atls.lib"
+          }
+          $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $toolset $_) -PathType Leaf) })
+          if ($missing.Count -gt 0) {
+            Write-Host "Missing mixed-architecture components: $($missing -join ', ')"
             $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/setup.exe'
             if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Visual Studio Installer is unavailable.' }
             $installPath = Split-Path -Parent $vc
             $arguments = @('modify', '--installPath', "`"$installPath`"", '--add',
-              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', '--quiet', '--norestart')
+              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ARM64', '--add',
+              'Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64', '--add',
+              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', '--add',
+              'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL', '--quiet', '--norestart')
             $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
             if ($process.ExitCode -notin @(0, 3010)) { throw "Matching ATL installation failed: $($process.ExitCode)" }
           }
@@ -221,7 +234,14 @@ jobs:
             Sort-Object { [version]$_.Name } -Descending)
           if ($versions.Count -eq 0) { throw 'Required MSVC 14.44 ARM64 toolset is not installed.' }
           $version = $versions[0].Name
-          foreach ($relative in @('bin/Hostarm64/arm64/cl.exe', 'include/yvals_core.h', 'lib/arm64/libcmt.lib', 'lib/arm64/oldnames.lib', 'lib/arm64/libcpmt.lib', 'atlmfc/include/atlbase.h', 'atlmfc/lib/arm64/atls.lib')) {
+          $required = @('bin/Hostarm64/arm64/cl.exe', 'include/yvals_core.h', 'atlmfc/include/atlbase.h')
+          foreach ($arch in @('x86', 'x64', 'arm64')) {
+            foreach ($lib in @('libcmt.lib', 'oldnames.lib', 'libcpmt.lib', 'libvcruntime.lib', 'msvcrt.lib', 'msvcprt.lib', 'vcruntime.lib')) {
+              $required += "lib/$arch/$lib"
+            }
+            $required += "atlmfc/lib/$arch/atls.lib"
+          }
+          foreach ($relative in $required) {
             if (-not (Test-Path -LiteralPath (Join-Path $versions[0].FullName $relative) -PathType Leaf)) {
               throw "Incomplete MSVC $version ARM64 toolset: $relative"
             }
@@ -233,12 +253,23 @@ jobs:
           "BAZEL_VC=$vc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "BAZEL_VC_FULL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Verify native ARM64 CRT STL and ATL compile link and execution
+      - name: Verify all MSI architectures with static and dynamic CRT STL and ATL
         if: matrix.arch == 'arm64'
         shell: pwsh
         run: |
           python tools/release/verify_windows_arm64_toolchain.py
           if ($LASTEXITCODE -ne 0) { throw 'ARM64 CRT/STL/ATL toolchain probe failed.' }
+
+      # This generator uses MSVC cl/link/rc to combine empty ARM64EC and ARM64
+      # objects into the ARM64X forwarder; CRT probes alone do not exercise it.
+      - name: Verify ARM64X forwarder toolchain before Qt
+        if: matrix.arch == 'arm64'
+        timeout-minutes: 20
+        shell: pwsh
+        working-directory: src
+        run: |
+          bazelisk build //win32/tip:mozc_tip64x --config release_build --verbose_failures
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64X forwarder toolchain verification failed.' }
 
       - name: Build Qt for release target architecture
         shell: pwsh

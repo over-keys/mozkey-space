@@ -82,8 +82,15 @@ class WindowsToolchainTest(unittest.TestCase):
         env = {'PROCESSOR_ARCHITECTURE': 'ARM64', 'BAZEL_VC_FULL_VERSION': '14.44.35207'}
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(probe.vs_util, 'get_vs_env_vars', return_value={'VCTOOLSVERSION': '14.44.35207'}) as get_env, mock.patch.object(probe.subprocess, 'run') as run, mock.patch('builtins.print'):
             probe.verify()
-            self.assertEqual(run.call_count, 4)
-            self.assertEqual(get_env.call_args_list, [mock.call('arm64'), mock.call('amd64_arm64')])
+            self.assertEqual(run.call_count, 16)
+            self.assertEqual(get_env.call_args_list, [mock.call('arm64'), mock.call('amd64_arm64'), mock.call('amd64_x86'), mock.call('amd64')])
+            compiles = [call.args[0] for call in run.call_args_list[::2]]
+            self.assertEqual(sum('/MT' in command for command in compiles), 4)
+            self.assertEqual(sum('/MD' in command for command in compiles), 4)
+            for triple, machine, count in (('aarch64', 'arm64', 4), ('i686', 'x86', 2), ('x86_64', 'x64', 2)):
+                matching = [command for command in compiles if f'--target={triple}-pc-windows-msvc' in command]
+                self.assertEqual(len(matching), count)
+                self.assertTrue(all(f'/machine:{machine}' in command for command in matching))
             compile_call, execute_call = run.call_args_list[:2]
             self.assertIn('-fuse-ld=lld', compile_call.args[0])
             self.assertIn('--target=aarch64-pc-windows-msvc', compile_call.args[0])
@@ -94,17 +101,33 @@ class WindowsToolchainTest(unittest.TestCase):
             with self.assertRaises(probe.subprocess.CalledProcessError):
                 probe.verify()
             self.assertEqual(run.call_count, 1)
+            # Both ARM64 environments can pass while the package's x86 CRT is
+            # missing. That must stop preflight, not reach the lengthy MSI build.
+            run.reset_mock()
+            run.side_effect = [None] * 8 + [probe.subprocess.CalledProcessError(1, 'x86-clang-cl')]
+            with self.assertRaises(probe.subprocess.CalledProcessError):
+                probe.verify()
+            self.assertEqual(run.call_count, 9)
+            self.assertIn('--target=i686-pc-windows-msvc', run.call_args.args[0])
         with mock.patch.dict(os.environ, {'PROCESSOR_ARCHITECTURE': 'AMD64'}, clear=True), self.assertRaises(RuntimeError):
             probe.verify()
 
     def test_matching_atl_is_verified_before_expensive_qt_build(self):
         text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
-        self.assertLess(text.index('- name: Ensure matching MSVC 14.44 ARM64 ATL component'), text.index('- name: Select LLVM 20 compatible'))
+        self.assertLess(text.index('- name: Ensure complete MSVC 14.44 mixed-architecture toolset'), text.index('- name: Select LLVM 20 compatible'))
         self.assertLess(text.index('python tools/release/verify_windows_arm64_toolchain.py'), text.index('- name: Build Qt for release'))
         self.assertIn('Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL.ARM64', text)
         self.assertIn("'atlmfc/include/atlbase.h'", text)
-        self.assertIn("'atlmfc/lib/arm64/atls.lib'", text)
+        self.assertIn('atlmfc/lib/$arch/atls.lib', text)
+        self.assertIn("@('x86', 'x64', 'arm64')", text)
+        self.assertIn('Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64', text)
+        self.assertIn("'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL'", text)
+        for lib in ('libcmt.lib', 'oldnames.lib', 'libcpmt.lib', 'libvcruntime.lib', 'msvcrt.lib', 'msvcprt.lib', 'vcruntime.lib'):
+            self.assertIn(lib, text)
         self.assertIn("'--norestart'", text)
+        self.assertLess(text.index('bazelisk build //win32/tip:mozc_tip64x'), text.index('- name: Build Qt for release'))
+        self.assertIn('ARM64X forwarder toolchain verification failed.', text)
+        self.assertIn('build:windows_env --action_env=BAZEL_VC_FULL_VERSION', (ROOT / 'src/.bazelrc').read_text())
 
     def test_workflow_pin_is_arm64_only_and_before_qt(self):
         text = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
