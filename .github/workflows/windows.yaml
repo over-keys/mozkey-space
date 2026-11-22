@@ -14,7 +14,153 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  stage_exact_arm64_candidate:
+    name: Stage approved-source ARM64 candidate for installed probes
+    if: github.repository == 'over-keys/mozkey-space' && github.ref == 'refs/heads/audit/v1.1.1-exact-arm64'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      msi_sha256: ${{ steps.verify.outputs.msi_sha256 }}
+    env:
+      CANDIDATE_SHA: '88b61452a84915c8b19c969678dccc9c6addd5d7'
+      CANDIDATE_RUN: '44982893881'
+      CANDIDATE_MSI_SHA256: 'a1270cd00907607f59df8a80f66179212057b15ff26f61ec020630d359c7013b'
+    steps:
+      - name: Verify immutable candidate run and resolve exact artifact IDs
+        id: artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PYTHON'
+          import json
+          import os
+          import subprocess
+          from urllib.parse import urlencode
+
+          def api(suffix):
+              path = "repos/over-keys/mozkey-space/actions/" + suffix
+              return json.loads(subprocess.check_output(["gh", "api", path], text=True))
+
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+
+          run_id = int(os.environ["CANDIDATE_RUN"])
+          sha = os.environ["CANDIDATE_SHA"]
+          run = api(f"runs/{run_id}")
+          repo_id = 1352961662
+          require(run["id"] == run_id and run["workflow_id"] == 406736326
+                  and run["repository"]["id"] == run["head_repository"]["id"] == repo_id
+                  and run["head_sha"] == sha and run["event"] == "workflow_dispatch"
+                  and run["path"] == ".github/workflows/windows-release-candidate.yml"
+                  and run["head_branch"] == "main"
+                  and run["run_attempt"] == 1 and run["status"] == "completed"
+                  and run["conclusion"] == "success", "Wrong or unfinished candidate workflow run")
+          pinned = {
+              "candidate": (14741386719, "sha256:2c73f91507c92953415f801b96197bdce54368df2645275d890502ba1cbd5546"),
+              "evidence": (14741561002, "sha256:f6f649628253cce609d3307c313398f4e4714ec7fad5576a4df2c66a4239e65f"),
+          }
+          for kind, (artifact_id, zip_digest) in pinned.items():
+              name = f"mozkey-unsigned-arm64-{kind}-{run_id}-1"
+              data = api(f"runs/{run_id}/artifacts?" + urlencode({"name": name}))
+              require(data["total_count"] == len(data["artifacts"]) == 1,
+                      f"Missing or duplicate candidate artifact: {name}")
+              artifact = data["artifacts"][0]
+              origin = artifact["workflow_run"]
+              require(artifact["id"] == artifact_id and artifact["digest"] == zip_digest
+                      and artifact["name"] == name and artifact["expired"] is False
+                      and origin["id"] == run_id and origin["head_sha"] == sha
+                      and origin["repository_id"] == origin["head_repository_id"] == repo_id,
+                      f"Invalid provenance: {name}")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                  print(f"{kind}={artifact['id']}", file=out)
+          PYTHON
+
+      - name: Download exact candidate MSI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          repository: over-keys/mozkey-space
+          run-id: ${{ env.CANDIDATE_RUN }}
+          artifact-ids: ${{ steps.artifacts.outputs.candidate }}
+          path: ${{ runner.temp }}/verified-candidate
+
+      - name: Download exact candidate evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          repository: over-keys/mozkey-space
+          run-id: ${{ env.CANDIDATE_RUN }}
+          artifact-ids: ${{ steps.artifacts.outputs.evidence }}
+          path: ${{ runner.temp }}/candidate-evidence
+
+      - name: Match exact package bytes to the production candidate manifest
+        id: verify
+        shell: bash
+        run: |
+          python - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          def single_file(directory, pattern):
+              paths = list(directory.rglob(pattern))
+              if len(paths) != 1 or not paths[0].is_file() or paths[0].is_symlink():
+                  raise SystemExit(f"Expected exactly one regular {pattern} in {directory}")
+              return paths[0]
+
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          msi = single_file(temp / "verified-candidate", "*.msi")
+          manifest = json.loads(single_file(temp / "candidate-evidence", "candidate-manifest.json")
+                                .read_text(encoding="utf-8-sig"))
+          expected_name = "Mozkey-space_v1.1.1_windows_arm64.msi"
+          expected = {
+              "status": "UNSIGNED_CANDIDATE_NOT_FOR_RELEASE",
+              "target_architecture": "arm64",
+              "operating_system": "windows",
+              "package_format": "msi",
+              "release_filename": expected_name,
+              "unsigned_msi_name": expected_name,
+              "release_version": "1.1.1",
+              "msi_product_version": "101.1.1",
+              "source_sha": os.environ["CANDIDATE_SHA"],
+              "github_run_id": os.environ["CANDIDATE_RUN"],
+              "github_run_attempt": "1",
+          }
+          for key, value in expected.items():
+              if manifest.get(key) != value:
+                  raise SystemExit(f"Candidate manifest mismatch: {key}")
+          if msi.name != expected_name or msi.stat().st_size != manifest.get("unsigned_msi_size"):
+              raise SystemExit("Candidate MSI name or size mismatch")
+          with msi.open("rb") as stream:
+              digest = hashlib.file_digest(stream, "sha256").hexdigest()
+          reported = manifest.get("unsigned_msi_sha256")
+          if (not isinstance(reported, str) or re.fullmatch("[0-9a-fA-F]{64}", reported) is None
+                  or digest != reported.lower() or digest != os.environ["CANDIDATE_MSI_SHA256"]):
+              raise SystemExit("Candidate MSI SHA-256 mismatch")
+          print(f"candidate_source={expected['source_sha']} candidate_run={expected['github_run_id']}/1 msi_sha256={digest}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              print(f"msi_sha256={digest}", file=out)
+              print(f"msi_path={msi}", file=out)
+          PYTHON
+
+      - name: Stage unchanged canonical MSI for existing native jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Mozc64_arm64.msi
+          path: ${{ steps.verify.outputs.msi_path }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
   prepare_daily_dictionary:
+    if: github.ref != 'refs/heads/audit/v1.1.1-exact-arm64'
     # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
     runs-on: windows-2025
     timeout-minutes: 60
@@ -676,7 +822,15 @@ jobs:
 
   test_arm64_installed_msi:
     name: Native ARM64 installed MSI Zenz audit
-    needs: build_arm64
+    needs: [build_arm64, stage_exact_arm64_candidate]
+    if: >-
+      ${{ !cancelled() &&
+      ((github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && needs.stage_exact_arm64_candidate.result == 'success') ||
+       (github.ref != 'refs/heads/audit/v1.1.1-exact-arm64' && needs.build_arm64.result == 'success')) }}
+    env:
+      EXACT_CANDIDATE_AUDIT: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' }}
+      EXPECTED_CANDIDATE_SHA256: ${{ needs.stage_exact_arm64_candidate.outputs.msi_sha256 }}
+      EXPECTED_SOURCE_SHA: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && '88b61452a84915c8b19c969678dccc9c6addd5d7' || github.sha }}
     runs-on: windows-11-arm
     timeout-minutes: 30
 
@@ -686,6 +840,16 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+
+      - name: Verify exact candidate source checkout
+        if: env.EXACT_CANDIDATE_AUDIT == 'true'
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_SOURCE_SHA) {
+            throw "Unexpected candidate audit checkout: $head"
+          }
 
       - name: Download exact ARM64 MSI from this workflow run
         uses: actions/download-artifact@v6
@@ -713,6 +877,14 @@ jobs:
             throw "Expected exactly one ARM64 MSI artifact; found $($msiCandidates.Count)"
           }
           $msi = $msiCandidates[0].FullName
+          if ($env:EXACT_CANDIDATE_AUDIT -eq "true") {
+            $actual = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash
+            if ($env:EXPECTED_CANDIDATE_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+                $actual -ne $env:EXPECTED_CANDIDATE_SHA256) {
+              throw "Staged release MSI does not match the verified candidate."
+            }
+            Write-Host "candidate_source=$env:EXPECTED_SOURCE_SHA candidate_run=44982893881/1 msi_sha256=$actual"
+          }
           $msiSha = (Get-FileHash $msi -Algorithm SHA256).Hash
 
           Write-Host "Runner architecture = $env:PROCESSOR_ARCHITECTURE"
@@ -1694,15 +1866,33 @@ jobs:
           if-no-files-found: warn
   test_arm64_tip_client_architecture:
     name: ARM64 TIP client-architecture smoke
-    needs: build_arm64
+    needs: [build_arm64, stage_exact_arm64_candidate]
+    if: >-
+      ${{ !cancelled() &&
+      ((github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && needs.stage_exact_arm64_candidate.result == 'success') ||
+       (github.ref != 'refs/heads/audit/v1.1.1-exact-arm64' && needs.build_arm64.result == 'success')) }}
+    env:
+      EXACT_CANDIDATE_AUDIT: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' }}
+      EXPECTED_CANDIDATE_SHA256: ${{ needs.stage_exact_arm64_candidate.outputs.msi_sha256 }}
+      EXPECTED_SOURCE_SHA: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && '88b61452a84915c8b19c969678dccc9c6addd5d7' || github.sha }}
     runs-on: windows-11-arm
-    timeout-minutes: 30
+    timeout-minutes: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && 60 || 30 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           submodules: false
           persist-credentials: false
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+
+      - name: Verify exact candidate source checkout
+        if: env.EXACT_CANDIDATE_AUDIT == 'true'
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_SOURCE_SHA) {
+            throw "Unexpected candidate audit checkout: $head"
+          }
 
       - name: Try to restore update_deps cache
         uses: actions/cache@v5
@@ -1715,6 +1905,12 @@ jobs:
         working-directory: .\src
         run: |
           python build_tools/update_deps.py
+
+      - name: Select proven LLVM 20 compatible ARM64 toolchain for the candidate helpers
+        if: env.EXACT_CANDIDATE_AUDIT == 'true'
+        shell: pwsh
+        timeout-minutes: 30
+        run: ./tools/release/Prepare-WindowsToolchain.ps1 -Case llvm20-msvc1444 -OutputDirectory '${{ runner.temp }}/candidate-probe-toolchain'
 
       - name: Build native ARM64 and x64 TIP client smoke helpers
         shell: cmd
@@ -1896,6 +2092,14 @@ jobs:
             throw "Expected exactly one ARM64 MSI artifact; found $($msiCandidates.Count)"
           }
           $msi = $msiCandidates[0].FullName
+          if ($env:EXACT_CANDIDATE_AUDIT -eq "true") {
+            $actual = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash
+            if ($env:EXPECTED_CANDIDATE_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+                $actual -ne $env:EXPECTED_CANDIDATE_SHA256) {
+              throw "Staged release MSI does not match the verified candidate."
+            }
+            Write-Host "candidate_source=$env:EXPECTED_SOURCE_SHA candidate_run=44982893881/1 msi_sha256=$actual"
+          }
 
           if ($env:PROCESSOR_ARCHITECTURE -ne "ARM64") {
             throw "This job is not running on native Windows ARM64."
@@ -2138,11 +2342,32 @@ jobs:
   # https://docs.github.com/en/actions/using-jobs/using-jobs-in-a-workflow
   test_arm64_tsf_application_host_foundation:
     name: ARM64 installed-IME TSF application-host foundation
-    needs: build_arm64
+    needs: [build_arm64, stage_exact_arm64_candidate]
+    if: >-
+      ${{ !cancelled() &&
+      ((github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && needs.stage_exact_arm64_candidate.result == 'success') ||
+       (github.ref != 'refs/heads/audit/v1.1.1-exact-arm64' && needs.build_arm64.result == 'success')) }}
+    env:
+      EXACT_CANDIDATE_AUDIT: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' }}
+      EXPECTED_CANDIDATE_SHA256: ${{ needs.stage_exact_arm64_candidate.outputs.msi_sha256 }}
+      EXPECTED_SOURCE_SHA: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && '88b61452a84915c8b19c969678dccc9c6addd5d7' || github.sha }}
     runs-on: windows-11-arm
-    timeout-minutes: 30
+    timeout-minutes: ${{ github.ref == 'refs/heads/audit/v1.1.1-exact-arm64' && 60 || 30 }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: false
+          persist-credentials: false
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+
+      - name: Verify exact candidate source checkout
+        if: env.EXACT_CANDIDATE_AUDIT == 'true'
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_SOURCE_SHA) {
+            throw "Unexpected candidate audit checkout: $head"
+          }
 
       - name: Try to restore update_deps cache
         uses: actions/cache@v5
@@ -2156,6 +2381,12 @@ jobs:
         # This command uses src/third_party_cache as the download cache.
         run: |
           python build_tools/update_deps.py
+
+      - name: Select proven LLVM 20 compatible ARM64 toolchain for the candidate helpers
+        if: env.EXACT_CANDIDATE_AUDIT == 'true'
+        shell: pwsh
+        timeout-minutes: 30
+        run: ./tools/release/Prepare-WindowsToolchain.ps1 -Case llvm20-msvc1444 -OutputDirectory '${{ runner.temp }}/candidate-probe-toolchain'
 
       - name: Build native ARM64 TSF application-host helper
         shell: pwsh
@@ -2273,6 +2504,14 @@ jobs:
           }
 
           $msi = $msis[0].FullName
+          if ($env:EXACT_CANDIDATE_AUDIT -eq "true") {
+            $actual = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash
+            if ($env:EXPECTED_CANDIDATE_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+                $actual -ne $env:EXPECTED_CANDIDATE_SHA256) {
+              throw "Staged release MSI does not match the verified candidate."
+            }
+            Write-Host "candidate_source=$env:EXPECTED_SOURCE_SHA candidate_run=44982893881/1 msi_sha256=$actual"
+          }
           Write-Host "MSI = $msi"
           Get-FileHash -LiteralPath $msi -Algorithm SHA256
 
@@ -2388,6 +2627,7 @@ jobs:
           retention-days: 7
 
   cache_deps:
+    if: github.ref != 'refs/heads/audit/v1.1.1-exact-arm64'
     # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
     runs-on: windows-2025
     timeout-minutes: 15
