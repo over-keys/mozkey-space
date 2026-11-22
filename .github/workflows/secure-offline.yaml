@@ -85,6 +85,30 @@ jobs:
           submodules: false
           persist-credentials: false
 
+      # The audited package uses the same pinned daily inputs as the release.
+      - name: Prepare and inventory pinned daily dictionary
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/dictionary/prepare_daily_dictionary.ps1
+          git diff --exit-code --no-ext-diff HEAD --
+          if ($LASTEXITCODE -ne 0) { throw 'Daily dictionary preparation changed tracked source.' }
+          python tools/release/capture_dictionary_provenance.py `
+            --repo . `
+            --output "$env:RUNNER_TEMP/offline-dictionary-provenance.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Dictionary evidence capture failed.' }
+
+      - name: Upload binary audit dictionary input inventory
+        uses: actions/upload-artifact@v7
+        with:
+          name: offline-dictionary-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/offline-dictionary-provenance.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Restore update_deps cache
         uses: actions/cache@v5
         with:

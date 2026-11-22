@@ -21,6 +21,37 @@ class DictionaryProvenanceTests(unittest.TestCase):
                         "-c", "user.email=test@example.invalid", "commit",
                         "--allow-empty", "-q", "-m", "initial"], check=True)
 
+
+    def test_manual_binary_audit_builds_the_pinned_daily_profile(self):
+        repo = pathlib.Path(__file__).resolve().parents[3]
+        workflows = repo / ".github/workflows"
+        offline = (workflows / "secure-offline.yaml").read_text(encoding="utf-8")
+        non_binary, binary = offline.split("  binary_check:", 1)
+        prepare = "./tools/dictionary/prepare_daily_dictionary.ps1"
+        inventory = "tools/release/capture_dictionary_provenance.py"
+        build = "bazelisk build --config oss_windows --config release_build package"
+        self.assertNotIn(prepare, non_binary)
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", binary)
+        self.assertIn("persist-credentials: false", binary)
+        self.assertIn("git diff --exit-code --no-ext-diff HEAD --", binary)
+        self.assertNotIn("-SkipDownload", binary)
+        self.assertNotIn("-Profile sample", binary)
+        self.assertLess(binary.index(prepare), binary.index(inventory))
+        self.assertLess(binary.index(inventory), binary.index(build))
+        for check in (
+            "Check Bazel output network DLL imports",
+            "Check Bazel output string markers",
+            "Check MSI-extracted network DLL imports",
+            "Check MSI-extracted string markers",
+        ):
+            self.assertGreater(binary.index(check), binary.index(build))
+
+        for workflow in ("windows-release-candidate.yml",
+                         "macos_zenz_installable_candidate.yml"):
+            self.assertIn(prepare, (workflows / workflow).read_text(encoding="utf-8"))
+        selected = (repo / "src/data/dictionary_oss/BUILD.bazel").read_text(encoding="utf-8")
+        self.assertIn('"//data/dictionary_koyasi:mozcdic_ut_daily_local"', selected)
+
     def test_hash_and_required_roots(self):
         for dirname in p.ROOTS:
             d = self.root / dirname
