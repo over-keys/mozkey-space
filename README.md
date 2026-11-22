@@ -2,7 +2,7 @@
   <img src="src/data/images/icon.svg" width="112" height="112" alt="Mozkey icon">
 </p>
 
-<h1 align="center">mozkey-space 1.1.0</h1>
+<h1 align="center">mozkey-space 1.1.1</h1>
 
 <p align="center">
   <strong>Mozc をベースに、通常変換・遅延付きライブ変換・ローカル Zenz 補正を組み合わせ、<br>縦書き対応・外観カスタマイズ・柔軟な入力操作と学習制御を備えた日本語入力ソフトウェアです。</strong>
@@ -17,7 +17,7 @@
 
 <br>
 
-**mozkey-space 1.1.0** は [本家 Mozkey v1.1.0](https://github.com/koyasi777/mozkey/tree/v1.1.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
+**mozkey-space 1.1.1** は [本家 Mozkey v1.1.0](https://github.com/koyasi777/mozkey/tree/v1.1.0) を基準に、ライブ変換 OFF 時の通常 Space 変換に Zenz 補正を追加したフォークです。旧 mozkey-space 5.30 の独自ローカル自動学習は含めず、本家の補正・フィードバック・Mozc 学習を使用します。アプリとインストーラーの識別子は本家と共通のため、同じ OS アカウントでの併用ではなく置き換えになります。
 
 新規設定と「初期設定に戻す」では、ライブ変換・リアルタイム変換・句読点による自動変換／直接確定を OFF、Zenz 補正を ON、Space 変換の Zenz 補正遅延を 0 ms にします。既存の明示的に保存された設定値は更新時にも保持します。ライブ入力用の独立した遅延は 700 ms のままで、ライブ変換 OFF 中には使用しません。
 
@@ -576,6 +576,8 @@ Zenz ライブ補正では、Zenzai v3/v3.2 の特殊トークン形式に沿っ
 どの句読点・記号を単打確定の対象にするかは、設定画面のチェックボックスで選択できます。
 
 ただし、数字直後の句点・読点系文字は、数値入力を妨げないよう単打確定の対象外として扱います。これにより、句読点・記号の単打確定を有効にしたままでも、`3.14` や `1,000` のような数値を途中で確定せずに入力できます。通常の日本語入力での句点・読点の単打確定は従来どおり動作します。
+
+日本語の未確定入力では、半角・全角の数字の直後の中黒（`・` / `･`）を半角スラッシュ（`/`）として表示します。例えば、`/` キーで中黒を入力する設定でも、`12/10` のような日付を途中で確定せずに入力できます。数字の直後でなければ通常どおり中黒になります。
 
 ライブ変換が有効な場合、句読点・記号の単打確定では、ひらがなの未変換文字列ではなく、現在表示されているライブ変換結果を確定します。
 
@@ -1848,6 +1850,8 @@ The selectable targets include periods, commas, question marks, exclamation mark
 You can choose which punctuations/symbols are committed directly in the config dialog.
 
 However, period- and comma-like punctuation immediately following a number is excluded from direct commit so that numeric input can continue normally. This allows values such as `3.14` and `1,000` to be entered without being committed at the punctuation, while ordinary punctuation direct commit in Japanese text continues to work as before.
+
+In Japanese composition, a middle dot (`・` or `･`) immediately after a halfwidth or fullwidth digit is displayed as an ASCII slash (`/`), so dates such as `12/10` can be typed without committing early even when the slash key normally produces a middle dot. In other positions, the middle dot is unchanged.
 
 When live conversion is enabled, direct-commit punctuations/symbols commit the currently displayed live conversion result instead of committing the raw kana composition.
 

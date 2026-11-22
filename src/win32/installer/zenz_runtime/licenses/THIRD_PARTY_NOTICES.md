@@ -10,8 +10,11 @@ This product includes third-party software and model files.
 - Included file: models/zenz-v3.2-small-Q5_K_M.gguf
 - License: Apache License 2.0
 - Source repository URL: https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf
-- Source file URL: https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/blob/main/ggml-model-Q5_K_M.gguf
-- Source commit observed for the model upload: c67e03e
+- Pinned source file URL: https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/blob/c67e03e07d215c869f591b274c1631170d3e11fe/ggml-model-Q5_K_M.gguf
+- Source revision: c67e03e07d215c869f591b274c1631170d3e11fe
+- Model SHA-256: `29c223d4c23327b80fd13ebb5ab2555057a46317997d5da391584ffbef0db673`
+- License metadata at this revision: https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf/raw/c67e03e07d215c869f591b274c1631170d3e11fe/README.md
+- The current model card has separate, newer license metadata. These notices document the unchanged bytes from the pinned upload.
 - Notes: Distributed without modification except for file placement, file naming, and packaging into the MSI installer.
 
 ## llama.cpp / ggml runtime

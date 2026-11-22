@@ -38,6 +38,8 @@ class MozkeyReleaseVersionTest(unittest.TestCase):
         (0, 7, 8, '100.7.8'),
         (0, 8, 0, '100.8.0'),
         (1, 0, 0, '101.0.0'),
+        (1, 1, 0, '101.1.0'),
+        (1, 1, 1, '101.1.1'),
         (155, 255, 65535, '255.255.65535'),
     ]:
       with self.subTest(version=(major, minor, patch)):

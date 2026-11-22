@@ -2002,6 +2002,52 @@ TEST_F(ComposerTest, TransformCharactersForNumbers) {
   EXPECT_EQ(query, "１００．");
 }
 
+TEST_F(ComposerTest, TransformMiddleDotOnlyAfterDecimalDigit) {
+  constexpr std::pair<absl::string_view, absl::string_view> kCases[] = {
+      {"12・", "12/"},
+      {"１２・10", "１２/10"},
+      {"2026・１２･１０", "2026/１２/１０"},
+      {"あ12・い", "あ12/い"},
+      {"1・2・", "1/2/"},
+      {"1・・2", "1/・2"},
+      {"・12", "・12"},
+      {"あ・い", "あ・い"},
+      {"A・2", "A・2"},
+      {"一・二", "一・二"},
+      {"12／10", "12／10"},
+      {"12/10", "12/10"},
+  };
+  for (const auto& [input, expected] : kCases) {
+    SCOPED_TRACE(input);
+    std::string query(input);
+    EXPECT_EQ(Composer::TransformCharactersForNumbers(&query), input != expected);
+    EXPECT_EQ(query, expected);
+  }
+}
+
+TEST_F(ComposerTest, NumericSlashPreservesCaretAndBackspace) {
+  table_->AddRule("0", "０", "");
+  table_->AddRule("1", "１", "");
+  table_->AddRule("2", "２", "");
+  table_->AddRule("/", "・", "");
+  composer_->InsertCharacter("1210");
+  composer_->MoveCursorTo(2);
+  ASSERT_TRUE(InsertKey("/", composer_.get()));
+
+  EXPECT_EQ(composer_->GetCursor(), 3);
+  EXPECT_EQ(composer_->GetLength(), 5);
+  EXPECT_EQ(composer_->GetQueryForConversion(), "12/10");
+  std::string left, focused, right;
+  composer_->GetPreedit(&left, &focused, &right);
+  EXPECT_EQ(left, "１２/");
+  EXPECT_EQ(focused, "１");
+  EXPECT_EQ(right, "０");
+
+  composer_->Backspace();
+  EXPECT_EQ(composer_->GetCursor(), 2);
+  EXPECT_EQ(composer_->GetQueryForConversion(), "1210");
+}
+
 TEST_F(ComposerTest, PreeditFormAfterCharacterTransform) {
   CharacterFormManager* manager =
       CharacterFormManager::GetCharacterFormManager();

@@ -14329,6 +14329,100 @@ TEST_F(SessionTest, DirectCommitKeepsNumericPunctuationInComposition) {
   }
 }
 
+TEST_F(SessionTest, NumericMiddleDotBecomesSlashBeforeNextDigit) {
+  MockEngine engine;
+  const auto converter = CreateEngineConverterMock(&engine);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_auto_conversion(false);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(false);
+  config.set_auto_switch_composition_mode(false);
+  config.set_use_direct_commit(true);
+  config.set_direct_commit_key(config::Config::DIRECT_COMMIT_MIDDLE_DOT);
+  config.set_symbol_method(config::Config::CORNER_BRACKET_MIDDLE_DOT);
+
+  Session session(engine);
+  session.SetConfig(config);
+  InitSessionToPrecomposition(&session);
+  auto table = std::make_shared<composer::Table>();
+  table->InitializeWithRequestAndConfig(
+      commands::Request::default_instance(), config);
+  const composer::Entry* slash_rule = table->LookUp("/");
+  ASSERT_NE(slash_rule, nullptr);
+  ASSERT_EQ(slash_rule->result(), "・");
+  session.SetTable(table);
+
+  commands::Capability capability;
+  capability.set_text_deletion(commands::Capability::DELETE_PRECEDING_TEXT);
+  session.set_client_capability(capability);
+
+  commands::Command command;
+  InsertCharacterChars("12/", &session, &command);
+  EXPECT_FALSE(command.output().has_result());
+  EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
+  EXPECT_THAT(GetComposition(command), ::testing::EndsWith("/"));
+  EXPECT_EQ(session.context().composer().GetQueryForConversion(), "12/");
+
+  InsertCharacterChars("10", &session, &command);
+  EXPECT_FALSE(command.output().has_result());
+  EXPECT_EQ(session.context().composer().GetQueryForConversion(), "12/10");
+  EXPECT_EQ(session.context().composer().GetQueryForPrediction(), "12/10");
+  const std::string date_preedit = GetComposition(command);
+  EXPECT_THAT(date_preedit, ::testing::HasSubstr("/"));
+  EXPECT_THAT(date_preedit, ::testing::Not(::testing::HasSubstr("・")));
+
+  command.Clear();
+  ASSERT_TRUE(SendKey("Enter", &session, &command));
+  EXPECT_RESULT(date_preedit, command);
+  EXPECT_EQ(session.context().state(), ImeContext::PRECOMPOSITION);
+
+  command.Clear();
+  ASSERT_TRUE(session.Undo(&command));
+  EXPECT_TRUE(command.output().has_deletion_range());
+  EXPECT_PREEDIT(date_preedit, command);
+  EXPECT_EQ(session.context().state(), ImeContext::COMPOSITION);
+
+  EXPECT_CALL(*converter, StartConversion(_, _))
+      .WillOnce([](const ConversionRequest& request, Segments* segments) {
+        EXPECT_EQ(request.key(), "12/10");
+        segments->InitForConvert(request.key());
+        AddCandidate(request.key(), "12月10日", segments->mutable_segment(0));
+        return true;
+      });
+  command.Clear();
+  ASSERT_TRUE(SendKey("Space", &session, &command));
+  EXPECT_PREEDIT("12月10日", command);
+}
+
+TEST_F(SessionTest, NonNumericMiddleDotStillDirectCommits) {
+  MockEngine engine;
+  const auto converter = CreateEngineConverterMock(&engine);
+
+  config::Config config;
+  config::ConfigHandler::GetDefaultConfig(&config);
+  config.set_use_auto_conversion(false);
+  config.set_use_live_conversion(false);
+  config.set_use_zenz_live_correction(false);
+  config.set_use_direct_commit(true);
+  config.set_direct_commit_key(config::Config::DIRECT_COMMIT_MIDDLE_DOT);
+  config.set_symbol_method(config::Config::CORNER_BRACKET_MIDDLE_DOT);
+
+  Session session(engine);
+  session.SetConfig(config);
+  InitSessionToPrecomposition(&session);
+  auto table = std::make_shared<composer::Table>();
+  table->InitializeWithRequestAndConfig(
+      commands::Request::default_instance(), config);
+  session.SetTable(table);
+
+  commands::Command command;
+  InsertCharacterChars("a/", &session, &command);
+  EXPECT_RESULT("あ・", command);
+  EXPECT_EQ(session.context().state(), ImeContext::PRECOMPOSITION);
+}
+
 TEST_F(SessionTest,
        PendingLiveConversionDoesNotDirectCommitNumericPunctuation) {
   MockEngine engine;
@@ -14342,9 +14436,11 @@ TEST_F(SessionTest,
   config.set_use_direct_commit(true);
   config.set_direct_commit_key(
       config::Config::DIRECT_COMMIT_KUTEN |
-      config::Config::DIRECT_COMMIT_TOUTEN);
+      config::Config::DIRECT_COMMIT_TOUTEN |
+      config::Config::DIRECT_COMMIT_MIDDLE_DOT);
+  config.set_symbol_method(config::Config::CORNER_BRACKET_MIDDLE_DOT);
 
-  for (const absl::string_view input : {"10.", "10,"}) {
+  for (const absl::string_view input : {"10.", "10,", "10/"}) {
     SCOPED_TRACE(input);
 
     Session session(engine);

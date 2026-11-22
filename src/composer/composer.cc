@@ -1239,6 +1239,7 @@ enum Script {
   JA_HYPHEN,  // "ー"
   JA_COMMA,   // "、"
   JA_PERIOD,  // "。"
+  JA_MIDDLE_DOT,  // "・" or "･"
   OTHER,
 };
 
@@ -1277,6 +1278,11 @@ bool Composer::TransformCharactersForNumbers(std::string* query) {
       case 0x3002:  // "。"
         has_symbols = true;
         char_scripts.push_back(JA_PERIOD);
+        break;
+      case 0x30FB:  // "・"
+      case 0xFF65:  // "･"
+        has_symbols = true;
+        char_scripts.push_back(JA_MIDDLE_DOT);
         break;
       case '+':
       case '*':
@@ -1384,6 +1390,15 @@ bool Composer::TransformCharactersForNumbers(std::string* query) {
         }
         break;
       }
+
+      case JA_MIDDLE_DOT:
+        // The default Japanese symbol table produces a middle dot for '/'.
+        // In numeric input, show an ASCII slash as soon as it is typed; do
+        // not wait for another digit or apply the user's punctuation width.
+        if (i > 0 && char_scripts[i - 1] == NUMBER) {
+          append_char = "/";
+        }
+        break;
 
       default: {
         // Do nothing.
