@@ -115,7 +115,7 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: windows-2025
+            runner: windows-2022
             host_arch: AMD64
           - arch: arm64
             runner: windows-11-arm
@@ -184,6 +184,11 @@ jobs:
           python build_tools/update_deps.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned dependency retrieval failed.' }
 
+      - name: Pin the Clang 20-compatible x64 toolset
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: ./tools/release/Select-Windows2022X64Toolchain.ps1
+
       # Keep upstream's checksum-pinned LLVM 20.1.1. Provision all architectures
       # embedded in the ARM64 MSI with the same setup proven by diagnostics.
       - name: Select LLVM 20 compatible native ARM64 MSVC toolset
@@ -228,6 +233,7 @@ jobs:
           }
 
       - name: Stage CRT required by existing WiX build
+        if: matrix.arch == 'arm64'
         shell: pwsh
         run: ./tools/release/Prepare-WindowsCrt.ps1
 

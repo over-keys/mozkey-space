@@ -52,6 +52,42 @@ class WindowsToolchainTest(unittest.TestCase):
             with self.subTest(env=env), mock.patch.dict(os.environ, {'BAZEL_VC_FULL_VERSION': '14.44.35207'}, clear=True), mock.patch.dict(sys.modules, {'vs_util': vs}), mock.patch.object(vs, 'get_vs_env_vars', return_value=env), mock.patch.object(sys, 'path', sys.path.copy()), self.assertRaises(AssertionError):
                 exec(compile(code, '<workflow activation check>', 'exec'), {})
 
+    def test_x64_workflows_share_explicit_vs2022_pin_without_bypassing_checks(self):
+        offline = (ROOT / '.github/workflows/secure-offline.yaml').read_text()
+        candidate = (ROOT / '.github/workflows/windows-release-candidate.yml').read_text()
+        helper = (ROOT / 'tools/release/Select-Windows2022X64Toolchain.ps1').read_text()
+        config = offline.split('  config_tests:', 1)[1].split('  binary_check:', 1)[0]
+        binary = offline.split('  binary_check:', 1)[1]
+        pin = 'run: ./tools/release/Select-Windows2022X64Toolchain.ps1'
+        for workflow in (config, binary, candidate):
+            self.assertIn('windows-2022', workflow)
+            self.assertIn(pin, workflow)
+            self.assertNotIn('_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH', workflow)
+        self.assertLess(config.index(pin), config.index('bazelisk test'))
+        self.assertLess(binary.index(pin), binary.index('bazelisk build'))
+        self.assertLess(candidate.index(pin), candidate.index('- name: Build Qt for release'))
+        self.assertIn("if: matrix.arch == 'x64'", candidate)
+        self.assertIn('runner: windows-11-arm', candidate)
+        self.assertIn('//config:stats_config_util_test //config:config_handler_test', config)
+        self.assertIn('Check MSI-extracted network DLL imports', binary)
+        self.assertIn('Check MSI-extracted string markers', binary)
+        self.assertIn("-version '[17.0,18.0)'", helper)
+        self.assertIn(r'^14\.44\.[0-9]+$', helper)
+        self.assertIn("$env:PROCESSOR_ARCHITECTURE -cne 'AMD64'", helper)
+
+    def test_x64_toolset_activation_uses_selected_version_and_fails_closed(self):
+        helper = (ROOT / 'tools/release/Select-Windows2022X64Toolchain.ps1').read_text()
+        line = next(line.strip() for line in helper.splitlines()
+                    if 'X64_MSVC_TOOLSET=' in line)
+        code = line[len('python -c "'):-1]
+        for actual in ('14.44.35207', '14.44.35207/', '14.44.35207' + chr(92)):
+            with self.subTest(actual=actual), mock.patch.dict(os.environ, {'BAZEL_VC_FULL_VERSION': '14.44.35207'}, clear=True), mock.patch.dict(sys.modules, {'vs_util': vs}), mock.patch.object(vs, 'get_vs_env_vars', return_value={'VCTOOLSVERSION': actual}) as activate, mock.patch('builtins.print'), mock.patch.object(sys, 'path', sys.path.copy()):
+                exec(compile(code, '<x64 workflow activation check>', 'exec'), {})
+            activate.assert_called_once_with('amd64')
+        for actual in ('', '14.52.37025'):
+            with self.subTest(actual=actual), mock.patch.dict(os.environ, {'BAZEL_VC_FULL_VERSION': '14.44.35207'}, clear=True), mock.patch.dict(sys.modules, {'vs_util': vs}), mock.patch.object(vs, 'get_vs_env_vars', return_value={'VCTOOLSVERSION': actual}), mock.patch.object(sys, 'path', sys.path.copy()), self.assertRaises(AssertionError):
+                exec(compile(code, '<x64 workflow activation check>', 'exec'), {})
+
     def test_rules_cc_arm64_uses_real_target_environment(self):
         patch = (ROOT / 'src/bazel/rules_cc_windows_cc_configure.bzl.patch').read_text()
         additions = [line[1:] for line in patch.splitlines()
